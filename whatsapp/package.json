@@ -1,0 +1,30 @@
+{
+  "name": "iadis-whatsapp-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "build:dashboard": "npm --prefix dashboard-app run build",
+    "dev:dashboard": "npm --prefix dashboard-app run dev",
+    "smoke": "node scripts/smoke-test.js",
+    "smoke:standalone": "node scripts/standalone-smoke-test.js",
+    "test:darija-nlu": "node scripts/darija-nlu-test.js",
+    "test:crm": "node scripts/crm-test.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "ffmpeg-static": "^5.3.0",
+    "openai": "^6.46.0",
+    "puppeteer": "^23.2.2",
+    "qrcode": "^1.5.3",
+    "whatsapp-web.js": "^1.34.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
