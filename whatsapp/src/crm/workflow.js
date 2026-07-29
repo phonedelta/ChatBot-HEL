@@ -28,7 +28,14 @@ function createCrmWorkflow(repo) {
   function mergeSignals(lead, signals, awaitingField) {
     const patch = {}
 
-    if (signals.full_name) patch.full_name = signals.full_name
+    const nextName = signals.full_name ? validateFullName(signals.full_name) : null
+    if (nextName) {
+      const keepExisting = Boolean(validateFullName(lead?.full_name || ''))
+        && awaitingField
+        && awaitingField !== 'bulk'
+        && awaitingField !== 'full_name'
+      if (!keepExisting) patch.full_name = nextName
+    }
     if (signals.phone_number) patch.phone_number = signals.phone_number
     if (signals.city) patch.city = signals.city
     if (signals.problem) {
@@ -55,9 +62,11 @@ function createCrmWorkflow(repo) {
       const text = String(signals.rawText || '').trim()
       if (text.length >= 3) {
         const motif = resolveMotifPair(text)
-        patch.problem = motif.problem
-        patch.problem_details = motif.problem_details
-        patch.urgency = motif.urgency || 'moyenne'
+        if (motif.problem) {
+          patch.problem = motif.problem
+          patch.problem_details = motif.problem_details
+          patch.urgency = motif.urgency || 'moyenne'
+        }
       }
     }
     if (awaitingField === 'appointment') {
@@ -157,6 +166,19 @@ function createCrmWorkflow(repo) {
       voiceIntent: input.voiceIntent || null,
     })
     signals.rawText = userText
+
+    // Voice service dictionary → CRM motif (extensible NLU services)
+    const voiceService = input.voiceService || null
+    if (
+      voiceService?.crmProblem
+      && Number(voiceService.confidence || 0) >= 0.72
+      && !signals.problem
+    ) {
+      signals.problem = voiceService.crmProblem
+      signals.problem_details = signals.problem_details || userText
+      signals.urgency = voiceService.urgency || signals.urgency || 'moyenne'
+      signals.category = voiceService.service || voiceService.crmProblem
+    }
 
     // Completed booking: only restart on a new booking intent
     if (lead.stage === 'completed') {

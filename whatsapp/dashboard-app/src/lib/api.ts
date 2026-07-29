@@ -40,11 +40,19 @@ export async function api<T = unknown>(path: string, options: ApiOptions = {}): 
   if (token) headers['x-dashboard-token'] = token
   if (options.body !== undefined) headers['Content-Type'] = 'application/json'
 
-  const response = await fetch(path, {
-    method: options.method || 'GET',
-    headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  })
+  let response: Response
+  try {
+    response = await fetch(path, {
+      method: options.method || 'GET',
+      headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    })
+  } catch {
+    throw new ApiError(
+      'Serveur injoignable. Vérifiez que le bot tourne (npm start) sur http://127.0.0.1:8081',
+      0,
+    )
+  }
 
   const payload = await response.json().catch(() => null)
 

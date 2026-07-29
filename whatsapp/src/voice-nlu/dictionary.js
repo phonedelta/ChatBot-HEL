@@ -84,11 +84,22 @@ const CANONICAL_GROUPS = [
   },
   {
     canonical: 'appareil',
-    forms: ['appareil', 'appareils', 'bra', 'brackets', 'تقويم', 't9wim', 'taqwim', 'orthodontie', 'bagues'],
+    forms: [
+      'appareil', 'appareils', 'apareil', 'bra', 'brackets', 'bracket', 'bagues', 'bague', 'bagat', 'brisat',
+      'تقويم', 't9wim', 'ta9wim', 'ta9ouim', 'taqwim', 'orthodontie', 'orthodontiste', 'ortodonti', 'aligneur',
+      'gouttiere', 'gouttière',
+    ],
   },
   {
     canonical: 'blanchiment',
-    forms: ['blanchiment', 'whitening', 'تبييض', 'tbyid', 'tbiyid', 'blanciment'],
+    forms: [
+      'blanchiment', 'blanshmon', 'whitening', 'تبييض', 'tbyid', 'tbiyid', 'tabyid', 'tabyit', 'blanciment',
+      'byad', 'nbyed',
+    ],
+  },
+  {
+    canonical: 'facette',
+    forms: ['facette', 'facettes', 'veneer', 'veneers', 'luminir', 'lumineer', 'لومينير'],
   },
   {
     canonical: 'prix',
@@ -157,15 +168,22 @@ const CANONICAL_GROUPS = [
   },
   {
     canonical: 'carie',
-    forms: ['carie', ' caries', 'تسوس', 'tssaws', 'hrssa'],
+    forms: [
+      'carie', 'caries', 'تسوس', 'tssaws', 'tsous', 'tsouss', 'hrssa', '7chwa', 'hachwa', 'plombage', 'plomba',
+      'obturation', 'composite',
+    ],
   },
   {
     canonical: 'detartrage',
-    forms: ['detartrage', 'détartrage', 'tandif', 'تنظيف', 'tartre'],
+    forms: [
+      'detartrage', 'détartrage', 'tandif', 'تنظيف', 'tartre', 'tn9iya', 'tnqiya', 'jir', 'nettoyage', 'polissage',
+    ],
   },
   {
     canonical: 'gencive',
-    forms: ['gencive', 'gencives', 'litta', 'لثة', 'lutha'],
+    forms: [
+      'gencive', 'gencives', 'litta', 'lta', 'lita', 'لثة', 'lutha', 'parodontologie', 'paradontoloji',
+    ],
   },
   {
     canonical: 'sang',
@@ -258,6 +276,17 @@ const ASR_CORRECTIONS = {
   navaja: 'nafkha',
   bash: 'bach',
   mercy: 'merci',
+  // clinic services ASR
+  tabyit: 'tabyid',
+  tbyit: 'tabyid',
+  blanshmon: 'blanchiment',
+  ortodonti: 'orthodontie',
+  ortodontie: 'orthodontie',
+  paradontoloji: 'parodontologie',
+  apareil: 'appareil',
+  tsouss: 'tsous',
+  tnqiya: 'tn9iya',
+  luminir: 'lumineer',
   // french ASR noise
   'sous-titres': '',
   'sous titres': '',

@@ -57,11 +57,17 @@ const INTENT_PATTERNS = [
   },
   {
     intent: 'appareil_dentaire',
-    patterns: [/\b(appareil|brackets|تقويم|t9wim|orthodontie|bra)\b/i],
+    patterns: [
+      /\b(appareil|apareil|brackets|bagues?|brisat|تقويم|t9wim|ta9wim|ta9ouim|orthodontie|ortodonti|bra|aligneur|goutti[eè]re)\b/i,
+      /\b(snan|dent).{0,12}(m3awj|meaouj)/i,
+    ],
   },
   {
     intent: 'blanchiment',
-    patterns: [/\b(blanchiment|whitening|تبييض|tbyid)\b/i],
+    patterns: [
+      /\b(blanchiment|blanshmon|whitening|تبييض|tbyid|tabyid|tabyit|nbyed|byad snan)\b/i,
+      /\b(snani?\s+saffrin)\b/i,
+    ],
   },
   {
     intent: 'prix',

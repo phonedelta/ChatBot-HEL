@@ -20,10 +20,16 @@ import { Skeleton } from '@/components/ui/Skeleton'
 
 type QrPayload = {
   ok: boolean
-  qr?: string
+  qr?: string | null
   state?: string
   instance?: WaInstance
   error?: string
+  lastError?: string | null
+  created_at?: string | null
+}
+
+function phoneOf(instance?: WaInstance | null) {
+  return instance?.phone_number || (instance as { phone?: string | null } | undefined)?.phone || '—'
 }
 
 export function ConfigPage() {
@@ -47,17 +53,17 @@ export function ConfigPage() {
     ].slice(0, 8))
   }, [])
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     setError('')
     try {
       const payload = await api<{ instances: WaInstance[] }>('/dashboard/api/instances')
       setInstances(payload.instances || [])
-      pushEvent('Synchronisation', 'État des instances actualisé')
+      if (!silent) pushEvent('Synchronisation', 'État des instances actualisé')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Chargement impossible')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [pushEvent])
 
@@ -65,16 +71,37 @@ export function ConfigPage() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    const state = String(main?.state || '').toLowerCase()
+    if (state === 'ready' || state === 'authenticated') {
+      setQr(null)
+    }
+  }, [main?.state])
+
+  useEffect(() => {
+    const state = String(main?.state || '').toLowerCase()
+    if (!['initializing', 'qr', 'recovering', 'authenticated'].includes(state)) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      void load(true)
+    }, 2500)
+
+    return () => window.clearInterval(timer)
+  }, [main?.state, load])
+
   async function reconnect() {
     setBusy(true)
     setError('')
     try {
       await api('/dashboard/api/instances', {
         method: 'POST',
-        body: { instance_id: 'main' },
+        body: { instance_id: 'main', force: true },
       })
-      pushEvent('Connexion', 'Instance main initialisée')
+      pushEvent('Connexion', 'Instance main relancée')
       await load()
+      await fetchQr(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Reconnexion impossible')
       pushEvent('Erreur', 'Échec de reconnexion')
@@ -99,32 +126,86 @@ export function ConfigPage() {
     }
   }
 
-  async function fetchQr() {
-    setQrLoading(true)
+  async function fetchQr(showSpinner = true) {
+    if (showSpinner) setQrLoading(true)
     setError('')
+    setQr(null)
+
     try {
-      await api('/dashboard/api/instances', {
+      const started = await api<QrPayload>('/dashboard/api/instances/main/qr', {
         method: 'POST',
-        body: { instance_id: 'main' },
+        body: { force: true, wait_ms: 8000 },
       })
-      const payload = await api<QrPayload>('/dashboard/api/instances/main/qr', { method: 'POST' })
-      if (payload.qr) {
-        setQr(payload.qr)
-        pushEvent('QR généré', 'Scannez depuis WhatsApp')
-      } else {
-        setQr(null)
-        pushEvent('Connexion', `État: ${payload.state || 'inconnu'}`)
+
+      if (started.instance) {
+        setInstances((prev) => {
+          const others = prev.filter((item) => item.instance_id !== started.instance?.instance_id)
+          return [started.instance as WaInstance, ...others]
+        })
       }
-      await load()
+
+      if (started.qr) {
+        setQr(started.qr)
+        pushEvent('QR généré', 'Scannez depuis WhatsApp')
+        await load(true)
+        return
+      }
+
+      if (String(started.state || '').toLowerCase() === 'ready') {
+        setQr(null)
+        pushEvent('Connexion', 'WhatsApp déjà connecté')
+        await load(true)
+        return
+      }
+
+      const deadline = Date.now() + 45000
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1500))
+        const payload = await api<QrPayload>('/dashboard/api/instances/main/qr')
+
+        if (payload.instance) {
+          setInstances((prev) => {
+            const others = prev.filter((item) => item.instance_id !== payload.instance?.instance_id)
+            return [payload.instance as WaInstance, ...others]
+          })
+        }
+
+        if (payload.qr) {
+          setQr(payload.qr)
+          pushEvent('QR généré', 'Scannez depuis WhatsApp')
+          return
+        }
+
+        if (String(payload.state || '').toLowerCase() === 'ready') {
+          setQr(null)
+          pushEvent('Connexion', 'WhatsApp déjà connecté')
+          return
+        }
+
+        if (payload.lastError && /browser is already running/i.test(payload.lastError)) {
+          setError('Session Chrome bloquée. Nouvelle tentative…')
+          await api<QrPayload>('/dashboard/api/instances/main/qr', {
+            method: 'POST',
+            body: { force: true, wait_ms: 5000 },
+          })
+        }
+      }
+
+      setError('QR non généré à temps. Cliquez encore sur Générer.')
+      pushEvent('Erreur', 'Délai QR dépassé')
+      await load(true)
     } catch (err) {
+      setQr(null)
       setError(err instanceof Error ? err.message : 'QR indisponible')
       pushEvent('Erreur', 'Impossible de générer le QR')
+      await load(true)
     } finally {
-      setQrLoading(false)
+      if (showSpinner) setQrLoading(false)
     }
   }
 
-  const ready = String(main?.state || '').toLowerCase() === 'ready'
+  const ready = ['ready', 'authenticated'].includes(String(main?.state || '').toLowerCase())
+  const lastError = main?.lastError || ''
 
   return (
     <div className="space-y-6">
@@ -135,6 +216,12 @@ export function ConfigPage() {
 
       {error ? (
         <div className="rounded-[20px] border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-danger">{error}</div>
+      ) : null}
+
+      {!error && lastError && !ready ? (
+        <div className="rounded-[20px] border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-text">
+          Dernière erreur instance : {lastError}
+        </div>
       ) : null}
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -151,7 +238,7 @@ export function ConfigPage() {
           <div className="grid gap-3 sm:grid-cols-2">
             {[
               { label: 'Nom instance', value: main?.instance_id || 'main' },
-              { label: 'Numéro', value: main?.phone_number || '—' },
+              { label: 'Numéro', value: phoneOf(main) },
               { label: 'Version', value: 'whatsapp-web.js' },
               { label: 'État', value: formatStatus(main?.state) },
             ].map((row) => (
@@ -162,7 +249,7 @@ export function ConfigPage() {
             ))}
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
-            <Button icon={<Power className="h-4 w-4" />} loading={busy} onClick={() => void reconnect()}>
+            <Button icon={<Power className="h-4 w-4" />} loading={busy || qrLoading} onClick={() => void reconnect()}>
               Reconnecter
             </Button>
             <Button variant="secondary" icon={<Unplug className="h-4 w-4" />} loading={busy} onClick={() => void disconnect()}>
@@ -180,7 +267,13 @@ export function ConfigPage() {
               <h2 className="font-display text-2xl">QR Code</h2>
               <p className="text-sm text-muted">Scannez pour lier WhatsApp</p>
             </div>
-            <Button variant="secondary" size="sm" icon={<QrCode className="h-4 w-4" />} loading={qrLoading} onClick={() => void fetchQr()}>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<QrCode className="h-4 w-4" />}
+              loading={qrLoading}
+              onClick={() => void fetchQr()}
+            >
               Générer
             </Button>
           </div>
@@ -190,6 +283,9 @@ export function ConfigPage() {
               <div className="flex flex-col items-center gap-3 text-muted">
                 <Loader2 className="h-10 w-10 animate-spin text-primary" />
                 <p className="text-sm">Génération du QR…</p>
+                <p className="max-w-xs text-center text-xs">
+                  Nettoyage de la session Chrome puis attente du code (jusqu’à 30 s).
+                </p>
               </div>
             ) : ready ? (
               <motion.div

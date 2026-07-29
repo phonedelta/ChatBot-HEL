@@ -288,6 +288,8 @@ function createCrmRepository(db) {
   }
 
   function listAppointments({ limit = 50, fromDate = null } = {}) {
+    expireUnconfirmedAppointments()
+
     const sql = `
       SELECT
         a.id,
@@ -366,17 +368,37 @@ function createCrmRepository(db) {
     `).all(Math.max(1, Number(limit) || 30))
   }
 
+  /**
+   * Auto-cancel unconfirmed appointments on the 2nd day after their date.
+   * Example: RDV on 28 → still non_confirme on 30 → cancelled.
+   */
+  function expireUnconfirmedAppointments() {
+    const result = db.prepare(`
+      UPDATE appointments
+      SET status = 'cancelled'
+      WHERE status = 'non_confirme'
+        AND appointment_date <= date('now', 'localtime', '-2 days')
+    `).run()
+
+    return {
+      cancelled: Number(result.changes || 0),
+    }
+  }
+
   function getCrmStats() {
+    expireUnconfirmedAppointments()
+
     const customers = db.prepare('SELECT COUNT(*) AS c FROM customers').get()?.c || 0
     const appointments = db.prepare('SELECT COUNT(*) AS c FROM appointments').get()?.c || 0
     const confirmedUpcoming = db.prepare(`
       SELECT COUNT(*) AS c FROM appointments
-      WHERE status = 'confirmed' AND appointment_date >= date('now')
+      WHERE status = 'confirmed' AND appointment_date >= date('now', 'localtime')
     `).get()?.c || 0
     const cases = db.prepare('SELECT COUNT(*) AS c FROM dental_cases').get()?.c || 0
     const appointmentsToday = db.prepare(`
       SELECT COUNT(*) AS c FROM appointments
       WHERE appointment_date = date('now', 'localtime')
+        AND status = 'confirmed'
     `).get()?.c || 0
     const messagesTotal = db.prepare('SELECT COUNT(*) AS c FROM conversation_logs').get()?.c || 0
     const pendingAppointments = db.prepare(`
@@ -386,7 +408,8 @@ function createCrmRepository(db) {
     const weeklyRows = db.prepare(`
       SELECT appointment_date AS day, COUNT(*) AS count
       FROM appointments
-      WHERE appointment_date >= date('now', 'localtime', '-6 days')
+      WHERE status = 'confirmed'
+        AND appointment_date >= date('now', 'localtime', '-6 days')
         AND appointment_date <= date('now', 'localtime')
       GROUP BY appointment_date
       ORDER BY appointment_date ASC
@@ -541,6 +564,7 @@ function createCrmRepository(db) {
   }
 
   function searchOrders({ q = '', limit = 80 } = {}) {
+    expireUnconfirmedAppointments()
     const query = String(q || '').trim()
     const like = `%${query}%`
     const sql = query
@@ -553,7 +577,7 @@ function createCrmRepository(db) {
         JOIN customers c ON c.id = a.customer_id
         LEFT JOIN dental_cases d ON d.appointment_id = a.id
         WHERE c.full_name LIKE ? OR c.phone_number LIKE ? OR c.city LIKE ? OR d.problem LIKE ?
-        ORDER BY a.created_at DESC
+        ORDER BY a.created_at ASC
         LIMIT ?
       `
       : `
@@ -564,7 +588,7 @@ function createCrmRepository(db) {
         FROM appointments a
         JOIN customers c ON c.id = a.customer_id
         LEFT JOIN dental_cases d ON d.appointment_id = a.id
-        ORDER BY a.created_at DESC
+        ORDER BY a.created_at ASC
         LIMIT ?
       `
 
@@ -595,6 +619,7 @@ function createCrmRepository(db) {
     listStaffNotifications,
     getCrmStats,
     searchOrders,
+    expireUnconfirmedAppointments,
   }
 }
 

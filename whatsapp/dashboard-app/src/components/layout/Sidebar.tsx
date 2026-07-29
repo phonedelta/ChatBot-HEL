@@ -16,6 +16,7 @@ import { Avatar } from '@/components/ui/Avatar'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/format'
 import helLogo from '@/assets/HEL-scaled.webp'
+import helIcon from '@/assets/HEL-scaled.png'
 
 const links = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -57,9 +58,9 @@ export function Sidebar({
         {collapsed ? (
           <div className="mb-6 flex w-full flex-col items-center gap-3">
             <img
-              src={helLogo}
+              src={helIcon}
               alt="Centre Dentaire HEL"
-              className="h-10 w-10 object-contain"
+              className="h-12 w-12 object-contain"
             />
             <button
               type="button"

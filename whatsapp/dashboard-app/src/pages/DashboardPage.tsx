@@ -20,7 +20,8 @@ import {
 import { useAuth } from '@/context/AuthContext'
 import { api } from '@/lib/api'
 import type { OverviewPayload, AppointmentOrder } from '@/lib/types'
-import { formatStatus, todayISO } from '@/lib/format'
+import { formatStatus, todayISO, toDateISO } from '@/lib/format'
+import { normalizeStatus } from '@/components/ui/StatusSelect'
 import { Avatar } from '@/components/ui/Avatar'
 import { Badge, StatusBadge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -89,8 +90,11 @@ export function DashboardPage() {
 
     const counts = new Map<string, number>()
     for (const order of data?.month_appointments || data?.recent_orders || []) {
-      if (!order.appointment_date) continue
-      counts.set(order.appointment_date, (counts.get(order.appointment_date) || 0) + 1)
+      const day = toDateISO(order.appointment_date)
+      if (!day) continue
+      // Calendar markers: confirmed appointments only (non confirmé excluded)
+      if (normalizeStatus(order.status) !== 'confirmed') continue
+      counts.set(day, (counts.get(day) || 0) + 1)
     }
 
     for (let d = 1; d <= daysInMonth; d++) {

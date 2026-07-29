@@ -10,6 +10,7 @@ export function initials(name?: string | null) {
 
 export function formatStatus(value?: string | null) {
   const v = String(value || '').toLowerCase()
+  if (v === 'non_confirme' || v === 'non confirme' || v === 'non confirmé') return 'non confirmé'
   if (v === 'confirmed' || v === 'confirmé' || v === 'confirme') return 'Confirmé'
   if (v === 'cancelled' || v === 'annule' || v === 'annulé') return 'Annulé'
   if (v === 'traitee') return 'Traitée'
@@ -19,7 +20,9 @@ export function formatStatus(value?: string | null) {
   if (v === 'qr') return 'QR requis'
   if (v === 'disconnected') return 'Déconnectée'
   if (v === 'initializing') return 'Initialisation'
-  return 'Non confirmé'
+  if (v === 'recovering') return 'Récupération'
+  if (v === 'missing') return 'Absente'
+  return value ? String(value) : 'Inconnu'
 }
 
 export function statusTone(value?: string | null): 'success' | 'warning' | 'danger' | 'muted' {
@@ -36,8 +39,26 @@ export function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ')
 }
 
+/** Local calendar date YYYY-MM-DD (Morocco-safe, not UTC). */
 export function todayISO() {
-  return new Date().toISOString().slice(0, 10)
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/** Normalize any date-like value to YYYY-MM-DD. */
+export function toDateISO(value?: string | null) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/)
+  return match ? match[1] : ''
+}
+
+/** True when appointment_date is today (local). */
+export function isTodayDate(value?: string | null) {
+  return toDateISO(value) === todayISO()
 }
 
 export function formatUptime(seconds: number) {

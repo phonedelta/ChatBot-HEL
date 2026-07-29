@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { MobileMenuButton, Sidebar } from '@/components/layout/Sidebar'
 import { cn } from '@/lib/format'
+import { pageTitleFromPath, useDocumentTitle } from '@/hooks/useDocumentTitle'
 
 const COLLAPSE_KEY = 'hel-dashboard-sidebar-collapsed'
 
@@ -16,6 +17,7 @@ export function AppShell() {
     }
   })
   const location = useLocation()
+  useDocumentTitle(pageTitleFromPath(location.pathname))
 
   useEffect(() => {
     try {

@@ -3,6 +3,7 @@
  */
 
 const { validateFullName } = require('./extract')
+const { isOfficialService } = require('./services')
 const { isValidPhone } = require('./phone')
 
 const REQUIRED_FIELDS = [
@@ -36,7 +37,7 @@ function checkCustomerData(data = {}) {
   const fullName = validateFullName(data.full_name || '') || null
   const phoneOk = isValidPhone(data.phone_number || '')
   const cityOk = Boolean(String(data.city || '').trim())
-  const problemOk = Boolean(String(data.problem || '').trim())
+  const problemOk = isOfficialService(data.problem || '')
   const appointmentOk = Boolean(
     String(data.appointment_date || '').trim()
     && String(data.appointment_time || '').trim(),

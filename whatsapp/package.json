@@ -12,6 +12,8 @@
     "smoke": "node scripts/smoke-test.js",
     "smoke:standalone": "node scripts/standalone-smoke-test.js",
     "test:darija-nlu": "node scripts/darija-nlu-test.js",
+    "test:ai-interpreter": "node scripts/ai-interpreter-test.js",
+    "test:intent": "node scripts/intent-classifier-test.js",
     "test:crm": "node scripts/crm-test.js"
   },
   "dependencies": {

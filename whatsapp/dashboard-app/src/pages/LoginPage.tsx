@@ -14,6 +14,7 @@ import {
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import helLogo from '@/assets/HEL-scaled.webp'
 
 type FormValues = { username: string; password: string; remember: boolean }
@@ -40,6 +41,7 @@ const features = [
 
 export function LoginPage() {
   const { login } = useAuth()
+  useDocumentTitle('Connexion')
   const [error, setError] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [forgotHint, setForgotHint] = useState(false)
@@ -244,6 +246,18 @@ export function LoginPage() {
                   </p>
                 </div>
               </div>
+              <p className="mt-3 text-center text-[11px] text-muted">
+                Design and development by{' '}
+                <a
+                  href="https://thinkgroup.ma/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-semibold text-primary hover:underline"
+                >
+                  Think Group
+                </a>
+                .
+              </p>
             </div>
           </div>
         </motion.section>

@@ -3,6 +3,7 @@ const {
   analyzeVoiceTranscript,
   detectIntent,
   detectLanguage,
+  detectService,
   normalizeTranscript,
 } = require('../src/voice-nlu')
 
@@ -81,6 +82,33 @@ const cases = [
     expectLanguage: 'darija',
     expectIntent: 'prise_rendez_vous',
   },
+  {
+    text: 'Bghit tabyit snan',
+    expectLanguage: 'darija',
+    expectIntent: 'blanchiment',
+    expectService: 'Blanchiment des dents',
+  },
+  {
+    text: '3andi ortodonti',
+    expectLanguage: 'darija',
+    expectIntent: 'appareil_dentaire',
+    expectService: 'Orthodontie',
+  },
+  {
+    text: 'bghit tn9iya dial snan',
+    expectLanguage: 'darija',
+    expectService: 'Détartrage',
+  },
+  {
+    text: 'wje3 f lta',
+    expectLanguage: 'darija',
+    expectService: 'Soins des gencives',
+  },
+  {
+    text: 'blanshmon',
+    expectLanguage: 'fr',
+    expectService: 'Blanchiment des dents',
+  },
 ]
 
 async function run() {
@@ -101,11 +129,26 @@ async function run() {
       testCase.expectLanguage,
       `language mismatch for "${testCase.text}": got ${analysis.language}`,
     )
-    assert.strictEqual(
-      analysis.intent,
-      testCase.expectIntent,
-      `intent mismatch for "${testCase.text}": got ${analysis.intent}`,
-    )
+    if (testCase.expectIntent) {
+      assert.strictEqual(
+        analysis.intent,
+        testCase.expectIntent,
+        `intent mismatch for "${testCase.text}": got ${analysis.intent}`,
+      )
+    }
+
+    if (testCase.expectService) {
+      assert.ok(analysis.serviceDetection, `missing service for "${testCase.text}"`)
+      assert.strictEqual(
+        analysis.serviceDetection.service,
+        testCase.expectService,
+        `service mismatch for "${testCase.text}": got ${analysis.serviceDetection?.service}`,
+      )
+      assert.ok(
+        analysis.serviceDetection.confidence >= 0.72,
+        `low service confidence for "${testCase.text}"`,
+      )
+    }
 
     if (testCase.expectMeaning) {
       assert.match(
@@ -126,11 +169,20 @@ async function run() {
     assert.ok(analysis.correctedText, `missing corrected text for "${testCase.text}"`)
     assert.ok(analysis.llmBlock.includes('Intent:'), 'llm block incomplete')
     passed += 1
-    console.log(`ok  ${testCase.expectIntent.padEnd(28)} <= ${testCase.text}`)
+    const label = testCase.expectService || testCase.expectIntent || 'ok'
+    console.log(`ok  ${String(label).padEnd(36)} <= ${testCase.text}`)
   }
 
   assert.strictEqual(detectIntent('bghit nji').intent, 'prise_rendez_vous')
   assert.strictEqual(detectLanguage('الله يشافيكم').startsWith('d') || detectLanguage('الله يشافيكم') === 'darija', true)
+
+  const fuzzyBlanchiment = detectService('tabyit')
+  assert.ok(fuzzyBlanchiment)
+  assert.strictEqual(fuzzyBlanchiment.service, 'Blanchiment des dents')
+
+  const fuzzyOrtho = detectService('ortodonti')
+  assert.ok(fuzzyOrtho)
+  assert.strictEqual(fuzzyOrtho.service, 'Orthodontie')
 
   console.log(`\ndarija nlu tests: ${passed}/${cases.length} passed`)
 }

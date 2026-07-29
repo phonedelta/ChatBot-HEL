@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Eye, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import type { AppointmentOrder, OrdersPayload } from '@/lib/types'
-import { todayISO } from '@/lib/format'
+import { isTodayDate, todayISO, toDateISO } from '@/lib/format'
 import { Avatar } from '@/components/ui/Avatar'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -83,11 +83,20 @@ export function OrdersPage() {
         return s === 'non_confirme' || (!s.includes('confirm') && !s.includes('annul') && s !== 'cancelled')
       })
     }
-    if (type === 'today') list = list.filter((o) => o.appointment_date === todayISO())
+    if (type === 'today') {
+      // Today list = date is today AND status confirmed.
+      // Non confirmé never appears here, even if the date is today.
+      // If the date was changed manually to another day, it appears here only when that day arrives (and confirmed).
+      list = list.filter(
+        (o) => isTodayDate(o.appointment_date) && normalizeStatus(o.status) === 'confirmed',
+      )
+    }
     list.sort((a, b) => {
-      const av = `${a.appointment_date} ${a.appointment_time}`
-      const bv = `${b.appointment_date} ${b.appointment_time}`
-      return bv.localeCompare(av)
+      // Date de prise du RDV : plus ancien en haut, plus récent en bas
+      const ta = Date.parse(String(a.created_at || '')) || 0
+      const tb = Date.parse(String(b.created_at || '')) || 0
+      if (ta !== tb) return ta - tb
+      return Number(a.appointment_id || 0) - Number(b.appointment_id || 0)
     })
     return list
   }, [orders, city, status, type])
@@ -96,7 +105,9 @@ export function OrdersPage() {
     const confirmed = orders.filter((o) => normalizeStatus(o.status) === 'confirmed').length
     const cancelled = orders.filter((o) => normalizeStatus(o.status) === 'cancelled').length
     const pending = orders.filter((o) => normalizeStatus(o.status) === 'non_confirme').length
-    const today = orders.filter((o) => o.appointment_date === todayISO()).length
+    const today = orders.filter(
+      (o) => isTodayDate(o.appointment_date) && normalizeStatus(o.status) === 'confirmed',
+    ).length
     return { confirmed, pending, cancelled, today }
   }, [orders])
 
@@ -112,7 +123,7 @@ export function OrdersPage() {
           city: editing.city,
           problem: editing.problem === '—' ? '' : editing.problem,
           problem_details: editing.problem_details || editing.problem_client || '',
-          appointment_date: editing.appointment_date,
+          appointment_date: toDateISO(editing.appointment_date) || editing.appointment_date,
           appointment_time: editing.appointment_time,
           status: editing.status,
         },
@@ -139,7 +150,7 @@ export function OrdersPage() {
           city: creating.city,
           problem: creating.problem || creating.problem_details || 'consultation générale',
           problem_details: creating.problem_details || creating.problem_client || creating.problem || '',
-          appointment_date: creating.appointment_date,
+          appointment_date: toDateISO(creating.appointment_date) || creating.appointment_date,
           appointment_time: creating.appointment_time,
           status: creating.status || 'non_confirme',
         },
@@ -200,15 +211,38 @@ export function OrdersPage() {
 
       <div className="grid min-w-0 grid-cols-2 gap-3 lg:grid-cols-4">
         {[
-          { label: 'Confirmés', value: stats.confirmed, color: 'text-success' },
-          { label: 'En attente', value: stats.pending, color: 'text-warning' },
-          { label: 'Annulés', value: stats.cancelled, color: 'text-danger' },
-          { label: 'Aujourd’hui', value: stats.today, color: 'text-primary' },
+          { id: 'all', label: 'Confirmés', value: stats.confirmed, color: 'text-success', filterStatus: 'confirmed' as const },
+          { id: 'all', label: 'En attente', value: stats.pending, color: 'text-warning', filterStatus: 'pending' as const },
+          { id: 'all', label: 'Annulés', value: stats.cancelled, color: 'text-danger', filterStatus: 'cancelled' as const },
+          { id: 'today', label: 'Aujourd’hui', value: stats.today, color: 'text-primary', filterStatus: '' as const },
         ].map((s) => (
-          <Card key={s.label} padding="p-4" hover={false} className="min-w-0">
-            <p className="text-xs text-muted">{s.label}</p>
-            <p className={`mt-1 font-display text-2xl ${s.color}`}>{s.value}</p>
-          </Card>
+          <button
+            key={s.label}
+            type="button"
+            onClick={() => {
+              setType(s.id)
+              setStatus(s.filterStatus)
+            }}
+            className="min-w-0 text-left"
+            title={s.id === 'today' ? 'Uniquement les RDV confirmés du jour' : undefined}
+          >
+            <Card
+              padding="p-4"
+              hover
+              className={`min-w-0 transition ${
+                (s.id === 'today' && type === 'today')
+                  || (s.filterStatus && status === s.filterStatus && type === 'all')
+                  ? 'ring-2 ring-primary/30'
+                  : ''
+              }`}
+            >
+              <p className="text-xs text-muted">{s.label}</p>
+              <p className={`mt-1 font-display text-2xl ${s.color}`}>{s.value}</p>
+              {s.id === 'today' ? (
+                <p className="mt-1 text-[11px] text-muted">Confirmés du jour seulement</p>
+              ) : null}
+            </Card>
+          </button>
         ))}
       </div>
 
@@ -232,7 +266,7 @@ export function OrdersPage() {
           <Select value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">Statut</option>
             <option value="confirmed">Confirmé</option>
-            <option value="pending">Non confirmé</option>
+            <option value="pending">non confirmé</option>
             <option value="cancelled">Annulé</option>
           </Select>
         </div>
@@ -435,7 +469,7 @@ export function OrdersPage() {
                 value={creating.status}
                 onChange={(e) => setCreating({ ...creating, status: e.target.value })}
               >
-                <option value="non_confirme">Non confirmé</option>
+                <option value="non_confirme">non confirmé</option>
                 <option value="confirmed">Confirmé</option>
                 <option value="cancelled">Annulé</option>
               </Select>
@@ -515,7 +549,7 @@ export function OrdersPage() {
                 value={editing.status}
                 onChange={(e) => setEditing({ ...editing, status: e.target.value })}
               >
-                <option value="non_confirme">Non confirmé</option>
+                <option value="non_confirme">non confirmé</option>
                 <option value="confirmed">Confirmé</option>
                 <option value="cancelled">Annulé</option>
               </Select>

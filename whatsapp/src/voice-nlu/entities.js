@@ -5,12 +5,14 @@
 /**
  * @param {string} text
  * @param {string[]} canonicalTokens
+ * @param {{ serviceDetection?: { service?: string, serviceId?: string, crmProblem?: string, confidence?: number }|null }} [options]
  * @returns {Record<string, any>}
  */
-function extractEntities(text, canonicalTokens = []) {
+function extractEntities(text, canonicalTokens = [], options = {}) {
   const source = String(text || '')
   const lower = source.toLowerCase()
   const set = new Set((canonicalTokens || []).map((item) => String(item || '').toLowerCase()))
+  const serviceDetection = options.serviceDetection || null
 
   /** @type {Record<string, any>} */
   const entities = {}
@@ -43,6 +45,19 @@ function extractEntities(text, canonicalTokens = []) {
     entities.traitement_demande = 'blanchiment'
   } else if (set.has('extraire')) {
     entities.traitement_demande = 'extraction'
+  } else if (set.has('carie') || set.has('detartrage') || set.has('gencive')) {
+    entities.traitement_demande = set.has('carie')
+      ? 'carie'
+      : (set.has('detartrage') ? 'detartrage' : 'gencives')
+  }
+
+  if (serviceDetection?.service && Number(serviceDetection.confidence || 0) >= 0.72) {
+    entities.service = serviceDetection.service
+    entities.service_id = serviceDetection.serviceId || null
+    entities.service_confidence = serviceDetection.confidence
+    if (!entities.traitement_demande && serviceDetection.crmProblem) {
+      entities.traitement_demande = serviceDetection.crmProblem
+    }
   }
 
   if (set.has('docteur') || /\b(docteur|tbib|dentiste|طبيب)\b/i.test(source)) {

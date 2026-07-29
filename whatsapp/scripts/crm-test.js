@@ -25,10 +25,24 @@ function run() {
   assert.strictEqual(freeform.full_name, 'Salim Zouhairi')
   assert.strictEqual(freeform.city, 'Casablanca')
   assert.ok(freeform.phone_number)
-  assert.strictEqual(freeform.problem, 'douleur dentaire')
+  assert.strictEqual(freeform.problem, 'Urgences dentaires')
   assert.strictEqual(freeform.problem_details, '7ri9 darssa')
   assert.strictEqual(freeform.appointment_date, '2026-07-29')
   assert.strictEqual(freeform.appointment_time, '11:00')
+
+  // Classic 5-line form: name must never become a service
+  const classic = extractBulkBookingFields([
+    'Anass zouhairi',
+    '0629245604',
+    'Ifrane',
+    'Nettoyage des dents',
+    '01/08 12:00',
+  ].join('\n'), { now: new Date('2026-07-29T10:00:00Z') })
+  assert.strictEqual(classic.full_name, 'Anass Zouhairi')
+  assert.strictEqual(classic.city, 'Ifrane')
+  assert.strictEqual(classic.problem, 'Détartrage')
+  assert.strictEqual(classic.problem_details, 'Nettoyage des dents')
+  assert.strictEqual(validateFullName('Nettoyage Des Dents Détartrage'), null)
 
   const signals = extractCustomerSignals('Bghit rendez-vous')
   assert.strictEqual(signals.booking_intent, true)
@@ -37,7 +51,7 @@ function run() {
     full_name: 'Amine Benali',
     phone_number: '+212612345678',
     city: 'Casablanca',
-    problem: 'douleur dentaire',
+    problem: 'Urgences dentaires',
   })
   assert.strictEqual(incomplete.ok, false)
   assert.strictEqual(incomplete.nextField, 'appointment')
@@ -72,7 +86,7 @@ function run() {
   assert.strictEqual(turn.lead.stage, 'confirmation')
   assert.match(turn.forceReply, /OUI/)
   assert.match(turn.forceReply, /Amine Benali/)
-  assert.strictEqual(turn.lead.problem, 'douleur dentaire')
+  assert.strictEqual(turn.lead.problem, 'Urgences dentaires')
   assert.strictEqual(turn.lead.problem_details, 'Douleur à la molaire droite')
   assert.strictEqual(crm.repo.getCrmStats().appointments, 0)
 

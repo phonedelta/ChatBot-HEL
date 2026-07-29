@@ -12,6 +12,8 @@ const {
   analyzeVoiceTranscript,
   buildLowConfidenceVoiceReply,
   updateVoiceNluLog,
+  classifyIntent,
+  buildIntentDirectReply,
 } = require('./voice-nlu')
 const { createDashboardAuth } = require('./dashboard/auth')
 const { createCrmService } = require('./crm')
@@ -354,11 +356,13 @@ function buildOpenAiInstructions() {
       'Never keep the previous language when the latest message clearly uses another language.',
       'Do not reply in English or any other language unless the user explicitly asks for that language.',
       'When the latest input is a transcribed WhatsApp voice note: treat the transcript as the patient question/request and answer THAT question directly in text.',
-      'Patients often speak Moroccan Darija with incomplete sentences, code-switching, and ASR errors. Interpret the meaning; never answer at random.',
-      'If a VOICE PRE-ANALYSIS block is provided, trust its language, corrected text, intent and entities as the best understanding of the voice note.',
+      'Patients often speak Moroccan Darija with incomplete sentences, code-switching, and ASR errors. Interpret the INTENT of the whole message first; never answer word-by-word at random.',
+      'If an INTENT CLASSIFICATION block is provided with confidence above 0.70, answer that intent directly. Never say that you did not understand.',
+      'If the intent is ASK_SERVICES, list the clinic services clearly and invite the patient to book on WhatsApp.',
+      'If a VOICE PRE-ANALYSIS block is provided, it comes from the AI Transcript Interpreter: trust its corrected text, service, intent and entities as the patient meaning.',
       'For voice notes, reply in the same language the patient spoke in that voice note (French or Moroccan Darija/Arabic), not the language of older messages.',
-      'Examples of meaning: "kan wje3ni dersi" => toothache; "bghit nji" => appointment request; "3endi nafkha" => urgent swelling; "kan nssawal" => information request.',
-      'If the voice note remains unclear or confidence is low, ask one short clarification instead of guessing.',
+      'Examples of meaning: "kan wje3ni dersi" => toothache; "bghit nji" => appointment request; "3endi nafkha" => urgent swelling; "chno homa les service" => ask services list.',
+      'Only ask a short clarification when intent confidence is truly low (below 0.70) and the message is empty/junk.',
       'Use only the clinic facts provided in the business knowledge below plus the current conversation context.',
       'If a question is not answered by the loaded clinic knowledge, clearly say that this information is not available in the current Centre Dentaire HEL details. You may still mention phone (+212) 7 107 44444 or email contact@centredentairehel.ma as secondary options.',
       'Do not invent prices, insurance details, cancellation rules, payment policies, doctor schedules, or medical facts.',
@@ -517,45 +521,33 @@ function enqueueAiConversation(conversationId, action) {
 }
 
 /**
- * Second-pass LLM repair for imperfect Moroccan Darija ASR transcripts.
- * Returns corrected phrase only (no chat reply).
- * @param {string} rawTranscript
- * @param {object} [context]
+ * AI Transcript Interpreter LLM call.
+ * Receives raw ASR text and must return JSON understanding for the chatbot.
+ * @param {{ instructions: string, prompt: string }} args
  * @returns {Promise<string|null>}
  */
-async function correctDarijaTranscriptWithLlm(rawTranscript, context = {}) {
+async function runAiTranscriptInterpreterLlm(args = {}) {
   if (!openAiApiKey || !openAiClient) {
     return null
   }
 
-  const raw = String(rawTranscript || '').trim()
-  if (!raw) {
+  const instructions = String(args.instructions || '').trim()
+  const prompt = String(args.prompt || '').trim()
+  if (!instructions || !prompt) {
     return null
   }
 
   try {
     const requestBody = {
       model: openAiModel,
-      instructions: [
-        'Tu corriges des transcriptions imparfaites de messages vocaux en darija marocaine (et parfois français).',
-        'Corrige les erreurs ASR probables (ex: baghit→bghit, randivo→rendez-vous, nkhod→nakhod, drassa→ders, serviss→service).',
-        'Retrouve la phrase originale la plus probable.',
-        'Réponds UNIQUEMENT avec la phrase corrigée, sans explication, sans guillemets, sans traduction.',
-      ].join(' '),
+      instructions,
       input: [
         {
           role: 'user',
-          content: [
-            'Voici une transcription imparfaite d\'un message vocal en darija marocaine.',
-            'Corrige les erreurs probables et retrouve la phrase originale.',
-            'Répond uniquement avec la phrase corrigée.',
-            '',
-            `Transcription: ${raw}`,
-            context.correctedText ? `Version déjà partiellement nettoyée: ${context.correctedText}` : null,
-          ].filter(Boolean).join('\n'),
+          content: prompt,
         },
       ],
-      max_output_tokens: 180,
+      max_output_tokens: Math.max(220, Math.min(openAiMaxOutputTokens, 500)),
       store: false,
     }
 
@@ -565,9 +557,9 @@ async function correctDarijaTranscriptWithLlm(rawTranscript, context = {}) {
 
     const response = await openAiClient.responses.create(requestBody)
     const text = extractOpenAiOutputText(response)
-    return text ? String(text).trim().replace(/^["«]|["»]$/g, '') : null
+    return text ? String(text).trim() : null
   } catch (error) {
-    console.warn('[iadis-wa] Darija transcript LLM correction failed', {
+    console.warn('[iadis-wa] AI Transcript Interpreter failed', {
       reason: error.message || String(error),
     })
     return null
@@ -679,6 +671,16 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
           phoneDigits: options.phoneDigits || options.phoneNumber || null,
           userText: patientPlainText,
           voiceIntent: voiceNlu?.intent || options.voiceIntent || null,
+          voiceService: (() => {
+            const base = voiceNlu?.serviceDetection || options.voiceService || null
+            if (!base) return null
+            const problem = voiceNlu?.interpreter?.problem || voiceNlu?.entities?.problem || null
+            return {
+              ...base,
+              // Prefer clinical problem from AI Transcript Interpreter when present
+              crmProblem: problem || base.crmProblem,
+            }
+          })(),
           languageHint,
         })
       } catch (error) {
@@ -723,10 +725,57 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       }
     }
 
+    // Intent-first classification (Darija / FR / AR) before chatbot generation.
+    const intentHit = classifyIntent(patientPlainText, {
+      interpreterIntent: voiceNlu?.interpreter?.intent || null,
+      voiceIntent: voiceNlu?.intent || options.voiceIntent || null,
+    })
+    const intentDirectReply = intentHit.confidence >= 0.7
+      ? buildIntentDirectReply(intentHit.intent, languageHint)
+      : null
+
+    if (intentDirectReply) {
+      const historyUserContent = isVoice && cleanPatientText
+        ? `[vocal] ${cleanPatientText}`
+        : content
+      setAiConversationHistory(key, [
+        ...history,
+        { role: 'user', content: historyUserContent },
+        { role: 'assistant', content: intentDirectReply },
+      ])
+      console.log('[iadis-wa] intent classifier direct reply', {
+        conversation_id: key,
+        intent: intentHit.intent,
+        confidence: intentHit.confidence,
+        matched: intentHit.matched,
+      })
+      return {
+        reply: intentDirectReply,
+        reason: `intent_${String(intentHit.intent || 'other').toLowerCase()}`,
+        model: 'intent-classifier',
+        language_hint: languageHint,
+        is_voice: isVoice,
+        intent: intentHit.intent,
+        intent_confidence: intentHit.confidence,
+        crm_stage: crmTurn?.lead?.stage || null,
+      }
+    }
+
+    const intentBlock = intentHit.confidence >= 0.7
+      ? [
+        'INTENT CLASSIFICATION (trusted):',
+        `intent: ${intentHit.intent}`,
+        `confidence: ${intentHit.confidence}`,
+        intentHit.matched ? `matched: ${intentHit.matched}` : null,
+        'Answer this intent directly. Never say you did not understand.',
+      ].filter(Boolean).join('\n')
+      : null
+
     const apiUserContent = isVoice
       ? [
         languageDirective,
         '',
+        intentBlock,
         voiceNlu?.llmBlock || null,
         crmTurn?.llmContext || null,
         '',
@@ -738,6 +787,7 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       ].filter((line) => line !== null).join('\n')
       : [
         languageDirective,
+        intentBlock,
         crmTurn?.llmContext || null,
         '',
         `Patient message:\n${content}`,
@@ -2572,6 +2622,83 @@ function hasStoredSession(instanceId) {
   }
 }
 
+function clearSessionLockFiles(instanceId) {
+  const sessionDir = getInstanceSessionDir(instanceId)
+  for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'lockfile']) {
+    try {
+      fs.rmSync(path.join(sessionDir, name), { force: true })
+    } catch {
+      // ignore best-effort lock cleanup
+    }
+  }
+}
+
+async function killSessionBrowsers(instanceId) {
+  const sessionDir = path.resolve(getInstanceSessionDir(instanceId))
+
+  try {
+    if (process.platform === 'win32') {
+      const script = [
+        "$ErrorActionPreference = 'SilentlyContinue'",
+        `$target = ${JSON.stringify(sessionDir)}`,
+        'Get-CimInstance Win32_Process | Where-Object {',
+        "  $_.Name -match '^(chrome|chromium|msedge)\\.exe$' -and",
+        '  $_.CommandLine -and',
+        '  $_.CommandLine.IndexOf($target, [StringComparison]::OrdinalIgnoreCase) -ge 0',
+        '} | ForEach-Object {',
+        '  Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue',
+        '}',
+      ].join('\n')
+      const encoded = Buffer.from(script, 'utf16le').toString('base64')
+
+      await execFileAsync(
+        'powershell.exe',
+        ['-NoProfile', '-EncodedCommand', encoded],
+        {
+          timeout: 25000,
+          windowsHide: true,
+        },
+      )
+    } else {
+      await execFileAsync('pkill', ['-f', sessionDir], { timeout: 10000 }).catch(() => {})
+    }
+  } catch (error) {
+    console.warn('[iadis-wa] unable to kill session browsers', {
+      instance_id: instanceId,
+      reason: error.message || String(error),
+    })
+  }
+
+  clearSessionLockFiles(instanceId)
+  await sleep(800)
+}
+
+async function resetInstanceForQr(instanceId, reason = 'Dashboard QR refresh') {
+  const normalizedInstanceId = normalizeInstanceId(instanceId)
+  await killSessionBrowsers(normalizedInstanceId)
+
+  let record = getInstance(normalizedInstanceId)
+  if (record) {
+    clearReconnectTimer(record)
+    record.initPromise = null
+    record.recoverPromise = null
+    record.healthCheckPromise = null
+
+    await destroyClient(record)
+
+    const client = buildClient(normalizedInstanceId)
+    record.client = client
+    record.qr = null
+    record.qrCreatedAt = null
+    attachClientListeners(record)
+    updateState(record, 'disconnected', { lastError: null, phone: null, pushname: null })
+    initializeRecord(record)
+    return record
+  }
+
+  return ensureInstance(normalizedInstanceId)
+}
+
 function parseInstanceIdFromSessionDir(dirName) {
   const prefix = 'session-iadis_'
   if (!String(dirName || '').startsWith(prefix)) {
@@ -2621,6 +2748,9 @@ function serializeDashboardInstance(instanceId) {
     stored_session: storedSession,
     can_connect: Boolean(WaClient && LocalAuth && QRCode),
     ...baseStatus,
+    phone_number: baseStatus.phone,
+    qr_available: Boolean(record?.qr),
+    qr_created_at: record?.qrCreatedAt || null,
   }
 }
 
@@ -2768,10 +2898,23 @@ function initializeRecord(record) {
 
   updateState(record, 'initializing', { lastError: null })
   record.initPromise = Promise.resolve()
-    .then(() => record.client.initialize())
-    .catch((error) => {
-      updateState(record, 'disconnected', { lastError: error.message || 'Initialization failed' })
-      scheduleReconnect(record, error.message || 'Initialization failed')
+    .then(async () => {
+      await killSessionBrowsers(record.instanceId)
+      return record.client.initialize()
+    })
+    .catch(async (error) => {
+      const message = error.message || 'Initialization failed'
+      const browserLocked = /browser is already running/i.test(message)
+
+      if (browserLocked) {
+        console.warn('[iadis-wa] browser lock detected, forcing cleanup', {
+          instance_id: record.instanceId,
+        })
+        await killSessionBrowsers(record.instanceId)
+      }
+
+      updateState(record, 'disconnected', { lastError: message })
+      scheduleReconnect(record, message)
     })
     .finally(() => {
       record.initPromise = null
@@ -2846,11 +2989,14 @@ async function removeInstance(instanceId, options = {}) {
       record.queuePromise.catch(() => {})
     }
 
+    // Kill Chromium first so LocalAuth logout/unlink does not crash on EBUSY.
+    await killSessionBrowsers(normalizedInstanceId)
+
     try {
       if (typeof record.client?.logout === 'function') {
         await Promise.race([
           record.client.logout(),
-          timeoutAfter(instancePingTimeoutMs, 'client.logout'),
+          timeoutAfter(Math.min(instancePingTimeoutMs, 8000), 'client.logout'),
         ])
       }
     } catch (error) {
@@ -2861,10 +3007,23 @@ async function removeInstance(instanceId, options = {}) {
     }
 
     await destroyClient(record)
+    await killSessionBrowsers(normalizedInstanceId)
   }
 
   if (shouldDeleteSession && hadStoredSession) {
-    removeSessionDir(normalizedInstanceId)
+    try {
+      removeSessionDir(normalizedInstanceId)
+    } catch (error) {
+      await killSessionBrowsers(normalizedInstanceId)
+      try {
+        removeSessionDir(normalizedInstanceId)
+      } catch (retryError) {
+        console.warn('[iadis-wa] unable to remove session dir', {
+          instance_id: normalizedInstanceId,
+          reason: retryError.message || String(retryError),
+        })
+      }
+    }
   }
 
   return {
@@ -3556,36 +3715,49 @@ async function processRealtimeMessage(record, message, options = {}) {
               audioPath: media.filePath,
               logDir: aiVoiceNluLogDir,
               archiveAudio: aiVoiceArchiveAudio,
-              llmCorrector: async ({ rawTranscript, correctedText, language }) => (
-                correctDarijaTranscriptWithLlm(rawTranscript, { correctedText, language })
-              ),
+              // Primary path: AI Transcript Interpreter (raw ASR → structured JSON)
+              transcriptInterpreter: runAiTranscriptInterpreterLlm,
             })
             replyLanguageHint = voiceNluAnalysis.replyLanguageHint || 'auto'
             content = voiceNluAnalysis.llmCorrectedText
               || voiceNluAnalysis.correctedText
               || audioTranscript
-            console.log('[iadis-wa] voice NLU pre-analysis', {
+            console.log('[iadis-wa] AI Transcript Interpreter', {
               instance_id: record.instanceId,
               chat_id: chatId,
               message_id: messageId,
+              pipeline_mode: voiceNluAnalysis.pipelineMode || null,
               language: voiceNluAnalysis.language,
               intent: voiceNluAnalysis.intent,
+              interpreter_intent: voiceNluAnalysis.interpreter?.intent || null,
+              service: voiceNluAnalysis.serviceDetection?.service || null,
+              service_confidence: voiceNluAnalysis.serviceDetection?.confidence || null,
+              problem: voiceNluAnalysis.interpreter?.problem || null,
               confidence: voiceNluAnalysis.confidence.score,
               low_confidence: voiceNluAnalysis.lowConfidence,
               recoverable: voiceNluAnalysis.recoverable,
-              llm_correction_used: Boolean(voiceNluAnalysis.llmCorrectionUsed),
               corrected_preview: String(content || '').slice(0, 120),
               meaning_hint: voiceNluAnalysis.meaningHint || null,
               log_path: voiceNluAnalysis.logPath || null,
             })
 
             // Last resort only: empty / junk transcript with no recoverable intent.
+            // Never ask clarification if a global intent is confidently detected (>70%).
+            const earlyIntent = classifyIntent(String(content || ''), {
+              interpreterIntent: voiceNluAnalysis.interpreter?.intent || null,
+              voiceIntent: voiceNluAnalysis.intent || null,
+            })
             const junkOrEmpty = Boolean(
               !String(content || '').trim()
               || voiceNluAnalysis.confidence?.reasons?.includes('junk_transcript')
               || voiceNluAnalysis.confidence?.reasons?.includes('empty'),
             )
-            if (voiceNluAnalysis.lowConfidence && junkOrEmpty && !voiceNluAnalysis.recoverable) {
+            if (
+              voiceNluAnalysis.lowConfidence
+              && junkOrEmpty
+              && !voiceNluAnalysis.recoverable
+              && earlyIntent.confidence < 0.7
+            ) {
               audioTranscriptionFailed = true
               console.warn('[iadis-wa] unrecoverable voice transcript, asking clarification', {
                 instance_id: record.instanceId,
@@ -3785,6 +3957,10 @@ async function processRealtimeMessage(record, message, options = {}) {
             correctedText: voiceNluAnalysis.correctedText,
             normalizedText: voiceNluAnalysis.normalizedText,
             meaningHint: voiceNluAnalysis.meaningHint,
+            serviceDetection: voiceNluAnalysis.serviceDetection || null,
+            service: voiceNluAnalysis.service || null,
+            interpreter: voiceNluAnalysis.interpreter || null,
+            pipelineMode: voiceNluAnalysis.pipelineMode || null,
             intent: voiceNluAnalysis.intent,
             intentConfidence: voiceNluAnalysis.intentConfidence,
             entities: voiceNluAnalysis.entities,
@@ -4497,11 +4673,23 @@ app.get('/dashboard/api/instances', ensureDashboardSession, (_req, res) => {
   })
 })
 
-app.post('/dashboard/api/instances', ensureDashboardSession, (req, res) => {
+app.post('/dashboard/api/instances', ensureDashboardSession, async (req, res) => {
   const instanceId = normalizeInstanceId(req.body?.instance_id)
+  const force = parseBoolean(req.body?.force, false)
 
   try {
-    const record = ensureInstance(instanceId)
+    const existing = getInstance(instanceId)
+    const state = String(existing?.state || '').toLowerCase()
+    const browserLocked = /browser is already running/i.test(String(existing?.lastError || ''))
+    const shouldReset = force
+      || browserLocked
+      || !existing
+      || ['disconnected', 'auth_failure', 'missing'].includes(state)
+
+    const record = shouldReset
+      ? await resetInstanceForQr(instanceId, 'Dashboard reconnect')
+      : ensureInstance(instanceId)
+
     return res.json({
       ok: true,
       instance: serializeDashboardInstance(instanceId),
@@ -4516,12 +4704,54 @@ app.post('/dashboard/api/instances', ensureDashboardSession, (req, res) => {
   }
 })
 
+app.get('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, (req, res) => {
+  const instanceId = normalizeInstanceId(req.params.instanceId)
+  const record = getInstance(instanceId)
+
+  return res.json({
+    ok: true,
+    instance: serializeDashboardInstance(instanceId),
+    state: record?.state || 'missing',
+    qr: record?.qr || null,
+    created_at: record?.qrCreatedAt || null,
+    lastError: record?.lastError || null,
+  })
+})
+
 app.post('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, async (req, res) => {
   const instanceId = normalizeInstanceId(req.params.instanceId)
+  const force = parseBoolean(req.body?.force, true)
+  const rawWait = Number(req.body?.wait_ms)
+  const waitMs = Number.isFinite(rawWait) ? Math.max(0, rawWait) : 20000
 
   try {
-    const record = ensureInstance(instanceId)
-    const qr = await waitForQr(record)
+    let record = getInstance(instanceId)
+    const state = String(record?.state || '').toLowerCase()
+
+    if (state === 'ready' && !force) {
+      return res.json({
+        ok: true,
+        instance: serializeDashboardInstance(instanceId),
+        state: record.state,
+        qr: null,
+        created_at: record.qrCreatedAt || null,
+        lastError: null,
+      })
+    }
+
+    const browserLocked = /browser is already running/i.test(String(record?.lastError || ''))
+    const needsReset = force
+      || !record
+      || browserLocked
+      || !record.qr
+      || ['disconnected', 'auth_failure', 'missing'].includes(state)
+
+    record = needsReset
+      ? await resetInstanceForQr(instanceId, 'Dashboard QR generation')
+      : ensureInstance(instanceId)
+
+    const qr = waitMs > 0 ? await waitForQr(record, waitMs) : (record.qr || null)
+    const finalState = String(record.state || '').toLowerCase()
 
     return res.json({
       ok: true,
@@ -4529,6 +4759,8 @@ app.post('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, asyn
       state: record.state,
       qr,
       created_at: record.qrCreatedAt || null,
+      lastError: record.lastError || null,
+      pending: !qr && finalState !== 'ready',
     })
   } catch (error) {
     const code = error.code === 'WA_NOT_AVAILABLE' ? 501 : 500

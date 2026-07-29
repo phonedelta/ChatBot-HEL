@@ -85,6 +85,24 @@ function buildMeaningHint(normalizedText, canonicalTokens) {
   if (set.has('extraire') && (set.has('dent') || set.has('molaire'))) {
     return 'Je voudrais faire extraire une dent.'
   }
+  if (set.has('blanchiment')) {
+    return 'Je demande un blanchiment des dents.'
+  }
+  if (set.has('appareil')) {
+    return 'Je demande un appareil / un traitement orthodontique.'
+  }
+  if (set.has('carie')) {
+    return 'Je demande un soin / traitement de carie.'
+  }
+  if (set.has('detartrage')) {
+    return 'Je demande un détartrage / nettoyage des dents.'
+  }
+  if (set.has('gencive')) {
+    return 'Je demande un soin des gencives.'
+  }
+  if (set.has('enfant')) {
+    return 'Je demande un soin dentaire pour un enfant.'
+  }
   if (set.has('prix') && set.has('implant')) {
     return "Je demande le prix d'un implant."
   }
