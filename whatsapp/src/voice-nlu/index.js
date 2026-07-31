@@ -28,6 +28,11 @@ const {
   INTENT_NAMES,
   INTENT_DICTIONARY,
 } = require('./intent-classifier')
+const {
+  detectServiceBookingIntent,
+  SERVICE_BOOKING_CONFIDENCE,
+} = require('./intent-table')
+const { routePatientMessage, buildRouterLlmBlock } = require('./intent-router')
 
 module.exports = {
   analyzeVoiceTranscript,
@@ -53,4 +58,8 @@ module.exports = {
   buildIntentDirectReply,
   INTENT_NAMES,
   INTENT_DICTIONARY,
+  detectServiceBookingIntent,
+  SERVICE_BOOKING_CONFIDENCE,
+  routePatientMessage,
+  buildRouterLlmBlock,
 }

@@ -13,8 +13,9 @@ const {
   buildLowConfidenceVoiceReply,
   updateVoiceNluLog,
   classifyIntent,
-  buildIntentDirectReply,
+  routePatientMessage,
 } = require('./voice-nlu')
+const { detectReplyLanguageHint } = require('./voice-nlu/language')
 const { createDashboardAuth } = require('./dashboard/auth')
 const { createCrmService } = require('./crm')
 
@@ -243,43 +244,10 @@ function detectUserLanguageHint(text) {
   if (!cleaned) {
     return 'auto'
   }
-
-  const lower = cleaned.toLowerCase()
-  const arabicChars = (cleaned.match(/[\u0600-\u06FF]/g) || []).length
-  const latinChars = (cleaned.match(/[A-Za-zÀ-ÿ]/g) || []).length
-
-  if (/langue probable du vocal:\s*(darija|arabe)/i.test(String(text || ''))) {
-    return 'darija'
-  }
-  if (/langue probable du vocal:\s*fran[cç]ais/i.test(String(text || ''))) {
-    return 'fr'
-  }
-
-  if (arabicChars >= 2 && arabicChars >= latinChars) {
-    return 'darija'
-  }
-
-  const darijaLatinMarkers = /\b(salam|salamou|labas|bghit|bghiti|wach|wash|kifash|kifach|3ndi|3andi|andi|safi|chkoun|chkou|fin|mzyan|bzaf|chwiya|ch7al|lah y|llah|rassi|sennan|sanan|drss|driss|dersi|derri|darsa|darssa|7ri9|hri9|n9ala3|nqala3|nafkha|ghedda|mow3id|mo3id|kan)\b/i
-  const frenchMarkers = /\b(bonjour|bonsoir|merci|je|j'|vous|nous|avec|pour|horaires?|docteur|dentiste|douleur|urgence|s'il|sil vous)\b/i
-
-  // Latin Darija (franco-arab) wins even if mixed with French loanwords like "rendez-vous".
-  if (latinChars >= 2 && darijaLatinMarkers.test(lower)) {
-    return 'darija'
-  }
-
-  if (latinChars >= 2 && frenchMarkers.test(lower)) {
-    return 'fr'
-  }
-
-  if (arabicChars > 0) {
-    return 'darija'
-  }
-
-  if (latinChars > 0) {
-    return 'fr'
-  }
-
-  return 'auto'
+  // Absolute rule: analyze message content (not ASR language tag alone).
+  // Darija Latin / Arabic / mixed with French → reply language "darija" (Arabic script).
+  // Majority French → "fr".
+  return detectReplyLanguageHint(cleaned)
 }
 
 function buildLanguageDirective(languageHint, options = {}) {
@@ -291,34 +259,33 @@ function buildLanguageDirective(languageHint, options = {}) {
   if (languageHint === 'darija') {
     return [
       voicePrefix,
-      'LANGUAGE RULE FOR THIS TURN (mandatory):',
-      'The latest patient message/voice is Moroccan Darija (Arabic script OR Latin keyboard like: bghit, 3andi, 7ri9, kan, wach, labas).',
-      'Reply ONLY in Moroccan Darija written with Arabic script.',
-      'NEVER reply in Latin-letter Darija (no "bghit", "labas", "safi" in the reply).',
-      'Do NOT reply in French, even if earlier messages in this chat were in French.',
-      'Answer directly the question or request contained in the latest message.',
-      'Do NOT give a generic greeting-only reply if the patient asked a concrete question.',
+      'ABSOLUTE LANGUAGE RULE (highest priority, never ignore):',
+      'The patient used Moroccan Darija (Arabic script, Latin keyboard like bghit/3andi/wach/chno, OR mixed with French loanwords).',
+      'Reply EXCLUSIVELY in Arabic script (دارجة/عربية).',
+      'NEVER reply in French.',
+      'NEVER reply in Latin-letter Darija (forbidden: "bghit", "labas", "safi", "wach", etc.).',
+      'Do not keep French from earlier turns.',
+      'Answer the concrete question/request in this latest message.',
     ].join(' ')
   }
 
   if (languageHint === 'fr') {
     return [
       voicePrefix,
-      'LANGUAGE RULE FOR THIS TURN (mandatory):',
-      'The latest patient message/voice is in French.',
-      'Reply in French only.',
-      'Answer directly the question or request contained in the latest message.',
-      'Do NOT reply in Darija/Arabic, even if earlier messages in this chat were in Darija/Arabic.',
-      'Do NOT give a generic greeting-only reply if the patient asked a concrete question.',
+      'ABSOLUTE LANGUAGE RULE (highest priority, never ignore):',
+      'The patient message is entirely or mostly French.',
+      'Reply EXCLUSIVELY in French.',
+      'Do NOT reply in Arabic/Darija, even if earlier turns used Darija.',
+      'Answer the concrete question/request in this latest message.',
     ].join(' ')
   }
 
   return [
     voicePrefix,
-    'LANGUAGE RULE FOR THIS TURN (mandatory):',
-    'Match only the language of the latest patient message/voice (French or Moroccan Darija).',
-    'Answer directly the question asked in that latest message.',
-    'If the patient switched languages, follow the latest message and ignore earlier turns.',
+    'ABSOLUTE LANGUAGE RULE (highest priority):',
+    '1) Detect the language of the LATEST patient message only.',
+    '2) Majority French → reply in French only.',
+    '3) Darija (Latin, Arabic, or mixed with French) → reply in Arabic script only, never Latin Darija.',
   ].join(' ')
 }
 
@@ -349,34 +316,37 @@ function buildOpenAiInstructions() {
   const sections = [
     [
       'You are the official WhatsApp assistant for Centre Dentaire HEL in El Oulfa, Casablanca.',
-      'Reply only in French or Moroccan Darija / Arabic dialect.',
-      'CRITICAL LANGUAGE RULE: always answer in the language of the latest patient message, not the language of previous messages.',
-      'If the patient spoke French before and now sends Arabic/Darija text or voice, switch immediately to Darija/Arabic.',
-      'If the patient spoke Darija/Arabic before and now sends French text or voice, switch immediately to French.',
-      'Never keep the previous language when the latest message clearly uses another language.',
-      'Do not reply in English or any other language unless the user explicitly asks for that language.',
+      'INTENT ROUTER RULE (PRIORITY): when an INTENT ROUTER RESULT block is provided, trust language/intent/service as already decided. Do not re-detect or contradict them.',
+      'ABSOLUTE LANGUAGE RULE (PRIORITY OVER ALL OTHER INSTRUCTIONS):',
+      'Before every reply: (1) detect the language of the LATEST patient message/voice transcript only;',
+      '(2) if entirely/mostly French → reply exclusively in French;',
+      '(3) if Moroccan Darija in Arabic script OR Latin keyboard (bghit, 3andi, wach, chno, fin, labas...) OR mixed Darija+French → reply exclusively in Arabic script;',
+      '(4) NEVER reply in Latin-letter Darija; NEVER keep the previous chat language when the latest message switched.',
+      'Examples: "Bghit rendez-vous." / "3andi douleur f dersi." / "Chno homa les services ?" / "بغيت موعد." → Arabic reply.',
+      'Examples: "Bonjour, je voudrais un rendez-vous." / "Quels sont vos services ?" → French reply.',
+      'Same absolute rule for voice notes after transcription: Darija/mixed → Arabic; French → French. Do not rely only on ASR language tags; analyze content markers.',
+      'Do not reply in English unless the user explicitly asks for English.',
       'When the latest input is a transcribed WhatsApp voice note: treat the transcript as the patient question/request and answer THAT question directly in text.',
       'Patients often speak Moroccan Darija with incomplete sentences, code-switching, and ASR errors. Interpret the INTENT of the whole message first; never answer word-by-word at random.',
       'If an INTENT CLASSIFICATION block is provided with confidence above 0.70, answer that intent directly. Never say that you did not understand.',
       'If the intent is ASK_SERVICES, list the clinic services clearly and invite the patient to book on WhatsApp.',
       'If a VOICE PRE-ANALYSIS block is provided, it comes from the AI Transcript Interpreter: trust its corrected text, service, intent and entities as the patient meaning.',
-      'For voice notes, reply in the same language the patient spoke in that voice note (French or Moroccan Darija/Arabic), not the language of older messages.',
       'Examples of meaning: "kan wje3ni dersi" => toothache; "bghit nji" => appointment request; "3endi nafkha" => urgent swelling; "chno homa les service" => ask services list.',
       'Only ask a short clarification when intent confidence is truly low (below 0.70) and the message is empty/junk.',
       'Use only the clinic facts provided in the business knowledge below plus the current conversation context.',
       'If a question is not answered by the loaded clinic knowledge, clearly say that this information is not available in the current Centre Dentaire HEL details. You may still mention phone (+212) 7 107 44444 or email contact@centredentairehel.ma as secondary options.',
       'Do not invent prices, insurance details, cancellation rules, payment policies, doctor schedules, or medical facts.',
       'BOOKING RULE: when the patient asks for an appointment (FR or Darija), the CRM workflow sends ONE form message asking for all required fields together. Do not ask those fields one by one in your own reply.',
+      'Never collect appointment fields from a voice note. Never ask name, then phone, then city separately. Always require ONE text message with all fields.',
       'If the patient only describes pain without asking for a booking yet, you may briefly invite them to book on WhatsApp in one short sentence.',
       'Do not answer only with "call the clinic" or "send an email" when a WhatsApp booking is relevant.',
       'PHONE RULE: never assume or reuse the WhatsApp profile phone number. The patient must type their phone number in the form.',
-      'DARIJA REPLY RULE: if the patient writes Darija with Latin letters (bghit, 3andi, 7ri9...), still answer in Arabic script only.',
       'Never tell the patient that the appointment is saved in the CRM before they answer the confirmation question with OUI / نعم.',
       'Do not provide a diagnosis or claim that a treatment is suitable for the person without an in-clinic evaluation.',
       'Keep replies concise, warm, and practical for patients.',
       'EMPATHY RULE: if the patient says they are in pain, sick, suffering, have a dental problem, bleeding, swelling, or any illness/symptom, start with a short kind and polite caring phrase before the practical answer.',
       'In French, use a gentle phrase such as: "Que Dieu vous guérisse.", "Bon rétablissement.", or "Je suis désolé(e) pour cette douleur."',
-      'In Moroccan Darija/Arabic, use a gentle phrase such as: "الله يشافيكم.", "الله يعطيكم الصحة.", or "نتمنى ليك الشفاء عاجلاً."',
+      'In Arabic replies, use a gentle phrase such as: "أتمنى لك الشفاء." / "الله يشافيكم." then continue with the practical answer.',
       'Keep the empathy phrase short (one sentence), sincere, and natural, then continue with the useful clinic information and the WhatsApp booking offer when relevant.',
       'Do not overdo religious or emotional language; one kind sentence is enough.',
       'Always reply with text messages only. Never claim that you sent a voice note.',
@@ -652,15 +622,33 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       : []
     const isVoice = Boolean(options.isVoice || options.audioTranscript || options.voiceNlu || /\[Message vocal/i.test(content))
     const voiceNlu = options.voiceNlu || null
-    const forcedLanguageHint = normalizeReplyLanguageHint(
-      options.languageHint || voiceNlu?.replyLanguageHint || null,
-    )
-    const languageHint = forcedLanguageHint || detectUserLanguageHint(content)
-    const languageDirective = buildLanguageDirective(languageHint, { isVoice })
     const cleanPatientText = stripVoiceTranscriptPrefix(
       voiceNlu?.correctedText || options.audioTranscript || content,
     )
     const patientPlainText = (isVoice && cleanPatientText ? cleanPatientText : content).trim()
+
+    // ── Intent Router (BEFORE CRM + LLM) ──────────────────────────────
+    // Message → language → intent → service → structured route
+    const router = routePatientMessage(patientPlainText, {
+      languageHint: normalizeReplyLanguageHint(
+        options.languageHint || voiceNlu?.replyLanguageHint || null,
+      ),
+      voiceIntent: voiceNlu?.intent || options.voiceIntent || null,
+      interpreterIntent: voiceNlu?.interpreter?.intent || null,
+      voiceService: voiceNlu?.serviceDetection || options.voiceService || null,
+    })
+    const languageHint = router.language || detectUserLanguageHint(patientPlainText)
+    const languageDirective = buildLanguageDirective(languageHint, { isVoice })
+
+    console.log('[iadis-wa] intent router', {
+      conversation_id: key,
+      language: router.language,
+      intent: router.intent,
+      intent_confidence: router.intentConfidence,
+      service: router.service,
+      service_confidence: router.serviceConfidence,
+      book_appointment: router.bookAppointment,
+    })
 
     let crmTurn = null
     if (crm) {
@@ -670,18 +658,30 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
           chatId: options.chatId || null,
           phoneDigits: options.phoneDigits || options.phoneNumber || null,
           userText: patientPlainText,
-          voiceIntent: voiceNlu?.intent || options.voiceIntent || null,
-          voiceService: (() => {
-            const base = voiceNlu?.serviceDetection || options.voiceService || null
-            if (!base) return null
-            const problem = voiceNlu?.interpreter?.problem || voiceNlu?.entities?.problem || null
-            return {
-              ...base,
-              // Prefer clinical problem from AI Transcript Interpreter when present
-              crmProblem: problem || base.crmProblem,
+          isVoice,
+          voiceIntent: router.bookAppointment
+            ? 'BOOK_APPOINTMENT'
+            : (voiceNlu?.intent || options.voiceIntent || router.intent || null),
+          voiceService: router.service
+            ? {
+              service: router.service,
+              serviceId: router.serviceId,
+              confidence: router.serviceConfidence,
+              matched: router.serviceMatched,
+              crmProblem: router.service,
+              urgency: null,
             }
-          })(),
+            : (() => {
+              const base = voiceNlu?.serviceDetection || options.voiceService || null
+              if (!base) return null
+              const problem = voiceNlu?.interpreter?.problem || voiceNlu?.entities?.problem || null
+              return {
+                ...base,
+                crmProblem: problem || base.crmProblem,
+              }
+            })(),
           languageHint,
+          router,
         })
       } catch (error) {
         console.error('[iadis-wa] CRM turn failed', {
@@ -691,15 +691,11 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       }
     }
 
+    // Exact CRM templates (formulaire 1 message / résumé / confirmation) — never rewrite with AI.
     if (crmTurn?.shouldSkipLlm && crmTurn.forceReply) {
       const historyUserContent = isVoice && cleanPatientText
         ? `[vocal] ${cleanPatientText}`
         : content
-      setAiConversationHistory(key, [
-        ...history,
-        { role: 'user', content: historyUserContent },
-        { role: 'assistant', content: crmTurn.forceReply },
-      ])
       if (crm) {
         crm.repo.logConversation({
           conversation_id: key,
@@ -707,12 +703,24 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
           customer_id: crmTurn.booking?.customer?.id || null,
           direction: 'outbound',
           message_text: crmTurn.forceReply,
-          extracted: crmTurn.extracted,
+          extracted: {
+            ...(crmTurn.extracted || {}),
+            router,
+          },
           appointment_status: crmTurn.lead?.stage || null,
         })
       }
       if (crmTurn.booking) {
         void enrichBookingMotifWithAi(crmTurn.booking)
+        // After RDV validation: forget the whole chat memory for a fresh next booking
+        setAiConversationHistory(key, [])
+        console.log('[iadis-wa] conversation memory cleared after booking', { conversation_id: key })
+      } else {
+        setAiConversationHistory(key, [
+          ...history,
+          { role: 'user', content: historyUserContent },
+          { role: 'assistant', content: crmTurn.forceReply },
+        ])
       }
       return {
         reply: crmTurn.forceReply,
@@ -720,62 +728,20 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
         model: openAiModel,
         language_hint: languageHint,
         is_voice: isVoice,
+        intent: router.intent,
+        intent_confidence: router.intentConfidence,
+        service: router.service,
         crm_booking: crmTurn.booking || null,
         crm_stage: crmTurn.lead?.stage || null,
+        router,
       }
     }
-
-    // Intent-first classification (Darija / FR / AR) before chatbot generation.
-    const intentHit = classifyIntent(patientPlainText, {
-      interpreterIntent: voiceNlu?.interpreter?.intent || null,
-      voiceIntent: voiceNlu?.intent || options.voiceIntent || null,
-    })
-    const intentDirectReply = intentHit.confidence >= 0.7
-      ? buildIntentDirectReply(intentHit.intent, languageHint)
-      : null
-
-    if (intentDirectReply) {
-      const historyUserContent = isVoice && cleanPatientText
-        ? `[vocal] ${cleanPatientText}`
-        : content
-      setAiConversationHistory(key, [
-        ...history,
-        { role: 'user', content: historyUserContent },
-        { role: 'assistant', content: intentDirectReply },
-      ])
-      console.log('[iadis-wa] intent classifier direct reply', {
-        conversation_id: key,
-        intent: intentHit.intent,
-        confidence: intentHit.confidence,
-        matched: intentHit.matched,
-      })
-      return {
-        reply: intentDirectReply,
-        reason: `intent_${String(intentHit.intent || 'other').toLowerCase()}`,
-        model: 'intent-classifier',
-        language_hint: languageHint,
-        is_voice: isVoice,
-        intent: intentHit.intent,
-        intent_confidence: intentHit.confidence,
-        crm_stage: crmTurn?.lead?.stage || null,
-      }
-    }
-
-    const intentBlock = intentHit.confidence >= 0.7
-      ? [
-        'INTENT CLASSIFICATION (trusted):',
-        `intent: ${intentHit.intent}`,
-        `confidence: ${intentHit.confidence}`,
-        intentHit.matched ? `matched: ${intentHit.matched}` : null,
-        'Answer this intent directly. Never say you did not understand.',
-      ].filter(Boolean).join('\n')
-      : null
 
     const apiUserContent = isVoice
       ? [
         languageDirective,
         '',
-        intentBlock,
+        router.llmBlock,
         voiceNlu?.llmBlock || null,
         crmTurn?.llmContext || null,
         '',
@@ -783,14 +749,16 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
         cleanPatientText || content,
         voiceNlu?.meaningHint ? `Meaning hint: ${voiceNlu.meaningHint}` : null,
         '',
-        'Write a direct useful answer to that question/intent in the required language.',
+        'Write a direct useful answer using the INTENT ROUTER RESULT above. Do not re-detect language/intent/service.',
       ].filter((line) => line !== null).join('\n')
       : [
         languageDirective,
-        intentBlock,
+        router.llmBlock,
         crmTurn?.llmContext || null,
         '',
         `Patient message:\n${content}`,
+        '',
+        'Write the reply using the INTENT ROUTER RESULT above. Do not re-detect language/intent/service.',
       ].filter((line) => line !== null).join('\n')
     const input = [
       ...history,
@@ -816,25 +784,33 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       throw error
     }
 
-    // Persist the clean patient text only (without the language directive).
     const historyUserContent = isVoice && cleanPatientText
       ? `[vocal] ${cleanPatientText}`
       : content
-    setAiConversationHistory(key, [
-      ...history,
-      { role: 'user', content: historyUserContent },
-      { role: 'assistant', content: reply },
-    ])
 
     if (crm) {
       crm.repo.logConversation({
         conversation_id: key,
         whatsapp_chat_id: options.chatId || null,
+        customer_id: crmTurn?.booking?.customer?.id || null,
         direction: 'outbound',
         message_text: reply,
         extracted: crmTurn?.extracted || null,
         appointment_status: crmTurn?.lead?.stage || null,
       })
+    }
+
+    if (crmTurn?.booking) {
+      void enrichBookingMotifWithAi(crmTurn.booking)
+      // After RDV validation: forget the whole chat memory for a fresh next booking
+      setAiConversationHistory(key, [])
+      console.log('[iadis-wa] conversation memory cleared after booking', { conversation_id: key })
+    } else {
+      setAiConversationHistory(key, [
+        ...history,
+        { role: 'user', content: historyUserContent },
+        { role: 'assistant', content: reply },
+      ])
     }
 
     console.log('[iadis-wa] reply language hint', {
@@ -846,13 +822,17 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
 
     return {
       reply,
-      reason: 'openai_response',
+      reason: crmTurn?.booking ? 'crm_booking_confirmed_ai' : 'openai_response',
       model: openAiModel,
       response_id: response.id || null,
       language_hint: languageHint,
       is_voice: isVoice,
-      crm_booking: null,
+      intent: router.intent,
+      intent_confidence: router.intentConfidence,
+      service: router.service,
+      crm_booking: crmTurn?.booking || null,
       crm_stage: crmTurn?.lead?.stage || null,
+      router,
     }
   })
 }

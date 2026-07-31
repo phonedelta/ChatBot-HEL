@@ -518,14 +518,24 @@ function extractCity(text) {
 }
 
 function isBookingIntent(text, voiceIntent = null) {
-  if (['prise_rendez_vous', 'appointment', 'rdv'].includes(String(voiceIntent || '').toLowerCase())) {
+  // Prefer the transcript itself. Soft voice NLU labels alone are too noisy
+  // (Whisper + interpreter often tag random audio as "appointment").
+  if (BOOKING_INTENT.some((pattern) => pattern.test(String(text || '')))) {
     return true
   }
-  return BOOKING_INTENT.some((pattern) => pattern.test(String(text || '')))
+  // Keep voiceIntent only as a weak secondary signal when text already looks booking-ish
+  const hint = String(voiceIntent || '').toLowerCase()
+  if (['prise_rendez_vous', 'appointment', 'rdv', 'book_appointment'].includes(hint)) {
+    return /\b(rdv|rendez|موعد|bghit|بغيت|je\s+veux|je\s+voudrais)\b/i.test(String(text || ''))
+  }
+  return false
 }
 
 function isConfirmationYes(text) {
-  return CONFIRM_YES.some((pattern) => pattern.test(String(text || '').trim()))
+  const raw = String(text || '').trim()
+  // Exact summary template uses *OUI* (French keyword even in Arabic chats)
+  if (/^\*?oui\*?$/i.test(raw)) return true
+  return CONFIRM_YES.some((pattern) => pattern.test(raw))
 }
 
 function isConfirmationNo(text) {

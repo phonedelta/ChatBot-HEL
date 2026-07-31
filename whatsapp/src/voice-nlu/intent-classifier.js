@@ -86,8 +86,15 @@ const INTENT_DICTIONARY = {
       'bghit rendez-vous', 'bghit rdv', 'nakhod rdv', 'bghit nji',
       'prendre rendez-vous', 'je veux un rendez-vous', 'je voudrais un rdv',
       'بغيت موعد', 'نبغي نجي',
+      'bghit n7yed derssa', 'bghit n7yed ders', 'bghit n9ala3 ders', 'bghit extraction',
+      'bghit nettoyage', 'bghit tn9iya', 'bghit blanchiment', 'bghit tabyid',
+      'bghit appareil', 'bghit ta9wim', 'bghit implant',
+      'بغيت نحيد ضرس', 'بغيت نقلع ضرس',
     ],
-    keywords: ['rendez-vous', 'rdv', 'randivo', 'موعد', 'appointment', 'bghit nji'],
+    // Only appointment words — service names alone must not open the booking form
+    keywords: [
+      'rendez-vous', 'rdv', 'randivo', 'موعد', 'appointment', 'bghit nji',
+    ],
   },
   CANCEL_APPOINTMENT: {
     phrases: [
@@ -312,16 +319,24 @@ function buildIntentDirectReply(intent, languageHint = 'fr') {
   const darija = languageHint === 'darija' || languageHint === 'mixed'
 
   if (intent === 'ASK_SERVICES') {
-    const lines = CLINIC_SERVICES.map((name) => `• ${name}`)
     if (darija) {
       return [
-        'أهلاً، هاد الخدمات لي كاينين فـ Centre Dentaire HEL:',
+        'نقدم الخدمات التالية:',
         '',
-        ...lines,
+        '• تقويم الأسنان',
+        '• علاج تسوس الأسنان',
+        '• تنظيف الأسنان (إزالة الجير)',
+        '• علاج اللثة',
+        '• تبييض الأسنان',
+        '• زراعة الأسنان',
+        '• قشور الأسنان',
+        '• طب أسنان الأطفال',
+        '• علاج الحالات المستعجلة',
         '',
-        'إلا بغيتي شي خدمة معينة، قولي ليا ونرتبو ليك موعد هنا فـ واتساب.',
+        'إذا أردت خدمة معينة، أخبرني لأرتب لك موعداً هنا على واتساب.',
       ].join('\n')
     }
+    const lines = CLINIC_SERVICES.map((name) => `• ${name}`)
     return [
       'Bien sûr. Voici les services disponibles au Centre Dentaire HEL :',
       '',

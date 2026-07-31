@@ -1,46 +1,88 @@
 /**
  * Patient / staff message templates (French + Arabic script for Darija).
+ * Booking form + summary must stay exact (single-message collection UX).
  */
 
 const { formatPhoneDisplay } = require('./phone')
+const { serviceArabicLabel } = require('../voice-nlu/intent-table')
 
 function isDarija(lang) {
   return ['darija', 'ar', 'arabic'].includes(String(lang || '').toLowerCase())
 }
 
-function bookingFormMessage(language = 'fr') {
+function formatDateDisplay(value) {
+  const raw = String(value || '').trim()
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`
+  return raw || '—'
+}
+
+/**
+ * @param {string} [language]
+ * @param {{ knownService?: string|null, skipProblem?: boolean }} [options]
+ */
+function bookingFormMessage(language = 'fr', options = {}) {
+  const knownService = String(options.knownService || '').trim()
+  // Field order is fixed — Problème is always requested in the form.
+  const fieldsFr = [
+    '• Nom complet',
+    '• Problème',
+    '• Numéro de téléphone',
+    '• Ville',
+    '• Jour et heure souhaités',
+  ]
+  const fieldsAr = [
+    '• الاسم الكامل',
+    '• المشكل ديال الأسنان',
+    '• رقم الهاتف',
+    '• المدينة',
+    '• اليوم والساعة اللي كيناسبوك',
+  ]
+
   if (isDarija(language)) {
+    const intro = knownService
+      ? [
+        `يسعدني مساعدتك في حجز موعد ل${serviceArabicLabel(knownService)}.`,
+        '',
+        'من فضلك أرسل المعلومات التالية في رسالة واحدة:',
+      ]
+      : [
+        'مرحبا 👋',
+        '',
+        'من أجل حجز موعد، المرجو إرسال المعلومات التالية في رسالة واحدة:',
+      ]
+
     return [
-      'مرحبا 👋',
+      ...intro,
       '',
-      'من أجل حجز موعد، المرجو إرسال المعلومات التالية في رسالة واحدة:',
-      '',
-      '• الاسم الكامل',
-      '• رقم الهاتف',
-      '• المدينة',
-      '• المشكل ديال الأسنان',
-      '• اليوم والساعة اللي كيناسبوك',
+      ...fieldsAr,
       '',
       'أوقات العمل:',
       '',
       'الإثنين حتى الجمعة',
-      '10:30 ➜ 19:00',
+      '10:30 -> 19:00',
       '',
       'السبت',
-      '09:30 ➜ 13:00',
+      '09:30 -> 13:00',
     ].join('\n')
   }
 
+  const intro = knownService
+    ? [
+      `Avec plaisir, je vous aide à prendre rendez-vous pour : ${knownService}.`,
+      '',
+      'Merci d\'envoyer les informations suivantes dans un seul message :',
+    ]
+    : [
+      'Bonjour 👋',
+      '',
+      'Afin de préparer votre rendez-vous, merci de m\'envoyer les informations suivantes dans un seul message :',
+    ]
+
   return [
-    'Bonjour 👋',
+    ...intro,
     '',
-    'Afin de préparer votre rendez-vous, merci de m\'envoyer les informations suivantes dans un seul message :',
-    '',
-    '• Nom complet',
-    '• Numéro de téléphone',
-    '• Ville',
-    '• Problème dentaire',
-    '• Jour et heure souhaités',
+    ...fieldsFr,
     '',
     'Nos horaires :',
     '',
@@ -52,69 +94,110 @@ function bookingFormMessage(language = 'fr') {
   ].join('\n')
 }
 
+/**
+ * Reminder when the patient reply was incomplete — always ask again for ONE full message.
+ * (We never collect fields one-by-one.)
+ */
+function incompleteBulkReminder(language = 'fr', missing = []) {
+  const labelsFr = {
+    full_name: 'nom complet',
+    phone_number: 'numéro de téléphone',
+    city: 'ville',
+    problem: 'problème dentaire',
+    appointment: 'jour et heure',
+  }
+  const labelsAr = {
+    full_name: 'الاسم الكامل',
+    phone_number: 'رقم الهاتف',
+    city: 'المدينة',
+    problem: 'المشكل ديال الأسنان',
+    appointment: 'اليوم والساعة',
+  }
+  if (isDarija(language)) {
+    const list = (missing || []).map((f) => labelsAr[f] || f).filter(Boolean)
+    return [
+      'شكراً.',
+      '',
+      'خاصني كامل المعلومات فـ رسالة واحدة (ماشي رسالة برسالة، وماشي بصوت).',
+      list.length ? `ناقص دابا : ${list.join('، ')}.` : null,
+      '',
+    ].filter((line) => line !== null).join('\n')
+  }
+  const list = (missing || []).map((f) => labelsFr[f] || f).filter(Boolean)
+  return [
+    'Merci.',
+    '',
+    'J\'ai besoin de toutes les informations dans un seul message texte (pas message par message, pas en vocal).',
+    list.length ? `Il manque encore : ${list.join(', ')}.` : null,
+    '',
+  ].filter((line) => line !== null).join('\n')
+}
+
+/**
+ * Short reminder when the patient is already in booking mode but sends a voice note.
+ * Do NOT dump the full form again for every vocal.
+ */
+function voiceUseTextReminder(language = 'fr') {
+  if (isDarija(language)) {
+    return 'شكراً على الرسالة الصوتية. باش نحجز الموعد، عافاك صيفط المعلومات كاملة فـ رسالة نصية وحدة (ماشي بصوت).'
+  }
+  return 'Merci pour votre message vocal. Pour réserver le rendez-vous, merci d\'envoyer toutes les informations dans un seul message texte (pas en vocal).'
+}
+
+/** @deprecated kept for compatibility — always prefer incompleteBulkReminder + full form */
 function askMissingField(field, language = 'fr') {
-  const darija = isDarija(language)
-  const mapFr = {
-    full_name: 'Merci.\n\nIl me manque uniquement votre nom complet (prénom et nom).',
-    phone_number: 'Merci.\n\nIl me manque uniquement votre numéro de téléphone.\nExemple : 06XXXXXXXX ou +2126XXXXXXXX',
-    city: 'Merci.\n\nIl me manque uniquement votre ville.',
-    problem: 'Merci.\n\nIl me manque uniquement votre problème dentaire.',
-    appointment: 'Merci.\n\nIl me manque uniquement le jour et l\'heure souhaités.\nExemple : 29/07 à 11h00',
-  }
-  const mapDarija = {
-    full_name: 'شكراً.\n\nخاصني غير الاسم الكامل (الاسم الشخصي والعائلي).',
-    phone_number: 'شكراً.\n\nخاصني غير رقم الهاتف.\nمثال : 06XXXXXXXX أو +2126XXXXXXXX',
-    city: 'شكراً.\n\nخاصني غير المدينة.',
-    problem: 'شكراً.\n\nخاصني غير المشكل ديال الأسنان.',
-    appointment: 'شكراً.\n\nخاصني غير اليوم والساعة.\nمثال : 29/07 مع 11:00',
-  }
-  return (darija ? mapDarija : mapFr)[field] || mapFr.full_name
+  return incompleteBulkReminder(language, field ? [field] : [])
 }
 
 function askConfirmation(lead, language = 'fr') {
   const phone = formatPhoneDisplay(lead.phone_number) || lead.phone_number || '—'
+  const date = formatDateDisplay(lead.appointment_date)
+  const time = lead.appointment_time || '—'
+  const reason = lead.problem || '—'
+  const clientMsg = lead.problem_details || lead.problem || '—'
+
   if (isDarija(language)) {
     return [
-      '📋 ملخص طلب الموعد ديالك :',
+      '📋 *ملخص طلبكم:*',
       '',
-      `الاسم : ${lead.full_name || '—'}`,
-      `الهاتف : ${phone}`,
-      `المدينة : ${lead.city || '—'}`,
-      `المشكل (AI) : ${lead.problem || '—'}`,
-      `رسالة الزبون : ${lead.problem_details || lead.problem || '—'}`,
-      `التاريخ : ${lead.appointment_date || '—'}`,
-      `الساعة : ${lead.appointment_time || '—'}`,
+      `الاسم: ${lead.full_name || '—'}`,
+      `الهاتف: ${phone}`,
+      `المدينة: ${lead.city || '—'}`,
+      `سبب الموعد: ${reason}`,
+      `رسالة الزبون: ${clientMsg}`,
+      `التاريخ: ${date}`,
+      `الساعة: ${time}`,
       '',
-      'باش نأكد الطلب، أرسل فقط :',
+      'للمصادقة، المرجو الرد فقط بـ:',
       '',
-      'نعم',
+      '*OUI*',
       '',
-      'من بعد غادي يتصل بيك المركز بالتليفون.',
+      'بعد ذلك، سيتصل بكم المركز لتأكيد الموعد نهائياً.',
     ].join('\n')
   }
 
   return [
-    '📋 Récapitulatif de votre demande :',
+    '📋 *Récapitulatif de votre demande :*',
     '',
-    `Nom : ${lead.full_name || '—'}`,
-    `Téléphone : ${phone}`,
-    `Ville : ${lead.city || '—'}`,
-    `Motif (IA) : ${lead.problem || '—'}`,
-    `Message client : ${lead.problem_details || lead.problem || '—'}`,
-    `Date : ${lead.appointment_date || '—'}`,
-    `Heure : ${lead.appointment_time || '—'}`,
+    `Nom: ${lead.full_name || '—'}`,
+    `Téléphone: ${phone}`,
+    `Ville: ${lead.city || '—'}`,
+    `Motif: ${reason}`,
+    `Message client: ${clientMsg}`,
+    `Date: ${date}`,
+    `Heure: ${time}`,
     '',
-    'Pour valider, répondez uniquement par :',
+    'Pour valider, merci de répondre uniquement par :',
     '',
-    'OUI',
+    '*OUI*',
     '',
-    'Le centre vous appellera ensuite pour confirmer définitivement.',
+    'Ensuite, le centre vous appellera pour confirmer définitivement le rendez-vous.',
   ].join('\n')
 }
 
 function patientConfirmationMessage(lead, language = 'fr') {
   const name = lead.full_name || 'Patient'
-  const date = lead.appointment_date
+  const date = formatDateDisplay(lead.appointment_date)
   const time = lead.appointment_time
   if (isDarija(language)) {
     return [
@@ -163,8 +246,11 @@ function staffNotificationText(booking) {
 module.exports = {
   bookingFormMessage,
   askMissingField,
+  incompleteBulkReminder,
+  voiceUseTextReminder,
   askConfirmation,
   patientConfirmationMessage,
   staffNotificationText,
   isDarija,
+  formatDateDisplay,
 }

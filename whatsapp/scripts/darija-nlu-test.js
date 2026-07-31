@@ -176,6 +176,32 @@ async function run() {
   assert.strictEqual(detectIntent('bghit nji').intent, 'prise_rendez_vous')
   assert.strictEqual(detectLanguage('الله يشافيكم').startsWith('d') || detectLanguage('الله يشافيكم') === 'darija', true)
 
+  // Absolute language adaptation rule
+  const { toReplyLanguageHint } = require('../src/voice-nlu/language')
+  const langCases = [
+    ['Bonjour, je voudrais prendre un rendez-vous.', 'fr'],
+    ['Quels sont vos services ?', 'fr'],
+    ['Bghit rendez-vous.', 'darija'],
+    ['Bghit un rendez-vous.', 'darija'],
+    ['3andi wje3 f dersi.', 'darija'],
+    ['3andi douleur.', 'darija'],
+    ['Chno homa les services li kaynin ?', 'darija'],
+    ['Kanbghi nettoyage.', 'darija'],
+    ['Chno taman dyal implant ?', 'darija'],
+    ['بغيت موعد.', 'darija'],
+    ['Bghit ndir blanchiment.', 'darija'],
+    ['3andi urgence.', 'darija'],
+  ]
+  for (const [sample, expected] of langCases) {
+    const detected = detectLanguage(sample)
+    const reply = toReplyLanguageHint(detected)
+    assert.strictEqual(
+      reply,
+      expected,
+      `language rule failed for "${sample}": detected=${detected} reply=${reply} expected=${expected}`,
+    )
+  }
+
   const fuzzyBlanchiment = detectService('tabyit')
   assert.ok(fuzzyBlanchiment)
   assert.strictEqual(fuzzyBlanchiment.service, 'Blanchiment des dents')

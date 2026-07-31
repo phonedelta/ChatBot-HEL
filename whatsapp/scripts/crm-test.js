@@ -67,8 +67,8 @@ function run() {
     languageHint: 'fr',
   })
   assert.strictEqual(turn.shouldSkipLlm, true)
-  assert.match(turn.forceReply, /Nom complet/i)
-  assert.match(turn.forceReply, /un seul message/i)
+  assert.match(turn.forceReply || turn.templateReply || '', /Nom complet/i)
+  assert.match(turn.forceReply || '', /un seul message/i)
   assert.strictEqual(turn.lead.stage, 'awaiting_form')
 
   turn = crm.processCrmTurn({
@@ -84,7 +84,7 @@ function run() {
     languageHint: 'fr',
   })
   assert.strictEqual(turn.lead.stage, 'confirmation')
-  assert.match(turn.forceReply, /OUI/)
+  assert.match(turn.forceReply, /\*OUI\*/)
   assert.match(turn.forceReply, /Amine Benali/)
   assert.strictEqual(turn.lead.problem, 'Urgences dentaires')
   assert.strictEqual(turn.lead.problem_details, 'Douleur à la molaire droite')
@@ -100,6 +100,37 @@ function run() {
   assert.strictEqual(turn.booking.appointment.status, 'non_confirme')
   assert.match(turn.forceReply, /confirmé/i)
   assert.strictEqual(crm.repo.getCrmStats().appointments, 1)
+  // After confirmation, CRM lead must be wiped for a fresh booking
+  assert.strictEqual(turn.lead.stage, 'discovery')
+  assert.strictEqual(turn.lead.full_name, null)
+  assert.strictEqual(turn.lead.phone_number, null)
+  assert.strictEqual(turn.lead.city, null)
+  assert.strictEqual(turn.lead.problem, null)
+  assert.strictEqual(turn.lead.appointment_date, null)
+  assert.strictEqual(turn.lead.appointment_time, null)
+
+  // Direct service request → BOOK_APPOINTMENT, skip "quel problème ?"
+  const conversationService = 'main:212644444444@c.us'
+  turn = crm.processCrmTurn({
+    conversationId: conversationService,
+    chatId: '212644444444@c.us',
+    userText: 'Bghit n7yed derssa',
+    languageHint: 'darija',
+  })
+  assert.strictEqual(turn.lead.stage, 'awaiting_form')
+  assert.strictEqual(turn.lead.problem, 'Extraction dentaire')
+  assert.match(turn.forceReply, /خلع السن/)
+  assert.match(turn.forceReply, /الاسم الكامل/)
+  assert.match(turn.forceReply, /المشكل ديال الأسنان/)
+  assert.match(turn.forceReply, /رقم الهاتف/)
+  assert.match(turn.forceReply, /المدينة/)
+  assert.match(turn.forceReply, /اليوم والساعة/)
+  // Order: name → problem → phone → city → datetime
+  const form = turn.forceReply
+  assert.ok(form.indexOf('الاسم الكامل') < form.indexOf('المشكل ديال الأسنان'))
+  assert.ok(form.indexOf('المشكل ديال الأسنان') < form.indexOf('رقم الهاتف'))
+  assert.ok(form.indexOf('رقم الهاتف') < form.indexOf('المدينة'))
+  assert.ok(form.indexOf('المدينة') < form.indexOf('اليوم والساعة'))
 
   // Arabic نعم must confirm (JS \\b does not work after Arabic letters)
   const conversationIdAr = 'main:212633333333@c.us'
@@ -122,7 +153,7 @@ function run() {
     languageHint: 'darija',
   })
   assert.strictEqual(turn.lead.stage, 'confirmation')
-  assert.match(turn.forceReply, /ملخص|نعم/)
+  assert.match(turn.forceReply, /ملخص طلبكم|\*OUI\*/)
   assert.ok(!/تم تسجيل طلب الموعد\./.test(turn.forceReply.split('\n')[0]))
   const problemBefore = turn.lead.problem
   const detailsBefore = turn.lead.problem_details
@@ -133,7 +164,8 @@ function run() {
     languageHint: 'darija',
   })
   assert.ok(turn.booking, 'نعم should save the appointment')
-  assert.strictEqual(turn.lead.stage, 'completed')
+  assert.strictEqual(turn.lead.stage, 'discovery')
+  assert.strictEqual(turn.lead.full_name, null)
   assert.strictEqual(turn.booking.dentalCase.problem, problemBefore)
   assert.strictEqual(turn.booking.dentalCase.description, detailsBefore)
   assert.notStrictEqual(detailsBefore, 'نعم')
@@ -172,7 +204,12 @@ function run() {
     ].join('\n'),
     languageHint: 'fr',
   })
+  // Incomplete reply → full form again (never one field at a time)
+  assert.match(turn.forceReply, /un seul message/i)
+  assert.match(turn.forceReply, /Nom complet/i)
   assert.match(turn.forceReply, /numéro de téléphone/i)
+  assert.strictEqual(turn.lead.stage, 'awaiting_form')
+  assert.strictEqual(turn.lead.awaiting_field, 'bulk')
 
   try {
     fs.rmSync(tmpDb, { force: true })

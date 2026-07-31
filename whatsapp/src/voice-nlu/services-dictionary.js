@@ -20,17 +20,17 @@ const SERVICES = [
   {
     id: 'orthodontie',
     service: 'Orthodontie',
-    intent: 'appareil_dentaire',
-    crmProblem: 'appareil dentaire',
+    intent: 'BOOK_APPOINTMENT',
+    crmProblem: 'Orthodontie',
     urgency: 'basse',
     keywords: [
       'orthodontie', 'orthodontiste', 'orthodontique', 'ortodonti', 'ortodontie', 'orthodonti',
-      'appareil dentaire', 'appareil', 'apareil', 'appareils',
-      'bagues', 'bague', 'bagat', 'brackets', 'bracket', 'brisat', 'bra',
+      'appareil dentaire', 'appareil', 'apareil', 'appareils', 'bghit appareil', 'bghit ta9wim',
+      'bagues', 'bague', 'bagat', 'brackets', 'bracket', 'brisat',
       'aligneur', 'aligneurs', 'gouttiere', 'gouttière', 'alignement',
       'redresser les dents', 'redresser dents',
-      'تقويم الأسنان', 'تقويم', 'بريسات', 'أباري',
-      'ta9wim', 'ta9ouim', 't9wim', 'taqwim', 'brisat',
+      'تقويم الأسنان', 'تقويم', 'بريسات', 'أباري', 'بغيت تقويم', 'بغيت اباراي',
+      'ta9wim', 'ta9ouim', 't9wim', 'taqwim',
       'dent m3awja', 'snan m3awjin', 'snan m3wjin', 'snan meaouja',
     ],
   },
@@ -38,7 +38,7 @@ const SERVICES = [
     id: 'caries',
     service: 'Soins dentaires et traitement des caries',
     intent: 'traitement',
-    crmProblem: 'carie',
+    crmProblem: 'Soins dentaires et traitement des caries',
     urgency: 'moyenne',
     keywords: [
       'carie', 'caries', 'traitement carie', 'soin dentaire', 'soins dentaires',
@@ -52,14 +52,15 @@ const SERVICES = [
   {
     id: 'detartrage',
     service: 'Détartrage',
-    intent: 'traitement',
-    crmProblem: 'détartrage',
+    intent: 'BOOK_APPOINTMENT',
+    crmProblem: 'Détartrage',
     urgency: 'basse',
     keywords: [
-      'detartrage', 'détartrage', 'ditartraj', 'ditartrage', 'tartre', 'nettoyage', 'nettoyage des dents',
+      'detartrage', 'détartrage', 'ditartraj', 'ditartrage', 'tartre',
+      'nettoyage', 'nettoyage des dents', 'bghit nettoyage', 'bghit nettoyage des dents',
       'nettoyer les dents', 'polissage', 'depot', 'dépôt',
-      'جير الأسنان', 'تنظيف الأسنان', 'تنظيف',
-      'tn9iya', 'tn9iyat snan', 'tnqiya', 'tandif',
+      'جير الأسنان', 'تنظيف الأسنان', 'تنظيف', 'بغيت تنظيف',
+      'tn9iya', 'tn9iyat snan', 'tnqiya', 'tandif', 'bghit tn9iya',
       'jir', 'jir snan', 'jir dial snan', 'kan bghi nettoyage',
     ],
   },
@@ -107,26 +108,28 @@ const SERVICES = [
   {
     id: 'blanchiment',
     service: 'Blanchiment des dents',
-    intent: 'blanchiment',
-    crmProblem: 'blanchiment',
+    intent: 'BOOK_APPOINTMENT',
+    crmProblem: 'Blanchiment des dents',
     urgency: 'basse',
     keywords: [
       'blanchiment', 'blanchiment dentaire', 'blanchir', 'blanshmon', 'blanchmon', 'blanciment',
+      'bghit blanchiment', 'bghit tabyid', 'bghit tabyid snani', 'bghit tabyit snani',
       'white', 'whitening', 'eclaircissement', 'éclaircissement',
-      'تبييض الأسنان', 'تبييض',
-      'tabyid', 'tabyit', 'tbyid', 'tbiyid', 'tabyid snan',
+      'تبييض الأسنان', 'تبييض', 'بغيت تبييض',
+      'tabyid', 'tabyit', 'tbyid', 'tbiyid', 'tabyid snan', 'tabyid snani', 'tabyit snani',
       'byad snan', 'snani saffrin', 'bghit nbyed snani', 'nbyed snani',
     ],
   },
   {
     id: 'implants',
     service: 'Implants dentaires',
-    intent: 'implant',
-    crmProblem: 'implant',
+    intent: 'BOOK_APPOINTMENT',
+    crmProblem: 'Implants dentaires',
     urgency: 'basse',
     keywords: [
       'implant', 'implants', 'implants dentaires', 'implant dentaire',
-      'emplant', 'inplant', 'امبلونت', 'امبلانت', 'انبلونت', 'زرع', 'زراعة',
+      'bghit implant', 'بغيت زرع', 'بغيت امبلونت',
+      'emplant', 'inplant', 'امبلونت', 'امبلانت', 'انبلونت', 'زرع', 'زراعة', 'زراعة الأسنان',
     ],
   },
   {
@@ -144,13 +147,23 @@ const SERVICES = [
   {
     id: 'extraction',
     service: 'Extraction dentaire',
-    intent: 'extraction',
-    crmProblem: 'extraction',
+    intent: 'BOOK_APPOINTMENT',
+    crmProblem: 'Extraction dentaire',
     urgency: 'moyenne',
     keywords: [
-      'extraction', 'extraction dentaire', 'arracher', 'enlever dent',
-      'n9ala3', 'nqala3', 'n9la3', 'qala3', 'قلع', 'نقلع',
-      'n7ayed', 'nhayed',
+      // FR
+      'extraction', 'extraction dentaire', 'arracher', 'enlever dent', 'enlever une dent',
+      // Darija Latin — full phrases first
+      'n7yed derssa', 'n7yed ders', 'n7yed sn', 'n7yed snan', 'n7yed senn',
+      'nhayed derssa', 'nhayed ders', 'nhayed sn',
+      'n9ala3 ders', 'n9ala3 derssa', 'n9ala3 sn', 'n9ala3 snan', 'nqala3 ders', 'nqala3 sn',
+      'bghit n7yed derssa', 'bghit n7yed ders', 'bghit n7yed sn',
+      'bghit n9ala3 ders', 'bghit n9ala3 sn', 'bghit extraction', 'bghit n9ala3',
+      'n9ala3', 'nqala3', 'n9la3', 'qala3', 'khla3', 'n7yed', 'n7ayed', 'nhayed',
+      // Arabic
+      'خلع', 'قلع', 'نقلع', 'نحيد', 'بغيت نحيد ضرس', 'بغيت نقلع ضرس',
+      'بغيت نحيض ضرس', 'ضرس خاصني نحيدو', 'سن خاصني نحيدو',
+      'خاصني نحيد ضرس', 'خاصني نقلع ضرس', 'خلع السن', 'قلع الضرس',
     ],
   },
   {
@@ -167,9 +180,9 @@ const SERVICES = [
   },
   {
     id: 'urgence',
-    service: 'Urgence dentaire',
+    service: 'Urgences dentaires',
     intent: 'urgence',
-    crmProblem: 'urgence',
+    crmProblem: 'Urgences dentaires',
     urgency: 'haute',
     keywords: [
       'urgence', 'urgence dentaire', 'urgent', 'douleur', 'abces', 'abcès',
@@ -328,9 +341,10 @@ function buildServiceIndex(entry) {
     } else {
       tokens.push(normalized)
     }
-    // Also index individual words of multi-word keywords when useful (>= 4 chars)
+    // Index individual words only when long enough to avoid collisions
+    // (e.g. "ders" from caries phrases stealing extraction requests).
     for (const part of normalized.split(' ')) {
-      if (part.length >= 4) tokens.push(part)
+      if (part.length >= 6) tokens.push(part)
     }
   }
 
@@ -430,16 +444,17 @@ function scoreService(prepared, entry) {
     }
   }
 
+  // Fuzzy only for longer tokens; never fuzzy-match short verbs like n7yed↔nbyed
   for (const token of tokens) {
-    if (token.length < 4) continue
+    if (token.length < 6) continue
     for (const keyword of entry.tokens) {
-      if (keyword.length < 4) continue
+      if (keyword.length < 6) continue
       const dist = levenshtein(token, keyword)
       const allowed = Math.min(maxDistanceForLength(token.length), maxDistanceForLength(keyword.length))
       if (dist > allowed) continue
       const sim = similarity(token, keyword)
-      if (sim < 0.72) continue
-      const confidence = Math.max(0.75, Math.min(0.93, sim - 0.02))
+      if (sim < 0.84) continue
+      const confidence = Math.max(0.8, Math.min(0.9, sim - 0.02))
       const candidate = {
         service: entry.service,
         serviceId: entry.id,

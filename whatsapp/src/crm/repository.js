@@ -18,20 +18,24 @@ function createCrmRepository(db) {
 
   function upsertLead(conversationId, patch = {}) {
     const existing = getLead(conversationId)
+    // undefined = keep existing; null = explicit clear
+    const pick = (key, fallback = null) => (
+      Object.prototype.hasOwnProperty.call(patch, key) ? patch[key] : (existing?.[key] ?? fallback)
+    )
     const merged = {
       conversation_id: conversationId,
-      whatsapp_chat_id: patch.whatsapp_chat_id ?? existing?.whatsapp_chat_id ?? null,
-      phone_number: patch.phone_number ?? existing?.phone_number ?? null,
-      full_name: patch.full_name ?? existing?.full_name ?? null,
-      city: patch.city ?? existing?.city ?? null,
-      problem: patch.problem ?? existing?.problem ?? null,
-      problem_details: patch.problem_details ?? existing?.problem_details ?? null,
-      urgency: patch.urgency ?? existing?.urgency ?? 'moyenne',
-      appointment_date: patch.appointment_date ?? existing?.appointment_date ?? null,
-      appointment_time: patch.appointment_time ?? existing?.appointment_time ?? null,
-      stage: patch.stage ?? existing?.stage ?? 'discovery',
-      awaiting_field: patch.awaiting_field !== undefined ? patch.awaiting_field : (existing?.awaiting_field ?? null),
-      language: patch.language ?? existing?.language ?? 'fr',
+      whatsapp_chat_id: pick('whatsapp_chat_id', null),
+      phone_number: pick('phone_number', null),
+      full_name: pick('full_name', null),
+      city: pick('city', null),
+      problem: pick('problem', null),
+      problem_details: pick('problem_details', null),
+      urgency: pick('urgency', 'moyenne') || 'moyenne',
+      appointment_date: pick('appointment_date', null),
+      appointment_time: pick('appointment_time', null),
+      stage: pick('stage', 'discovery') || 'discovery',
+      awaiting_field: pick('awaiting_field', null),
+      language: pick('language', 'fr') || 'fr',
       booking_intent: patch.booking_intent !== undefined
         ? (patch.booking_intent ? 1 : 0)
         : (existing?.booking_intent || 0),

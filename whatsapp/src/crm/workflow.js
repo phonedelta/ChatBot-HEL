@@ -12,10 +12,16 @@ const { checkCustomerData } = require('./checkCustomerData')
 const { extractCustomerSignals, validateFullName, resolveMotifPair } = require('./extract')
 const {
   bookingFormMessage,
-  askMissingField,
+  incompleteBulkReminder,
+  voiceUseTextReminder,
   askConfirmation,
   patientConfirmationMessage,
 } = require('./messages')
+const {
+  detectServiceBookingIntent,
+  hasExplicitBookingIntent,
+} = require('../voice-nlu/intent-table')
+const { isOfficialService } = require('./services')
 
 /**
  * @param {ReturnType<import('./repository').createCrmRepository>} repo
@@ -84,14 +90,37 @@ function createCrmWorkflow(repo) {
       `- Missing: ${(check?.missing || []).join(', ') || 'none'}`,
       '',
       'CRM RULES:',
-      '- Booking is handled by the CRM workflow with forced template messages.',
+      '- Booking uses ONE fixed form message asking for ALL fields together.',
       '- Do NOT ask CRM fields one by one in LLM replies when booking is active.',
       '- For Darija (Arabic script OR Latin keyboard like bghit/3andi/7ri9), ALWAYS reply in Arabic script, never Latin Darija.',
       '- Outside booking, keep answers short and professional.',
     ].join('\n')
   }
 
+  function resetLeadForNewBooking(conversationId, lead, language, chatId = null) {
+    return repo.upsertLead(conversationId, {
+      stage: 'discovery',
+      awaiting_field: null,
+      booking_intent: 0,
+      full_name: null,
+      phone_number: null,
+      city: null,
+      problem: null,
+      problem_details: null,
+      urgency: 'moyenne',
+      appointment_date: null,
+      appointment_time: null,
+      language: language || lead?.language || 'fr',
+      whatsapp_chat_id: chatId || lead?.whatsapp_chat_id || null,
+    })
+  }
+
   function startForm(conversationId, lead, language, chatId, signals) {
+    const knownService = isOfficialService(signals.problem || lead.problem || '')
+      ? (signals.problem || lead.problem)
+      : null
+    const skipProblem = Boolean(signals.skipProblemQuestion && knownService)
+
     const updated = repo.upsertLead(conversationId, {
       stage: 'awaiting_form',
       awaiting_field: 'bulk',
@@ -102,7 +131,7 @@ function createCrmWorkflow(repo) {
       full_name: lead.full_name || signals.full_name || null,
       phone_number: lead.phone_number || signals.phone_number || null,
       city: lead.city || signals.city || null,
-      problem: lead.problem || signals.problem || null,
+      problem: knownService || lead.problem || signals.problem || null,
       problem_details: lead.problem_details || signals.problem_details || null,
       urgency: lead.urgency || signals.urgency || 'moyenne',
       appointment_date: lead.appointment_date || signals.appointment_date || null,
@@ -119,18 +148,37 @@ function createCrmWorkflow(repo) {
       return finalizeTurn(ready, askConfirmation(ready, language), true, null, signals)
     }
 
-    return finalizeTurn(updated, bookingFormMessage(language), true, null, signals)
+    return finalizeTurn(
+      updated,
+      bookingFormMessage(language, { knownService, skipProblem }),
+      true,
+      null,
+      signals,
+    )
+  }
+
+  function resendFullForm(conversationId, lead, language, signals, missing = []) {
+    const knownService = isOfficialService(lead.problem || signals?.problem || '')
+      ? (lead.problem || signals.problem)
+      : null
+    const skipProblem = Boolean(knownService)
+    const updated = repo.upsertLead(conversationId, {
+      stage: 'awaiting_form',
+      awaiting_field: 'bulk',
+      booking_intent: 1,
+    })
+    const body = [
+      incompleteBulkReminder(language, missing),
+      bookingFormMessage(language, { knownService, skipProblem }),
+    ].join('\n')
+    return finalizeTurn(updated, body, true, null, signals)
   }
 
   function processAfterData(conversationId, lead, language, signals) {
     const check = checkCustomerData(lead)
     if (!check.ok) {
-      const next = check.nextField
-      const updated = repo.upsertLead(conversationId, {
-        stage: 'crm_collection',
-        awaiting_field: next,
-      })
-      return finalizeTurn(updated, askMissingField(next, language), true, null, signals)
+      // Never ask field-by-field — always re-send the full one-message form.
+      return resendFullForm(conversationId, lead, language, signals, check.missing)
     }
 
     const ready = repo.upsertLead(conversationId, {
@@ -144,6 +192,7 @@ function createCrmWorkflow(repo) {
     const conversationId = String(input.conversationId || '').trim()
     const userText = String(input.userText || '').trim()
     const language = input.languageHint || 'fr'
+    const isVoice = Boolean(input.isVoice)
     if (!conversationId || !userText) {
       return {
         lead: null,
@@ -162,42 +211,109 @@ function createCrmWorkflow(repo) {
       stage: 'discovery',
     })
 
+    // Migrate legacy one-by-one collection to bulk form mode
+    if (lead.stage === 'crm_collection') {
+      lead = repo.upsertLead(conversationId, {
+        stage: 'awaiting_form',
+        awaiting_field: 'bulk',
+      })
+    }
+
     const signals = extractCustomerSignals(userText, {
       voiceIntent: input.voiceIntent || null,
     })
     signals.rawText = userText
 
-    // Voice service dictionary → CRM motif (extensible NLU services)
-    const voiceService = input.voiceService || null
-    if (
-      voiceService?.crmProblem
-      && Number(voiceService.confidence || 0) >= 0.72
-      && !signals.problem
-    ) {
-      signals.problem = voiceService.crmProblem
+    // Prefer Intent Router result when provided by the main pipeline
+    const router = input.router || null
+    if (router?.bookAppointment && router.skipProblemQuestion && router.service) {
+      signals.booking_intent = true
+      signals.problem = router.service
       signals.problem_details = signals.problem_details || userText
-      signals.urgency = voiceService.urgency || signals.urgency || 'moyenne'
-      signals.category = voiceService.service || voiceService.crmProblem
+      signals.urgency = signals.urgency || 'moyenne'
+      signals.category = router.service
+      signals.skipProblemQuestion = true
+      signals.service_booking = router
     }
 
-    // Completed booking: only restart on a new booking intent
+    // Direct service booking intent table (text only) — fallback if no router
+    const serviceBooking = !isVoice ? detectServiceBookingIntent(userText) : {
+      intent: null,
+      skipProblemQuestion: false,
+      service: null,
+    }
+    if (
+      !signals.skipProblemQuestion
+      && serviceBooking.intent === 'BOOK_APPOINTMENT'
+      && serviceBooking.skipProblemQuestion
+    ) {
+      signals.booking_intent = true
+      signals.problem = serviceBooking.service
+      signals.problem_details = signals.problem_details || userText
+      signals.urgency = serviceBooking.urgency || signals.urgency || 'moyenne'
+      signals.category = serviceBooking.service
+      signals.skipProblemQuestion = true
+      signals.service_booking = serviceBooking
+    }
+
+    // Voice may hint a known service for conversation context — never auto-open the form
+    const voiceService = input.voiceService || null
+    if (
+      isVoice
+      && voiceService?.service
+      && Number(voiceService.confidence || 0) >= 0.8
+    ) {
+      const official = isOfficialService(voiceService.service)
+        ? voiceService.service
+        : (isOfficialService(voiceService.crmProblem) ? voiceService.crmProblem : null)
+      if (official) {
+        signals.problem = official
+        signals.category = official
+        // Do NOT set booking_intent from service detection alone
+      }
+    } else if (
+      !isVoice
+      && voiceService?.service
+      && Number(voiceService.confidence || 0) >= 0.8
+      && !signals.problem
+    ) {
+      const official = isOfficialService(voiceService.service)
+        ? voiceService.service
+        : (isOfficialService(voiceService.crmProblem) ? voiceService.crmProblem : null)
+      if (official) {
+        signals.problem = official
+        signals.problem_details = signals.problem_details || userText
+        signals.urgency = voiceService.urgency || signals.urgency || 'moyenne'
+        signals.category = official
+        if (hasExplicitBookingIntent(userText) || router?.bookAppointment) {
+          signals.booking_intent = true
+          signals.skipProblemQuestion = true
+        }
+      }
+    }
+
+    // Voice notes never provide CRM form fields
+    if (isVoice) {
+      signals.full_name = null
+      signals.phone_number = null
+      signals.city = null
+      signals.appointment_date = null
+      signals.appointment_time = null
+      // Only open booking on EXPLICIT appointment request in the transcript
+      const explicitVoiceBooking = Boolean(
+        hasExplicitBookingIntent(userText)
+        || router?.bookAppointment,
+      )
+      signals.booking_intent = explicitVoiceBooking
+      if (!explicitVoiceBooking) {
+        signals.skipProblemQuestion = false
+      }
+    }
+
+    // Legacy "completed" leads: wipe booking fields so a new RDV starts clean
     if (lead.stage === 'completed') {
       if (signals.booking_intent) {
-        lead = repo.upsertLead(conversationId, {
-          stage: 'discovery',
-          awaiting_field: null,
-          booking_intent: 0,
-          appointment_date: null,
-          appointment_time: null,
-          problem: null,
-          problem_details: null,
-          urgency: 'moyenne',
-          // keep identity fields for convenience
-          full_name: lead.full_name,
-          phone_number: null,
-          city: lead.city,
-          language,
-        })
+        lead = resetLeadForNewBooking(conversationId, lead, language, input.chatId)
       } else {
         return {
           lead,
@@ -212,8 +328,58 @@ function createCrmWorkflow(repo) {
     }
 
     const lang = replyLanguage(lead, language)
-    const isConfirmReply = lead.stage === 'confirmation'
+    const isConfirmReply = !isVoice
+      && lead.stage === 'confirmation'
       && (signals.confirmation_yes || signals.confirmation_no)
+
+    // Voice: converse about the problem via LLM. Form only on explicit RDV request.
+    if (isVoice) {
+      if (language || input.chatId) {
+        lead = repo.upsertLead(conversationId, {
+          ...(language ? { language } : {}),
+          ...(input.chatId ? { whatsapp_chat_id: input.chatId } : {}),
+          ...(signals.problem && signals.booking_intent ? {
+            problem: signals.problem,
+            booking_intent: 1,
+          } : {}),
+        })
+      }
+      repo.logConversation({
+        conversation_id: conversationId,
+        whatsapp_chat_id: input.chatId || null,
+        direction: 'inbound',
+        message_text: `[vocal] ${userText}`,
+        extracted: { ...signals, voice_ignored_for_crm_fields: true, stage: lead.stage },
+        appointment_status: lead.stage,
+      })
+
+      // Explicit "je veux un RDV" / "bghit mo3id" in the vocal → send the one-message form
+      if (signals.booking_intent) {
+        return startForm(conversationId, lead, lang, input.chatId, signals)
+      }
+
+      // Already collecting a form, but vocal has no clear booking ask → short reminder only
+      if (lead.stage === 'awaiting_form' || lead.stage === 'confirmation') {
+        return finalizeTurn(lead, voiceUseTextReminder(lang), true, null, signals)
+      }
+
+      // Normal vocal → AI conversation (understand the dental problem)
+      return {
+        lead,
+        forceReply: null,
+        shouldSkipLlm: false,
+        llmContext: [
+          'VOICE NOTE RULE:',
+          '- Answer the patient from the transcript: understand their dental problem and discuss it.',
+          '- Never collect appointment fields from voice.',
+          '- Do NOT send the booking form unless they clearly ask for a rendez-vous.',
+          '- You may briefly invite them to book later in ONE text message if relevant.',
+        ].join('\n'),
+        booking: null,
+        extracted: signals,
+        check: checkCustomerData(lead),
+      }
+    }
 
     // Do not merge field signals on OUI/نعم — otherwise short confirmations
     // (e.g. نعم) overwrite problem_details and never save the booking.
@@ -242,7 +408,7 @@ function createCrmWorkflow(repo) {
       appointment_status: lead.stage,
     })
 
-    // Confirmation stage
+    // Confirmation stage (text only)
     if (lead.stage === 'confirmation') {
       if (signals.confirmation_yes) {
         const check = checkCustomerData(lead)
@@ -251,6 +417,7 @@ function createCrmWorkflow(repo) {
         }
 
         const booking = repo.saveConfirmedBooking(lead)
+        const confirmationText = patientConfirmationMessage(lead, lang)
         repo.logConversation({
           conversation_id: conversationId,
           whatsapp_chat_id: input.chatId || null,
@@ -265,11 +432,9 @@ function createCrmWorkflow(repo) {
           appointment_status: 'non_confirme',
         })
 
-        lead = repo.upsertLead(conversationId, {
-          stage: 'completed',
-          awaiting_field: null,
-        })
-        return finalizeTurn(lead, patientConfirmationMessage(lead, lang), true, booking, signals)
+        // Auto-reset CRM lead so the patient can book again without old data
+        lead = resetLeadForNewBooking(conversationId, lead, lang, input.chatId)
+        return finalizeTurn(lead, confirmationText, true, booking, signals)
       }
 
       if (signals.confirmation_no) {
@@ -279,15 +444,21 @@ function createCrmWorkflow(repo) {
           appointment_date: null,
           appointment_time: null,
         })
-        return finalizeTurn(lead, bookingFormMessage(lang), true, null, signals)
+        const known = isOfficialService(lead.problem || '') ? lead.problem : null
+        return finalizeTurn(
+          lead,
+          bookingFormMessage(lang, { knownService: known, skipProblem: Boolean(known) }),
+          true,
+          null,
+          signals,
+        )
       }
 
       return finalizeTurn(lead, askConfirmation(lead, lang), true, null, signals)
     }
 
-    // Waiting for the bulk form answer or a single missing field
+    // Waiting for the ONE bulk form answer (never field-by-field)
     if (lead.stage === 'awaiting_form' || lead.stage === 'crm_collection') {
-      // Ignore a second booking intent that is just "bghit rdv" without data
       const checkBefore = checkCustomerData(lead)
       const providedSomething = Boolean(
         signals.full_name
@@ -295,22 +466,23 @@ function createCrmWorkflow(repo) {
         || signals.city
         || signals.problem
         || signals.appointment_date
-        || signals.appointment_time
-        || (lead.awaiting_field && lead.awaiting_field !== 'bulk' && String(userText).trim().length >= 2),
+        || signals.appointment_time,
       )
 
-      if (!providedSomething && signals.booking_intent && !checkBefore.ok) {
-        return finalizeTurn(lead, bookingFormMessage(lang), true, null, signals)
+      // "bghit rdv" alone while form is open → resend full form
+      if (!providedSomething && !checkBefore.ok) {
+        return resendFullForm(conversationId, lead, lang, signals, checkBefore.missing)
       }
 
       return processAfterData(conversationId, lead, lang, signals)
     }
 
-    // New booking request → send the single form message
+    // New booking request → send the single form message (explicit RDV only)
     const shouldStartBooking = Boolean(
       signals.booking_intent
       || lead.booking_intent
-      || ['prise_rendez_vous'].includes(String(input.voiceIntent || '')),
+      || router?.bookAppointment
+      || hasExplicitBookingIntent(userText),
     )
 
     if (shouldStartBooking) {
@@ -340,13 +512,43 @@ function createCrmWorkflow(repo) {
     }
   }
 
-  function finalizeTurn(lead, forceReply, shouldSkipLlm, booking, extracted) {
+  function finalizeTurn(lead, templateReply, sendExactTemplate = true, booking = null, extracted = null) {
     const check = checkCustomerData(lead || {})
+    const baseContext = lead ? buildLlmContext(lead, check) : ''
+    const draft = String(templateReply || '').trim()
+
+    // Booking form / summary / missing-field prompts must be sent EXACTLY
+    // so the patient always replies with one structured message.
+    if (sendExactTemplate && draft) {
+      return {
+        lead,
+        forceReply: draft,
+        templateReply: draft,
+        shouldSkipLlm: true,
+        llmContext: baseContext,
+        booking,
+        extracted,
+        check,
+      }
+    }
+
+    const aiBrief = draft
+      ? [
+        'CRM MESSAGE BRIEF (highest priority for THIS turn):',
+        'Write the WhatsApp reply with the AI in the required patient language.',
+        'You MUST include every fact from the draft below.',
+        '--- DRAFT START ---',
+        draft,
+        '--- DRAFT END ---',
+      ].join('\n')
+      : ''
+
     return {
       lead,
-      forceReply,
-      shouldSkipLlm,
-      llmContext: lead ? buildLlmContext(lead, check) : '',
+      forceReply: draft || null,
+      templateReply: draft || null,
+      shouldSkipLlm: false,
+      llmContext: [baseContext, aiBrief].filter(Boolean).join('\n\n'),
       booking,
       extracted,
       check,
