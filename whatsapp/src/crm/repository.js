@@ -3,6 +3,10 @@
  */
 
 const { toE164, formatPhoneDisplay } = require('./phone')
+const {
+  validateAppointmentHours,
+  outsideWorkingHoursError,
+} = require('./working-hours')
 
 /**
  * @param {import('node:sqlite').DatabaseSync} db
@@ -206,6 +210,10 @@ function createCrmRepository(db) {
     }
     if (!allowed.has(status)) {
       throw new Error('Statut invalide')
+    }
+    const hours = validateAppointmentHours(date, time)
+    if (!hours.ok) {
+      throw new Error(outsideWorkingHoursError(hours))
     }
 
     const customer = createOrUpdateCustomer({
@@ -502,6 +510,10 @@ function createCrmRepository(db) {
 
     if (!fullName || !phone || !date || !time) {
       throw new Error('Nom, téléphone, date et heure sont obligatoires')
+    }
+    const hours = validateAppointmentHours(date, time)
+    if (!hours.ok) {
+      throw new Error(outsideWorkingHoursError(hours))
     }
 
     db.prepare(`

@@ -19,6 +19,11 @@ const {
   patientConfirmationMessage,
   staffNotificationText,
 } = require('./messages')
+const {
+  validateAppointmentHours,
+  outsideWorkingHoursMessage,
+  WEEKLY_HOURS,
+} = require('./working-hours')
 
 /**
  * @param {{ dbPath?: string }} [options]
@@ -48,6 +53,9 @@ function createCrmService(options = {}) {
     askConfirmation,
     patientConfirmationMessage,
     staffNotificationText,
+    validateAppointmentHours,
+    outsideWorkingHoursMessage,
+    WEEKLY_HOURS,
     processCrmTurn: (...args) => workflow.processCrmTurn(...args),
     resetConversation: (...args) => workflow.resetConversation(...args),
   }
@@ -58,6 +66,9 @@ module.exports = {
   checkCustomerData,
   extractCustomerSignals,
   validateFullName,
+  validateAppointmentHours,
+  outsideWorkingHoursMessage,
+  WEEKLY_HOURS,
   toE164,
   formatPhoneDisplay,
   isValidPhone,

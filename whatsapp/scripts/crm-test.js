@@ -7,6 +7,7 @@ const {
   checkCustomerData,
   extractCustomerSignals,
   validateFullName,
+  validateAppointmentHours,
 } = require('../src/crm')
 const { extractBulkBookingFields } = require('../src/crm/extract')
 
@@ -210,6 +211,57 @@ function run() {
   assert.match(turn.forceReply, /numéro de téléphone/i)
   assert.strictEqual(turn.lead.stage, 'awaiting_form')
   assert.strictEqual(turn.lead.awaiting_field, 'bulk')
+
+  // Working hours unit checks
+  assert.strictEqual(validateAppointmentHours('2026-08-02', '11:00').ok, false) // Sunday
+  assert.strictEqual(validateAppointmentHours('2026-08-02', '11:00').reason, 'closed_day')
+  assert.strictEqual(validateAppointmentHours('2026-08-01', '13:00').ok, false) // Sat from 13:00
+  assert.strictEqual(validateAppointmentHours('2026-08-01', '14:30').ok, false)
+  assert.strictEqual(validateAppointmentHours('2026-08-01', '12:00').ok, true) // Sat morning OK
+  assert.strictEqual(validateAppointmentHours('2026-07-30', '15:30').ok, true) // Thu OK
+  assert.strictEqual(validateAppointmentHours('2026-07-30', '20:00').ok, false) // after 19:00
+  assert.strictEqual(validateAppointmentHours('2026-07-30', '10:00').ok, false) // before 10:30
+
+  // Bot refuses Sunday booking and asks again
+  const conversationHours = 'main:212655555555@c.us'
+  crm.processCrmTurn({
+    conversationId: conversationHours,
+    chatId: '212655555555@c.us',
+    userText: 'je veux un rendez-vous',
+    languageHint: 'fr',
+  })
+  turn = crm.processCrmTurn({
+    conversationId: conversationHours,
+    chatId: '212655555555@c.us',
+    userText: [
+      'Nom : Karim Benali',
+      'Téléphone : 0611112233',
+      'Ville : Rabat',
+      'Problème : contrôle',
+      'Rendez-vous : 02/08/2026 à 11:00',
+    ].join('\n'),
+    languageHint: 'fr',
+  })
+  assert.strictEqual(turn.lead.stage, 'awaiting_form')
+  assert.strictEqual(turn.lead.appointment_date, null)
+  assert.match(turn.forceReply, /fermé|dimanche/i)
+  assert.match(turn.forceReply, /Nom complet/i)
+
+  // Saturday afternoon blocked
+  turn = crm.processCrmTurn({
+    conversationId: conversationHours,
+    chatId: '212655555555@c.us',
+    userText: [
+      'Nom : Karim Benali',
+      'Téléphone : 0611112233',
+      'Ville : Rabat',
+      'Problème : contrôle',
+      'Rendez-vous : 01/08/2026 à 15:00',
+    ].join('\n'),
+    languageHint: 'fr',
+  })
+  assert.strictEqual(turn.lead.stage, 'awaiting_form')
+  assert.match(turn.forceReply, /samedi|13:00/i)
 
   try {
     fs.rmSync(tmpDb, { force: true })

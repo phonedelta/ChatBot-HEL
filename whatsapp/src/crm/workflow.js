@@ -22,6 +22,10 @@ const {
   hasExplicitBookingIntent,
 } = require('../voice-nlu/intent-table')
 const { isOfficialService } = require('./services')
+const {
+  validateAppointmentHours,
+  outsideWorkingHoursMessage,
+} = require('./working-hours')
 
 /**
  * @param {ReturnType<import('./repository').createCrmRepository>} repo
@@ -141,11 +145,7 @@ function createCrmWorkflow(repo) {
     // If the first message already contains everything, skip the form.
     const check = checkCustomerData(updated)
     if (check.ok) {
-      const ready = repo.upsertLead(conversationId, {
-        stage: 'confirmation',
-        awaiting_field: 'confirmation',
-      })
-      return finalizeTurn(ready, askConfirmation(ready, language), true, null, signals)
+      return processAfterData(conversationId, updated, language, signals)
     }
 
     return finalizeTurn(
@@ -174,11 +174,41 @@ function createCrmWorkflow(repo) {
     return finalizeTurn(updated, body, true, null, signals)
   }
 
+  /**
+   * Reject appointment slots outside clinic opening hours and ask again.
+   */
+  function rejectOutsideHours(conversationId, lead, language, signals, hoursResult) {
+    const knownService = isOfficialService(lead.problem || signals?.problem || '')
+      ? (lead.problem || signals.problem)
+      : null
+    const updated = repo.upsertLead(conversationId, {
+      stage: 'awaiting_form',
+      awaiting_field: 'bulk',
+      booking_intent: 1,
+      appointment_date: null,
+      appointment_time: null,
+    })
+    const body = [
+      outsideWorkingHoursMessage(language, hoursResult),
+      '',
+      bookingFormMessage(language, {
+        knownService,
+        skipProblem: Boolean(knownService),
+      }),
+    ].join('\n')
+    return finalizeTurn(updated, body, true, null, signals)
+  }
+
   function processAfterData(conversationId, lead, language, signals) {
     const check = checkCustomerData(lead)
     if (!check.ok) {
       // Never ask field-by-field — always re-send the full one-message form.
       return resendFullForm(conversationId, lead, language, signals, check.missing)
+    }
+
+    const hours = validateAppointmentHours(lead.appointment_date, lead.appointment_time)
+    if (!hours.ok) {
+      return rejectOutsideHours(conversationId, lead, language, signals, hours)
     }
 
     const ready = repo.upsertLead(conversationId, {
@@ -414,6 +444,11 @@ function createCrmWorkflow(repo) {
         const check = checkCustomerData(lead)
         if (!check.ok) {
           return processAfterData(conversationId, lead, lang, signals)
+        }
+
+        const hours = validateAppointmentHours(lead.appointment_date, lead.appointment_time)
+        if (!hours.ok) {
+          return rejectOutsideHours(conversationId, lead, lang, signals, hours)
         }
 
         const booking = repo.saveConfirmedBooking(lead)
