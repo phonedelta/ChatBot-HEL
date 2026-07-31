@@ -3068,6 +3068,12 @@ async function checkInstanceHealth(record) {
     return record?.healthCheckPromise || Promise.resolve()
   }
 
+  // Skip pings while handling messages — getState competes with Puppeteer and often
+  // times out on small cloud hosts (Railway), then recover kills a healthy session.
+  if (Number(record.pendingMessages || 0) > 0) {
+    return Promise.resolve()
+  }
+
   const currentState = String(record.state || '').toLowerCase()
   if (currentState === 'missing' || currentState === 'disconnected' || currentState === 'auth_failure') {
     initializeRecord(record)
@@ -3090,6 +3096,7 @@ async function checkInstanceHealth(record) {
 
       const normalized = String(state || '').toLowerCase()
       if (!normalized || normalized === 'connected' || normalized === 'open' || normalized === 'ready') {
+        record.healthFailCount = 0
         updateState(record, 'ready', { lastError: null })
         return
       }
@@ -3102,11 +3109,23 @@ async function checkInstanceHealth(record) {
       throw new Error(`Unexpected WhatsApp state: ${normalized}`)
     })
     .catch(async (error) => {
+      const reason = error.message || String(error)
+      const isTimeout = /timed out/i.test(reason)
+      record.healthFailCount = Number(record.healthFailCount || 0) + 1
+
       console.error('[iadis-wa] instance health check failed', {
         instance_id: record.instanceId,
-        reason: error.message || String(error),
+        reason,
+        fail_count: record.healthFailCount,
+        will_recover: !isTimeout || record.healthFailCount >= 3,
       })
-      await recoverInstance(record, error.message || 'Instance health check failed')
+
+      // On Railway, a single getState timeout is common and does NOT mean WhatsApp is dead.
+      // Only recover after repeated timeouts, or immediately on non-timeout errors.
+      if (!isTimeout || record.healthFailCount >= 3) {
+        record.healthFailCount = 0
+        await recoverInstance(record, reason || 'Instance health check failed')
+      }
     })
     .finally(() => {
       record.healthCheckPromise = null
@@ -3338,6 +3357,7 @@ function ensureInstance(instanceId) {
       reconnectTimer: null,
       queuePromise: Promise.resolve(),
       pendingMessages: 0,
+      healthFailCount: 0,
     }
 
     attachClientListeners(record)

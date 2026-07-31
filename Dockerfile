@@ -4,6 +4,10 @@ FROM node:22-bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    WA_PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu,--disable-extensions,--disable-background-networking,--mute-audio \
+    WA_INSTANCE_PING_TIMEOUT_MS=90000 \
+    WA_INSTANCE_PING_INTERVAL_MS=120000 \
+    WA_AUTOMATION_HISTORY_SYNC_ENABLED=false \
     PORT=8081
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
