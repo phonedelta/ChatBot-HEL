@@ -36,14 +36,17 @@ RUN npm --prefix dashboard-app run build \
 
 ENV NODE_ENV=production
 
-RUN mkdir -p storage/sessions storage/voice-nlu-logs \
-    && chown -R node:node /app
+RUN mkdir -p storage/sessions storage/voice-nlu-logs
 
-USER node
+# Must run as root on Railway: volumes are root-owned and overlay /app/storage at start.
+# (USER node causes EACCES on dashboard-auth.json / SQLite / WA session.)
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8081
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8081)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["npm", "start"]

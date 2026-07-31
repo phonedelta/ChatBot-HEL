@@ -21,3 +21,4 @@ agent-transcripts
 .cursor
 *.md
 !whatsapp/src/knowledge/*.md
+!docker-entrypoint.sh
