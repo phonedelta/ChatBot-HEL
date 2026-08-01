@@ -25,14 +25,14 @@ function bookingFormMessage(language = 'fr', options = {}) {
   const knownService = String(options.knownService || '').trim()
   // Field order is fixed — Problème is always requested in the form.
   const fieldsFr = [
-    '• Nom complet',
+    '• Nom et prénom (nom complet)',
     '• Problème',
     '• Numéro de téléphone',
     '• Ville',
     '• Jour et heure souhaités',
   ]
   const fieldsAr = [
-    '• الاسم الكامل',
+    '• الاسم الكامل (الاسم الشخصي + الاسم العائلي)',
     '• المشكل ديال الأسنان',
     '• رقم الهاتف',
     '• المدينة',
@@ -95,19 +95,37 @@ function bookingFormMessage(language = 'fr', options = {}) {
 }
 
 /**
+ * Patient sent only a first name — ask again for prénom + nom.
+ */
+function fullNameRequiredMessage(language = 'fr') {
+  if (isDarija(language)) {
+    return [
+      'عافاك صيفط الاسم الكامل (الاسم الشخصي + الاسم العائلي)، ماشي الاسم بوحدو.',
+      'مثال : هشام العلوي',
+      '',
+    ].join('\n')
+  }
+  return [
+    'Merci d\'indiquer votre nom complet (prénom + nom de famille), pas seulement le prénom.',
+    'Exemple : Hicham Alaoui',
+    '',
+  ].join('\n')
+}
+
+/**
  * Reminder when the patient reply was incomplete — always ask again for ONE full message.
  * (We never collect fields one-by-one.)
  */
 function incompleteBulkReminder(language = 'fr', missing = []) {
   const labelsFr = {
-    full_name: 'nom complet',
+    full_name: 'nom et prénom (nom complet)',
     phone_number: 'numéro de téléphone',
     city: 'ville',
     problem: 'problème dentaire',
     appointment: 'jour et heure',
   }
   const labelsAr = {
-    full_name: 'الاسم الكامل',
+    full_name: 'الاسم الكامل (الاسم الشخصي + الاسم العائلي)',
     phone_number: 'رقم الهاتف',
     city: 'المدينة',
     problem: 'المشكل ديال الأسنان',
@@ -207,7 +225,7 @@ function patientConfirmationMessage(lead, language = 'fr') {
       `التاريخ : ${date}`,
       `الساعة : ${time}`,
       '',
-      'الحالة : غير مؤكد',
+      'الحالة : في الانتظار',
       '',
       'غادي يتصل بيك مركز HEL بالتليفون باش يؤكد الموعد.',
     ].join('\n')
@@ -219,7 +237,7 @@ function patientConfirmationMessage(lead, language = 'fr') {
     `Date : ${date}`,
     `Heure : ${time}`,
     '',
-    'Statut : Non confirmé',
+    'Statut : En attente',
     '',
     'Le Centre Dentaire HEL vous appellera par téléphone pour confirmer définitivement le rendez-vous.',
   ].join('\n')
@@ -230,7 +248,7 @@ function staffNotificationText(booking) {
   const appointment = booking.appointment
   const dentalCase = booking.dentalCase
   return [
-    'Nouvelle commande RDV (Non confirmé) :',
+    'Nouvelle commande RDV (En attente) :',
     '',
     `Client : ${customer.full_name}`,
     `Téléphone : ${formatPhoneDisplay(customer.phone_number)}`,
@@ -247,6 +265,7 @@ module.exports = {
   bookingFormMessage,
   askMissingField,
   incompleteBulkReminder,
+  fullNameRequiredMessage,
   voiceUseTextReminder,
   askConfirmation,
   patientConfirmationMessage,

@@ -64,8 +64,25 @@ const CITY_ALIASES = {
   'افران': 'Ifrane',
 }
 
-const WEEKDAYS_FR = {
+/** Weekday aliases → JS getDay() (0=Sunday). French + Darija Latin + Arabic. */
+const WEEKDAY_ALIASES = {
   dimanche: 0, lundi: 1, mardi: 2, mercredi: 3, jeudi: 4, vendredi: 5, samedi: 6,
+  // Darija Latin
+  l7d: 0, lhad: 0, nhar_l7d: 0,
+  tnin: 1, ltnin: 1, tnen: 1, nhar_tnin: 1,
+  tlat: 2, tlata: 2, tleta: 2, tlt: 2, nhar_tlat: 2,
+  larb3: 3, larba: 3, arba: 3, arb3: 3, larb3a: 3, nhar_larb3: 3,
+  kmis: 4, khamis: 4, lkmess: 4, nhar_kmis: 4,
+  jom3a: 5, jem3a: 5, juma: 5, jumua: 5, nhar_jom3a: 5,
+  sebt: 6, sbat: 6, nhar_sebt: 6,
+  // Arabic script
+  الاحد: 0, الأحد: 0,
+  الاثنين: 1, الإثنين: 1,
+  الثلاثاء: 2,
+  الاربعاء: 3, الأربعاء: 3,
+  الخميس: 4,
+  الجمعة: 5,
+  السبت: 6,
 }
 
 const CONFIRM_YES = [
@@ -86,11 +103,12 @@ const BOOKING_INTENT = [
   /\bmow3id\b/i,
   /\bmo3id\b/i,
   /موعد/,
-  /\bbghit(?:i)?\b.*\b(rendez|rdv|mow3id|mo3id|nji|ndir|njib|n9ala3|n9ale3)\b/i,
+  /\bbghit(?:i)?\b.*\b(rendez|rdv|mow3id|mo3id|nji|ndir|njib|n9ala3|n9ale3|nreserve|reserv)\b/i,
   /\bbghit(?:i)?\s+rendez/i,
   /\bprendre (un )?rendez/i,
-  /\breserver\b/i,
+  /\b(n)?reserv(e|er|i|ation)?\b/i,
   /\bréserve/i,
+  /\bnhjez\b|\bn7jez\b|\bn7ajez\b/i,
   /بغيت\s*(موعد|نجي|نحجز)?/,
   /نحب نحجز/,
   /حجز\s*موعد/,
@@ -119,6 +137,7 @@ function titleCaseName(value) {
     .join(' ')
 }
 
+/** Full name = prénom + nom (at least 2 words). Single first name is rejected. */
 function validateFullName(value) {
   const cleaned = String(value || '')
     .replace(/^(je m'appelle|mon nom (est|c'est)|ismi|smiyti|اسمي)\s*/i, '')
@@ -135,6 +154,48 @@ function validateFullName(value) {
   if (parts.some((p) => looksLikeServiceText(p))) return null
 
   return titleCaseName(parts.join(' '))
+}
+
+function isKnownCityToken(value) {
+  const key = normalizeText(value).replace(/\s+/g, ' ')
+  if (!key) return false
+  if (CITY_ALIASES[key]) return true
+  return MOROCCAN_CITIES.some((city) => normalizeText(city) === key)
+}
+
+/** True when the patient sent only a first name (needs prénom + nom). */
+function looksLikePartialFirstName(value) {
+  const cleaned = String(value || '')
+    .replace(/^(je m'appelle|mon nom (est|c'est)|ismi|smiyti|اسمي)\s*/i, '')
+    .replace(/[^\p{L}\s'-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!cleaned || isKnownCityToken(cleaned) || looksLikeServiceText(cleaned)) return false
+  const parts = cleaned.split(' ').filter((p) => p.length >= 2)
+  return parts.length === 1 && parts[0].length >= 3 && parts[0].length <= 40
+}
+
+/**
+ * @param {string} normalized lowercase normalized text
+ * @returns {number|null} weekday 0-6
+ */
+function matchWeekday(normalized) {
+  const text = String(normalized || '')
+  if (!text) return null
+  const entries = Object.entries(WEEKDAY_ALIASES)
+    .map(([name, day]) => [normalizeText(name).replace(/_/g, ' '), day])
+    .sort((a, b) => b[0].length - a[0].length)
+
+  for (const [name, day] of entries) {
+    if (!name) continue
+    if (/[\u0600-\u06FF]/.test(name)) {
+      if (text.includes(name)) return day
+      continue
+    }
+    const re = new RegExp(`(?:^|\\s)${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`, 'i')
+    if (re.test(` ${text} `)) return day
+  }
+  return null
 }
 
 function resolveCityValue(value) {
@@ -219,11 +280,9 @@ function extractAppointment(text, now = new Date()) {
     date = new Date(now)
     date.setDate(date.getDate() + 2)
   } else {
-    for (const [name, weekday] of Object.entries(WEEKDAYS_FR)) {
-      if (normalized.includes(name)) {
-        date = nextWeekday(now, weekday)
-        break
-      }
+    const weekday = matchWeekday(normalized)
+    if (weekday !== null) {
+      date = nextWeekday(now, weekday)
     }
   }
 
@@ -242,7 +301,8 @@ function extractAppointment(text, now = new Date()) {
     }
   }
 
-  const timeMatch = raw.match(/\b(\d{1,2})\s*(?:h|:|مع)\s*(\d{2})?\b/i)
+  const timeMatch = raw.match(/\b(\d{1,2})\s*(?:h|:|مع|m3a)\s*(\d{2})?\b/i)
+    || raw.match(/\b(?:m3a|مع)\s*(\d{1,2})(?:\s*[:h]\s*(\d{2}))?\b/i)
     || raw.match(/\bà\s*(\d{1,2})(?:\s*h)?\b/i)
   if (timeMatch) {
     const hours = Number(timeMatch[1])
@@ -265,7 +325,11 @@ function extractLabeledValue(line, pattern) {
 }
 
 function looksLikeDateLine(line) {
-  return /\d{1,2}[\/\-.]\d{1,2}|\b\d{1,2}\s*(?:h|:)\s*\d{0,2}\b|\bghedda\b|\bdemain\b|غدا/i.test(line)
+  const raw = String(line || '')
+  if (/\d{1,2}[\/\-.]\d{1,2}|\b\d{1,2}\s*(?:h|:|مع|m3a)\s*\d{0,2}\b|\bghedda\b|\bdemain\b|غدا/i.test(raw)) {
+    return true
+  }
+  return matchWeekday(normalizeText(raw)) !== null
 }
 
 function looksLikeCityLine(line) {
@@ -288,6 +352,7 @@ function emptyResult() {
     urgency: null,
     appointment_date: null,
     appointment_time: null,
+    name_incomplete: false,
   }
 }
 
@@ -311,12 +376,14 @@ function extractPositionalBooking(lines, now) {
     const city = resolveCityValue(lines[2])
     const motif = resolveMotifPair(lines[3])
     const appointment = extractAppointment(lines[4], now)
-    if (!name || !phone) return null
+    // Keep other fields even if only a first name was sent (CRM will ask for full name).
+    if (!phone || (!name && !looksLikePartialFirstName(lines[0]))) return null
 
     const result = emptyResult()
     result.full_name = name
     result.phone_number = phone
     result.city = city
+    result.name_incomplete = Boolean(!name && looksLikePartialFirstName(lines[0]))
     applyMotif(result, motif)
     if (appointment?.appointment_date) result.appointment_date = appointment.appointment_date
     if (appointment?.appointment_time) result.appointment_time = appointment.appointment_time
@@ -332,6 +399,11 @@ function extractPositionalBooking(lines, now) {
       nameIdx = i
       break
     }
+    if (looksLikePartialFirstName(lines[i])) {
+      result.name_incomplete = true
+      nameIdx = i
+      break
+    }
   }
   result.phone_number = extractPhone(lines[phoneIdx])
 
@@ -339,6 +411,7 @@ function extractPositionalBooking(lines, now) {
     if (i === phoneIdx || i === dateIdx || i === nameIdx) continue
     if (!result.city) {
       const city = resolveCityValue(lines[i])
+      // Strict 2-word names are not cities; single known city tokens stay cities.
       if (city && !looksLikeServiceText(lines[i]) && !validateFullName(lines[i])) {
         result.city = city
         continue
@@ -374,7 +447,9 @@ function extractBulkBookingFields(text, options = {}) {
   for (const line of lines) {
     const labeledName = extractLabeledValue(line, LABEL_NAME)
     if (labeledName) {
-      result.full_name = validateFullName(labeledName) || result.full_name
+      const full = validateFullName(labeledName)
+      if (full) result.full_name = full
+      else if (looksLikePartialFirstName(labeledName)) result.name_incomplete = true
       continue
     }
     const labeledPhone = extractLabeledValue(line, LABEL_PHONE)
@@ -414,6 +489,7 @@ function extractBulkBookingFields(text, options = {}) {
         urgency: positional.urgency || result.urgency,
         appointment_date: positional.appointment_date || result.appointment_date,
         appointment_time: positional.appointment_time || result.appointment_time,
+        name_incomplete: Boolean(positional.name_incomplete || result.name_incomplete),
       }
     }
   }
@@ -473,6 +549,9 @@ function extractBulkBookingFields(text, options = {}) {
       if (name && !looksLikeDateLine(line) && !extractPhone(line) && !looksLikeServiceText(line)) {
         result.full_name = name
         continue
+      }
+      if (looksLikePartialFirstName(line) && !looksLikeDateLine(line) && !extractPhone(line)) {
+        result.name_incomplete = true
       }
     }
   }
@@ -553,6 +632,7 @@ function extractCustomerSignals(text, options = {}) {
     urgency: bulk.urgency,
     appointment_date: bulk.appointment_date,
     appointment_time: bulk.appointment_time,
+    name_incomplete: Boolean(bulk.name_incomplete),
     booking_intent: isBookingIntent(text, options.voiceIntent),
     confirmation_yes: isConfirmationYes(text),
     confirmation_no: isConfirmationNo(text),
@@ -561,6 +641,7 @@ function extractCustomerSignals(text, options = {}) {
 
 module.exports = {
   validateFullName,
+  looksLikePartialFirstName,
   extractFullName,
   extractCity,
   extractPhone,
@@ -574,4 +655,5 @@ module.exports = {
   isConfirmationNo,
   isOfficialService,
   MOROCCAN_CITIES,
+  WEEKDAY_ALIASES,
 }

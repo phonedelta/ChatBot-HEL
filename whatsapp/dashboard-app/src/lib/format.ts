@@ -10,7 +10,7 @@ export function initials(name?: string | null) {
 
 export function formatStatus(value?: string | null) {
   const v = String(value || '').toLowerCase()
-  if (v === 'non_confirme' || v === 'non confirme' || v === 'non confirmé') return 'non confirmé'
+  if (v === 'non_confirme' || v === 'non confirme' || v === 'non confirmé' || v === 'en attente') return 'En attente'
   if (v === 'confirmed' || v === 'confirmé' || v === 'confirme') return 'Confirmé'
   if (v === 'cancelled' || v === 'annule' || v === 'annulé') return 'Annulé'
   if (v === 'traitee') return 'Traitée'

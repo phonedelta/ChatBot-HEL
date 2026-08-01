@@ -5,7 +5,7 @@ import { formatStatus, statusTone, cn } from '@/lib/format'
 import { Badge } from '@/components/ui/Badge'
 
 export const STATUS_OPTIONS = [
-  { value: 'non_confirme', label: 'non confirmé' },
+  { value: 'non_confirme', label: 'En attente' },
   { value: 'confirmed', label: 'Confirmé' },
   { value: 'cancelled', label: 'Annulé' },
 ] as const
@@ -139,8 +139,9 @@ export function StatusSelect({ value, disabled, onChange }: Props) {
               ref={menuRef}
               role="listbox"
               style={{ top: pos.top, left: pos.left, width: pos.width }}
-              className="fixed z-[9999] rounded-2xl border border-border bg-white p-1.5 shadow-[0_16px_40px_rgba(16,42,67,0.16)]"
+              className="fixed z-[10050] rounded-2xl border border-border bg-white p-1.5 shadow-[0_16px_40px_rgba(16,42,67,0.16)]"
               onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
             >
               {STATUS_OPTIONS.map((opt) => {
                 const active = opt.value === current
@@ -151,10 +152,15 @@ export function StatusSelect({ value, disabled, onChange }: Props) {
                     role="option"
                     aria-selected={active}
                     disabled={saving}
-                    onClick={(e) => {
+                    onPointerDown={(e) => {
+                      // Apply on pointerdown so the menu choice wins over outside-close handlers
                       e.preventDefault()
                       e.stopPropagation()
                       void select(opt.value)
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
                     }}
                     className={cn(
                       'flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition',

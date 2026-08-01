@@ -165,7 +165,7 @@ function createCrmRepository(db) {
       `Message client : ${dentalCase.description || '—'}`,
       `Date : ${appointment.appointment_date}`,
       `Heure : ${appointment.appointment_time}`,
-      `Statut : Non confirmé (à confirmer par appel téléphonique)`,
+      `Statut : En attente (à confirmer par appel téléphonique)`,
     ].join('\n')
 
     const notif = db.prepare(`
@@ -498,6 +498,29 @@ function createCrmRepository(db) {
     const allowed = new Set(['non_confirme', 'confirmed', 'cancelled'])
     if (!allowed.has(nextStatus)) {
       throw new Error('Statut invalide')
+    }
+
+    // Status-only update from the table dropdown — do not re-validate schedule/hours.
+    const patchKeys = Object.keys(patch || {})
+    const statusOnly = patchKeys.length === 1 && patchKeys[0] === 'status'
+    if (statusOnly) {
+      db.prepare(`
+        UPDATE appointments
+        SET status = ?
+        WHERE id = ?
+      `).run(nextStatus, id)
+
+      const row = db.prepare(`
+        SELECT
+          a.id, a.appointment_date, a.appointment_time, a.status, a.created_at,
+          c.id AS customer_id, c.full_name, c.phone_number, c.city,
+          d.problem, d.description AS problem_details, d.urgency
+        FROM appointments a
+        JOIN customers c ON c.id = a.customer_id
+        LEFT JOIN dental_cases d ON d.appointment_id = a.id
+        WHERE a.id = ?
+      `).get(id)
+      return row ? serializeOrderRow(row) : null
     }
 
     const fullName = String(patch.full_name ?? current.full_name ?? '').trim()

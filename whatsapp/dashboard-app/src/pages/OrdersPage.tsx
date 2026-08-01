@@ -35,7 +35,9 @@ export function OrdersPage() {
   const [q, setQ] = useState('')
   const [city, setCity] = useState('')
   const [status, setStatus] = useState('')
-  const [type, setType] = useState('all')
+  /** Show appointments from this day onward (today → future). Empty = all dates including past. */
+  const [dateFrom, setDateFrom] = useState(todayISO)
+  const [type, setType] = useState('upcoming')
   const [editing, setEditing] = useState<AppointmentOrder | null>(null)
   const [creating, setCreating] = useState<AppointmentOrder | null>(null)
   const [deleting, setDeleting] = useState<AppointmentOrder | null>(null)
@@ -75,31 +77,40 @@ export function OrdersPage() {
   const filtered = useMemo(() => {
     let list = [...orders]
     if (city) list = list.filter((o) => (o.city || '') === city)
+
     if (status) {
-      list = list.filter((o) => {
-        const s = String(o.status || '').toLowerCase()
-        if (status === 'confirmed') return s === 'confirmed' || s.includes('confirm')
-        if (status === 'cancelled') return s.includes('annul') || s === 'cancelled'
-        return s === 'non_confirme' || (!s.includes('confirm') && !s.includes('annul') && s !== 'cancelled')
-      })
+      list = list.filter((o) => normalizeStatus(o.status) === normalizeStatus(status === 'pending' ? 'non_confirme' : status))
     }
+
     if (type === 'today') {
-      // Today list = date is today AND status confirmed.
-      // Non confirmé never appears here, even if the date is today.
-      // If the date was changed manually to another day, it appears here only when that day arrives (and confirmed).
       list = list.filter(
         (o) => isTodayDate(o.appointment_date) && normalizeStatus(o.status) === 'confirmed',
       )
+    } else if (type === 'upcoming' || dateFrom) {
+      const from = dateFrom || todayISO()
+      list = list.filter((o) => {
+        const d = toDateISO(o.appointment_date)
+        return Boolean(d && d >= from)
+      })
     }
+
     list.sort((a, b) => {
-      // Date de prise du RDV : plus ancien en haut, plus récent en bas
+      if (type === 'upcoming' || type === 'today' || dateFrom) {
+        const da = toDateISO(a.appointment_date)
+        const db = toDateISO(b.appointment_date)
+        if (da !== db) return da.localeCompare(db)
+        const ta = String(a.appointment_time || '')
+        const tb = String(b.appointment_time || '')
+        if (ta !== tb) return ta.localeCompare(tb)
+        return Number(a.appointment_id || 0) - Number(b.appointment_id || 0)
+      }
       const ta = Date.parse(String(a.created_at || '')) || 0
       const tb = Date.parse(String(b.created_at || '')) || 0
       if (ta !== tb) return ta - tb
       return Number(a.appointment_id || 0) - Number(b.appointment_id || 0)
     })
     return list
-  }, [orders, city, status, type])
+  }, [orders, city, status, type, dateFrom])
 
   const stats = useMemo(() => {
     const confirmed = orders.filter((o) => normalizeStatus(o.status) === 'confirmed').length
@@ -181,6 +192,7 @@ export function OrdersPage() {
 
   async function changeStatus(item: AppointmentOrder, nextStatus: string) {
     setError('')
+    const previous = item.status
     // Optimistic update for snappy UI
     setOrders((prev) =>
       prev.map((o) =>
@@ -193,8 +205,13 @@ export function OrdersPage() {
         body: { status: nextStatus },
       })
     } catch (err) {
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.appointment_id === item.appointment_id ? { ...o, status: previous } : o,
+        ),
+      )
       setError(err instanceof Error ? err.message : 'Impossible de changer le statut')
-      await load(q)
+      throw err
     }
   }
 
@@ -222,6 +239,7 @@ export function OrdersPage() {
             onClick={() => {
               setType(s.id)
               setStatus(s.filterStatus)
+              setDateFrom('')
             }}
             className="min-w-0 text-left"
             title={s.id === 'today' ? 'Uniquement les RDV confirmés du jour' : undefined}
@@ -247,7 +265,7 @@ export function OrdersPage() {
       </div>
 
       <Card className="min-w-0">
-        <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <div className="relative min-w-0 sm:col-span-2 lg:col-span-2">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
             <Input
@@ -257,16 +275,29 @@ export function OrdersPage() {
               onChange={(e) => setQ(e.target.value)}
             />
           </div>
+          <Input
+            type="date"
+            aria-label="À partir de la date"
+            title="Afficher les RDV à partir de cette date (jusqu’aux plus lointains)"
+            value={dateFrom}
+            onChange={(e) => {
+              setDateFrom(e.target.value)
+              setType('upcoming')
+            }}
+          />
           <Select value={city} onChange={(e) => setCity(e.target.value)}>
             <option value="">Ville</option>
             {cities.map((c) => (
               <option key={c} value={c}>{c}</option>
             ))}
           </Select>
-          <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">Statut</option>
+          <Select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+          >
+            <option value="">Statut (tous)</option>
             <option value="confirmed">Confirmé</option>
-            <option value="pending">non confirmé</option>
+            <option value="pending">en attente</option>
             <option value="cancelled">Annulé</option>
           </Select>
         </div>
@@ -274,11 +305,28 @@ export function OrdersPage() {
           {[
             { id: 'all', label: 'Tous' },
             { id: 'today', label: 'Aujourd’hui' },
+            { id: 'upcoming', label: 'À venir' },
           ].map((t) => (
             <button
               key={t.id}
               type="button"
-              onClick={() => setType(t.id)}
+              onClick={() => {
+                if (t.id === 'upcoming') {
+                  setDateFrom(todayISO())
+                  setStatus('')
+                  setType('upcoming')
+                  return
+                }
+                if (t.id === 'all') {
+                  setDateFrom('')
+                  setStatus('')
+                  setType('all')
+                  return
+                }
+                setDateFrom('')
+                setStatus('')
+                setType(t.id)
+              }}
               className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
                 type === t.id
                   ? 'bg-primary text-white'
@@ -288,6 +336,11 @@ export function OrdersPage() {
               {t.label}
             </button>
           ))}
+          {type === 'upcoming' && dateFrom ? (
+            <span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary">
+              À partir du {dateFrom} →
+            </span>
+          ) : null}
           <Button
             className="ml-auto"
             size="sm"
@@ -469,7 +522,7 @@ export function OrdersPage() {
                 value={creating.status}
                 onChange={(e) => setCreating({ ...creating, status: e.target.value })}
               >
-                <option value="non_confirme">non confirmé</option>
+                <option value="non_confirme">en attente</option>
                 <option value="confirmed">Confirmé</option>
                 <option value="cancelled">Annulé</option>
               </Select>
@@ -549,7 +602,7 @@ export function OrdersPage() {
                 value={editing.status}
                 onChange={(e) => setEditing({ ...editing, status: e.target.value })}
               >
-                <option value="non_confirme">non confirmé</option>
+                <option value="non_confirme">en attente</option>
                 <option value="confirmed">Confirmé</option>
                 <option value="cancelled">Annulé</option>
               </Select>

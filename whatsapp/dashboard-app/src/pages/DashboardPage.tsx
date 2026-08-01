@@ -127,7 +127,7 @@ export function DashboardPage() {
     {
       title: 'À confirmer',
       value: data?.stats.pending_appointments ?? 0,
-      hint: 'Non confirmés',
+      hint: 'En attente',
       tone: 'warning' as const,
       icon: CalendarClock,
       to: '/commandes',

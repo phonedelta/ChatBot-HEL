@@ -212,6 +212,57 @@ function run() {
   assert.strictEqual(turn.lead.stage, 'awaiting_form')
   assert.strictEqual(turn.lead.awaiting_field, 'bulk')
 
+  // Single first name rejected → ask for nom + prénom; then full name + Tlat books
+  const conversationHicham = 'main:212666666666@c.us'
+  turn = crm.processCrmTurn({
+    conversationId: conversationHicham,
+    chatId: '212666666666@c.us',
+    userText: 'Bghit nreserve nhar tlat m3a 12:00',
+    languageHint: 'darija',
+  })
+  assert.strictEqual(turn.lead.stage, 'awaiting_form')
+  turn = crm.processCrmTurn({
+    conversationId: conversationHicham,
+    chatId: '212666666666@c.us',
+    userText: [
+      'Hicham',
+      '0696472040',
+      'Salé',
+      'Contrôle',
+      'Tlat m3a 12:00',
+    ].join('\n'),
+    languageHint: 'darija',
+  })
+  assert.strictEqual(turn.lead.stage, 'awaiting_form')
+  assert.strictEqual(turn.lead.full_name, null)
+  assert.match(turn.forceReply, /الاسم الكامل|الاسم الشخصي/i)
+  turn = crm.processCrmTurn({
+    conversationId: conversationHicham,
+    chatId: '212666666666@c.us',
+    userText: [
+      'Hicham Alaoui',
+      '0696472040',
+      'Salé',
+      'Contrôle',
+      'Tlat m3a 12:00',
+    ].join('\n'),
+    languageHint: 'darija',
+  })
+  assert.strictEqual(turn.lead.stage, 'confirmation', 'full name + Tlat must reach confirmation')
+  assert.strictEqual(turn.lead.full_name, 'Hicham Alaoui')
+  assert.strictEqual(turn.lead.city, 'Salé')
+  assert.strictEqual(turn.lead.appointment_time, '12:00')
+  assert.ok(turn.lead.appointment_date)
+  assert.match(turn.forceReply, /\*OUI\*/)
+  turn = crm.processCrmTurn({
+    conversationId: conversationHicham,
+    chatId: '212666666666@c.us',
+    userText: 'نعم',
+    languageHint: 'darija',
+  })
+  assert.ok(turn.booking, 'appointment must be saved after نعم')
+  assert.strictEqual(turn.booking.appointment.status, 'non_confirme')
+
   // Working hours unit checks
   assert.strictEqual(validateAppointmentHours('2026-08-02', '11:00').ok, false) // Sunday
   assert.strictEqual(validateAppointmentHours('2026-08-02', '11:00').reason, 'closed_day')

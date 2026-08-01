@@ -9,10 +9,15 @@
  */
 
 const { checkCustomerData } = require('./checkCustomerData')
-const { extractCustomerSignals, validateFullName, resolveMotifPair } = require('./extract')
+const {
+  extractCustomerSignals,
+  validateFullName,
+  resolveMotifPair,
+} = require('./extract')
 const {
   bookingFormMessage,
   incompleteBulkReminder,
+  fullNameRequiredMessage,
   voiceUseTextReminder,
   askConfirmation,
   patientConfirmationMessage,
@@ -167,10 +172,13 @@ function createCrmWorkflow(repo) {
       awaiting_field: 'bulk',
       booking_intent: 1,
     })
+    const needsFullName = (missing || []).includes('full_name')
+      || Boolean(signals?.name_incomplete)
     const body = [
+      needsFullName ? fullNameRequiredMessage(language) : null,
       incompleteBulkReminder(language, missing),
       bookingFormMessage(language, { knownService, skipProblem }),
-    ].join('\n')
+    ].filter(Boolean).join('\n')
     return finalizeTurn(updated, body, true, null, signals)
   }
 
