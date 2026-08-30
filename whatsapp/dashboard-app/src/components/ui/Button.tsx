@@ -12,9 +12,9 @@ type Props = Omit<HTMLMotionProps<'button'>, 'children'> & {
 
 const variants = {
   primary:
-    'bg-primary text-white shadow-[0_10px_24px_rgba(15,159,178,0.28)] hover:brightness-105',
+    'bg-primary text-white shadow-[0_10px_24px_rgba(19,174,193,0.28)] hover:brightness-105',
   secondary:
-    'bg-white text-text border border-border hover:border-secondary hover:bg-[#f4fbfc]',
+    'bg-white text-text border border-border hover:border-primary hover:bg-cyan-tint',
   ghost: 'bg-transparent text-muted hover:bg-white/70 hover:text-text',
   danger: 'bg-danger text-white hover:brightness-105',
 }

@@ -38,14 +38,20 @@ export async function api<T = unknown>(path: string, options: ApiOptions = {}): 
   const headers: Record<string, string> = {}
   const token = options.token ?? getStoredToken()
   if (token) headers['x-dashboard-token'] = token
-  if (options.body !== undefined) headers['Content-Type'] = 'application/json'
+
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
+  if (options.body !== undefined && !isFormData) {
+    headers['Content-Type'] = 'application/json'
+  }
 
   let response: Response
   try {
     response = await fetch(path, {
       method: options.method || 'GET',
       headers,
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      body: options.body === undefined
+        ? undefined
+        : (isFormData ? options.body as FormData : JSON.stringify(options.body)),
     })
   } catch {
     throw new ApiError(
@@ -60,7 +66,8 @@ export async function api<T = unknown>(path: string, options: ApiOptions = {}): 
     if (response.status === 401 && !path.includes('/auth/login')) {
       options.onUnauthorized?.()
     }
-    throw new ApiError(payload?.error || `HTTP ${response.status}`, response.status)
+    const msg = payload?.message || payload?.error || `HTTP ${response.status}`
+    throw new ApiError(msg, response.status)
   }
 
   return payload as T

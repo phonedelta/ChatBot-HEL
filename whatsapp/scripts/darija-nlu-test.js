@@ -14,7 +14,7 @@ const cases = [
     expectIntent: 'salutation',
   },
   {
-    text: 'Kan wje3ni dersi.',
+    text: '3andi darssa kadarni',
     expectLanguage: 'darija',
     expectIntent: 'douleur',
     expectMeaning: /douleur/i,

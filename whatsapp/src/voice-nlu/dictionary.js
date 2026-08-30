@@ -9,6 +9,7 @@ const CANONICAL_GROUPS = [
     forms: [
       'dent', 'dents', 'سن', 'سنان', 'sinn', 'senn', 'sinan', 'sennan', 'sinnan', 'senan', 'snan',
       'ders', 'dersi', 'darsi', 'drass', 'drassa', 'darssa', 'dars', 'darss', 'الضرس', 'ضرس',
+      'darsa', 'derssa', 'drssa', 'sni', 'snani', 'snia',
       'adrass', 'adras', 'derci', 'darci', 'dirty', 'jersey',
     ],
   },
@@ -20,13 +21,16 @@ const CANONICAL_GROUPS = [
     canonical: 'douleur',
     forms: [
       'douleur', 'douleurs', 'mal', 'wje3', 'wje3ni', 'waj3', 'waj3ni', 'ouj3', 'ouja3', 'oujaani',
-      'وجع', 'وجعني', 'كاينوجعني', 'كايوجعني', 'kayj3ni', 'kaywaj3ni', 'yewj3ni', 'ywje3ni',
+      'wja3', 'lwja3', 'kadarni', 'kaderni', 'katdarni', 'kaydarni', 'kaydrni', 'kaydreni', 'katdrni',
+      'katwja3ni', 'kaywja3ni', 'kaywja3oni', 'katwja3oni', 'katwja3', 'kaywja3',
+      'وجع', 'وجعني', 'كاينوجعني', 'كايوجعني', 'كايضرني', 'كاتضرني', 'كيضرني', 'كايضر', 'كاتضر',
+      'kayj3ni', 'kaywaj3ni', 'yewj3ni', 'ywje3ni',
       'hrssa', 'harsa', '7ri9', 'hri9', '7ri9a', 'حريق', 'كايحرقني', 'kay7argni', 'visa', 'vision', 'wagon',
     ],
   },
   {
     canonical: 'gonflement',
-    forms: ['nafkha', 'naf5a', 'nafha', 'navaja', 'نفخة', 'نفخه', 'gonflement', 'enflure', 'waram', 'ورم', 'wjeh', 'وجه'],
+    forms: ['nafkha', 'naf5a', 'nafha', 'nfakh', 'navaja', 'نفخة', 'نفخه', 'gonflement', 'enflure', 'waram', 'ورم', 'wjeh', 'وجه'],
   },
   {
     canonical: 'docteur',
@@ -49,7 +53,7 @@ const CANONICAL_GROUPS = [
   },
   {
     canonical: 'avoir',
-    forms: ['3endi', 'andi', '3andek', 'andy', 'endy', 'عندي', 'عندك', "j'ai", 'jai', '3ndi'],
+    forms: ['3endi', 'andi', '3andi', '3andek', 'andy', 'endy', 'عندي', 'عندك', "j'ai", 'jai', '3ndi'],
   },
   {
     canonical: 'venir',
@@ -75,7 +79,7 @@ const CANONICAL_GROUPS = [
     canonical: 'extraire',
     forms: [
       'n9ala3', 'nqala3', 'n9la3', 'nkalaa', 'قلع', 'نقلع', 'extraction', 'arracher', 'enlever',
-      'n9ale3', 'nqale3', 'qala3',
+      'n9ale3', 'nqale3', 'qala3', 'n7yed', 'n7ayed', 't7ayd', 't7ayed', 'nhayed',
     ],
   },
   {
@@ -182,8 +186,17 @@ const CANONICAL_GROUPS = [
   {
     canonical: 'gencive',
     forms: [
-      'gencive', 'gencives', 'litta', 'lta', 'lita', 'لثة', 'lutha', 'parodontologie', 'paradontoloji',
+      'gencive', 'gencives', 'litta', 'lta', 'lita', 'ltha', 'l7ya', 'lta7ya', 'lta7ia',
+      'لثة', 'lutha', 'parodontologie', 'paradontoloji',
     ],
+  },
+  {
+    canonical: 'casse',
+    forms: ['casse', 'cassee', 'cassée', 'tksrat', 'tkasrat', 'tqesrat', 'tekser', 'تكسر', 'مكسور', 'kadaro', 'khadaro'],
+  },
+  {
+    canonical: 'probleme',
+    forms: ['mochkil', 'mochkel', 'probleme', 'problème', 'problem', 'مشكل', 'مشكلة'],
   },
   {
     canonical: 'sang',
@@ -245,6 +258,14 @@ const ASR_CORRECTIONS = {
   darci: 'darsi',
   drassa: 'ders',
   darssa: 'ders',
+  darsa: 'ders',
+  derssa: 'ders',
+  drssa: 'ders',
+  kadarni: 'wje3ni',
+  kaderni: 'wje3ni',
+  katdarni: 'wje3ni',
+  kaydarni: 'wje3ni',
+  kaydrni: 'wje3ni',
   dirty: 'dersi',
   jersey: 'dersi',
   visa: 'wje3',
@@ -256,6 +277,8 @@ const ASR_CORRECTIONS = {
   andi: '3endi',
   andy: '3endi',
   endy: '3endi',
+  '3andi': '3endi',
+  '3ndi': '3endi',
   // service / faire
   serviss: 'service',
   servis: 'service',

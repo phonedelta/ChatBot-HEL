@@ -99,9 +99,11 @@ const INTENT_DICTIONARY = {
   CANCEL_APPOINTMENT: {
     phrases: [
       'annuler mon rendez-vous', 'bghit nalghi rdv', 'نبغي نلغي الموعد',
-      'cancel appointment', 'annuler rdv',
+      'cancel appointment', 'annuler rdv', 'je veux annuler',
+      'je ne pourrai pas venir', 'je ne peux pas venir',
+      'pouvez-vous annuler', 'je souhaite annuler',
     ],
-    keywords: ['annuler', 'annulation', 'cancel', 'نلغي', 'nlrgi'],
+    keywords: ['annuler', 'annulation', 'cancel', 'نلغي', 'nlrgi', 'nalghi'],
   },
   RESCHEDULE_APPOINTMENT: {
     phrases: [

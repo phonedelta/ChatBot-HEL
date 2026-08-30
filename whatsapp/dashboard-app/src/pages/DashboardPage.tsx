@@ -47,7 +47,7 @@ function lastSevenDays() {
 }
 
 export function DashboardPage() {
-  const { username } = useAuth()
+  const { user } = useAuth()
   const [data, setData] = useState<OverviewPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -155,7 +155,7 @@ export function DashboardPage() {
       <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-display text-3xl text-text sm:text-4xl">
-            Bonjour {username || 'Admin'} 👋
+            Bonjour {user?.displayName || 'Admin'} 👋
           </h1>
           <p className="mt-1 text-muted">Bienvenue sur votre espace d’administration.</p>
         </div>
@@ -163,7 +163,7 @@ export function DashboardPage() {
           <Button variant="secondary" icon={<RefreshCw className="h-4 w-4" />} onClick={() => void load()} loading={loading}>
             Actualiser
           </Button>
-          <Avatar name={username || 'Admin'} size="lg" />
+          <Avatar name={user?.displayName || 'Admin'} size="lg" />
         </div>
       </header>
 

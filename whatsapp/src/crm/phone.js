@@ -64,7 +64,9 @@ function formatPhoneDisplay(value) {
  */
 function isValidPhone(value) {
   const digits = normalizePhoneDigits(value)
-  return /^212[5-7]\d{8}$/.test(digits) || /^\d{10,15}$/.test(digits)
+  // Centre Dentaire HEL — Moroccan mobiles/landlines only.
+  // Never accept arbitrary digit strings (e.g. WhatsApp @lid ids).
+  return /^212[5-7]\d{8}$/.test(digits)
 }
 
 module.exports = {

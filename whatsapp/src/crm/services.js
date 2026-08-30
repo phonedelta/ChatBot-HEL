@@ -70,9 +70,16 @@ const SERVICE_SYNONYMS = {
   '7chwa': 'Soins dentaires et traitement des caries',
   tsous: 'Soins dentaires et traitement des caries',
   tsouss: 'Soins dentaires et traitement des caries',
+  tssous: 'Soins dentaires et traitement des caries',
   تسوس: 'Soins dentaires et traitement des caries',
   حشو: 'Soins dentaires et traitement des caries',
   حشوة: 'Soins dentaires et traitement des caries',
+
+  // Orthodontie extras
+  'appareil lsnani': 'Orthodontie',
+  'appareil snani': 'Orthodontie',
+  n9awem: 'Orthodontie',
+  n9awm: 'Orthodontie',
 
   // Gencives
   'soins des gencives': 'Soins des gencives',
@@ -80,9 +87,20 @@ const SERVICE_SYNONYMS = {
   gencives: 'Soins des gencives',
   parodontie: 'Soins des gencives',
   paradontie: 'Soins des gencives',
+  saignement: 'Soins des gencives',
+  'gencives saignent': 'Soins des gencives',
   lta: 'Soins des gencives',
   lita: 'Soins des gencives',
+  l7ya: 'Soins des gencives',
+  ltha: 'Soins des gencives',
+  lta7ya: 'Soins des gencives',
+  lta7ia: 'Soins des gencives',
+  katnzeff: 'Soins des gencives',
+  katnzef: 'Soins des gencives',
+  katdmi: 'Soins des gencives',
+  katdemi: 'Soins des gencives',
   لثة: 'Soins des gencives',
+  'نزيف اللثة': 'Soins des gencives',
 
   // Pédiatrie
   'dentisterie pediatrique': 'Dentisterie pédiatrique',
@@ -90,6 +108,11 @@ const SERVICE_SYNONYMS = {
   enfant: 'Dentisterie pédiatrique',
   bebe: 'Dentisterie pédiatrique',
   sghir: 'Dentisterie pédiatrique',
+  'tbib snan': 'Dentisterie pédiatrique',
+  'wldi khaso': 'Dentisterie pédiatrique',
+  'weldi khaso': 'Dentisterie pédiatrique',
+  'wldi khaso tbib': 'Dentisterie pédiatrique',
+  'wldi khaso tbib snan': 'Dentisterie pédiatrique',
   طفل: 'Dentisterie pédiatrique',
   'اسنان الاطفال': 'Dentisterie pédiatrique',
 
@@ -109,9 +132,11 @@ const SERVICE_SYNONYMS = {
   tabyid: 'Blanchiment des dents',
   tabyit: 'Blanchiment des dents',
   tbyid: 'Blanchiment des dents',
+  nbyed: 'Blanchiment des dents',
+  nbiyad: 'Blanchiment des dents',
   تبييض: 'Blanchiment des dents',
 
-  // Urgences
+  // Urgences — explicit urgency only (bare "douleur" is NOT an emergency)
   'urgences dentaires': 'Urgences dentaires',
   urgence: 'Urgences dentaires',
   urgences: 'Urgences dentaires',
@@ -120,18 +145,15 @@ const SERVICE_SYNONYMS = {
   must3jil: 'Urgences dentaires',
   مستعجل: 'Urgences dentaires',
   'douleur dentaire': 'Urgences dentaires',
-  douleur: 'Urgences dentaires',
+  'douleur insupportable': 'Urgences dentaires',
+  'douleur forte': 'Urgences dentaires',
   '7ri9': 'Urgences dentaires',
   hri9: 'Urgences dentaires',
-  wje3: 'Urgences dentaires',
-  wji3: 'Urgences dentaires',
-  darssa: 'Urgences dentaires',
-  darsa: 'Urgences dentaires',
-  gonflement: 'Urgences dentaires',
+  '7ri9 f darssa': 'Urgences dentaires',
+  'wje3 kbir': 'Urgences dentaires',
+  'kaydrni bzaf': 'Urgences dentaires',
+  'gonflement important': 'Urgences dentaires',
   nafkha: 'Urgences dentaires',
-  وجع: 'Urgences dentaires',
-  ضر: 'Urgences dentaires',
-  حريق: 'Urgences dentaires',
   نفخة: 'Urgences dentaires',
 
   // Implants
@@ -140,13 +162,22 @@ const SERVICE_SYNONYMS = {
   implants: 'Implants dentaires',
   زرع: 'Implants dentaires',
 
-  // Extraction
+  // Extraction — prefer tartar phrases before bare n7yed
+  'n7yed ljir': 'Détartrage',
+  'n7yed jir': 'Détartrage',
+  'n7ayed ljir': 'Détartrage',
+  'bghit n7yed ljir': 'Détartrage',
+  'bghit n7yed jir': 'Détartrage',
   'extraction dentaire': 'Extraction dentaire',
   extraction: 'Extraction dentaire',
   arrache: 'Extraction dentaire',
   n7ayed: 'Extraction dentaire',
   n7yed: 'Extraction dentaire',
   nhayed: 'Extraction dentaire',
+  t7ayd: 'Extraction dentaire',
+  t7ayed: 'Extraction dentaire',
+  'khassha t7ayd': 'Extraction dentaire',
+  'khassha t7ayed': 'Extraction dentaire',
   'n7yed ders': 'Extraction dentaire',
   'n7yed derssa': 'Extraction dentaire',
   'n7yed sn': 'Extraction dentaire',
@@ -210,6 +241,112 @@ function buildServiceResult(service, clientText) {
 }
 
 /**
+ * Token-level Darija Latin / Arabizi canonicalization.
+ * Never rewrite the source message (phones, dates and hours stay on the raw text).
+ */
+function linguisticSurface(text) {
+  try {
+    const { normalizeDarijaText } = require('../voice-nlu/normalize')
+    const n = normalizeDarijaText(String(text || ''))
+    return n.normalizedText || String(text || '')
+  } catch {
+    return String(text || '')
+  }
+}
+
+function combinedLinguisticKey(text) {
+  const exact = String(text || '')
+  const orig = normalizeKey(exact)
+  const ling = normalizeKey(linguisticSurface(exact))
+  if (ling && ling !== orig) return `${orig} ${ling}`.trim()
+  return orig
+}
+
+const TOOTH_SURFACE = /\b(dent|dents|molaire|dersa?s?|dars+a?|derssa|drssa|drass|snani?|sni|sinn|incisive|canine)\b/
+const TOOTH_AR = /ضرس|سن|سنان|السن/
+const PAIN_SURFACE = /\b(douleur|mal|wje3|wji3|wja3|lwja3|7ri9|hri9|kadarn?i|kadern?i|katdarn?i|kaydarn?i|kaydrni|katdrni|kaydreni)\b|\bka[ty]?w?ja3\w*/
+const PAIN_AR = /وجع|ألم|كايضر|كاتضر|كيضر|يضرني|توجع|كايوجع|كاتوجع/
+const GUM_SURFACE = /\b(gencive|gencives|lta7ya|lta7ia|l7ya|ltha|lta|lita)\b/
+const GUM_AR = /لثة|اللثة/
+const BROKEN_SURFACE = /\b(casse[eé]?s?|cass[eé]e|tksrat|tkasrat|tqesrat|tekser|teksser|casse)\b/
+const BROKEN_AR = /تكسر|مكسور|كسرة/
+const SWELL_SURFACE = /\b(nafkha|nfakh|naf5a|gonflement|enflure)\b/
+const SWELL_AR = /نفخة|ورم/
+const PROBLEM_SURFACE = /\b(mochkil|mochkel|probleme|problem|probl[eè]me)\b/
+const PROBLEM_AR = /مشكل|مشكلة/
+
+function hasToothContext(hay, original) {
+  return TOOTH_SURFACE.test(hay) || TOOTH_AR.test(original)
+}
+
+function hasPainContext(hay, original) {
+  return PAIN_SURFACE.test(hay) || PAIN_AR.test(original)
+}
+
+function hasGumContext(hay, original) {
+  return GUM_SURFACE.test(hay) || GUM_AR.test(original)
+}
+
+function hasPersonalDentalComplaint(text) {
+  const exact = String(text || '')
+  const hay = combinedLinguisticKey(exact)
+  const tooth = hasToothContext(hay, exact)
+  const gum = hasGumContext(hay, exact)
+  const pain = hasPainContext(hay, exact)
+  const broken = BROKEN_SURFACE.test(hay) || BROKEN_AR.test(exact)
+  const swell = SWELL_SURFACE.test(hay) || SWELL_AR.test(exact)
+  const problem = PROBLEM_SURFACE.test(hay) || PROBLEM_AR.test(exact)
+  if (pain && (tooth || gum)) return true
+  if ((broken || swell || problem) && (tooth || gum)) return true
+  return false
+}
+
+/**
+ * Price / hours / location / catalogue questions are not a patient motif.
+ */
+function looksLikeAdminOrCatalogQuestion(text) {
+  const exact = String(text || '').trim()
+  if (!exact) return false
+  if (hasPersonalDentalComplaint(exact)) return false
+  const hay = combinedLinguisticKey(exact)
+
+  if (/\b(prix|taman|combien|ch7al|chhal|cout|ثمن|بشحال)\b/.test(hay)) return true
+  if (/\b(horaire|horaires|ouvert|7alin|halin|wa9t)\b/.test(hay)
+    && /\b(wach|wash|lyom|lyoum|aujourd|aujourdhui)\b/.test(hay)) return true
+  if (/\b(fin kayna|fayn|ou kayn|oukayn)\b/.test(hay)) return true
+  if (/\b(fin|fayn)\b/.test(hay) && /\b(clinique|cabinet|clinic)\b/.test(hay)) return true
+  if (/\b(wach|wash|est ce que)\b/.test(hay)
+    && /\b(katdirou|katdiru|kat3aljo|vous faites|vous proposez)\b/.test(hay)) return true
+  if (/\b(bghit n3rf|bghit n3raf|je veux savoir|je voudrais savoir)\b/.test(hay)) return true
+  return false
+}
+
+function resolveDescriptiveDentalMotif(exact) {
+  if (looksLikeAdminOrCatalogQuestion(exact)) return null
+  const hay = combinedLinguisticKey(exact)
+  const gum = hasGumContext(hay, exact)
+  const tooth = hasToothContext(hay, exact)
+  const pain = hasPainContext(hay, exact)
+  const broken = BROKEN_SURFACE.test(hay) || BROKEN_AR.test(exact)
+  const swell = SWELL_SURFACE.test(hay) || SWELL_AR.test(exact)
+  const problem = PROBLEM_SURFACE.test(hay) || PROBLEM_AR.test(exact)
+
+  if (gum && (pain || problem || swell)) {
+    return buildServiceResult('Soins des gencives', exact)
+  }
+  if (tooth && pain) {
+    return buildServiceResult('Urgences dentaires', exact)
+  }
+  if (tooth && swell) {
+    return buildServiceResult('Urgences dentaires', exact)
+  }
+  if (tooth && (broken || problem)) {
+    return buildServiceResult('Consultation', exact)
+  }
+  return null
+}
+
+/**
  * Resolve free-text motif → official service.
  * @returns {{ service: string, clientLabel: string, displayLabel: string, urgency: string } | null}
  */
@@ -219,6 +356,8 @@ function resolveService(text) {
 
   const key = normalizeKey(exact)
   if (!key) return null
+
+  if (looksLikeAdminOrCatalogQuestion(exact)) return null
 
   if (SERVICE_SYNONYMS[key]) {
     return buildServiceResult(SERVICE_SYNONYMS[key], exact)
@@ -238,7 +377,7 @@ function resolveService(text) {
     }
   }
 
-  return null
+  return resolveDescriptiveDentalMotif(exact)
 }
 
 function containsForbiddenNameTerm(value) {
@@ -268,4 +407,6 @@ module.exports = {
   resolveService,
   containsForbiddenNameTerm,
   looksLikeServiceText,
+  looksLikeAdminOrCatalogQuestion,
+  hasPersonalDentalComplaint,
 }

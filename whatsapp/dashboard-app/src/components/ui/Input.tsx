@@ -32,16 +32,19 @@ export function Field({
   label,
   children,
   hint,
+  error,
 }: {
   label: string
   children: React.ReactNode
   hint?: string
+  error?: string
 }) {
   return (
     <div>
       <Label>{label}</Label>
       {children}
-      {hint ? <p className="mt-1.5 text-xs text-muted">{hint}</p> : null}
+      {error ? <p className="mt-1.5 text-xs text-danger">{error}</p> : null}
+      {!error && hint ? <p className="mt-1.5 text-xs text-muted">{hint}</p> : null}
     </div>
   )
 }

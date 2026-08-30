@@ -24,7 +24,7 @@ function emptyAppointment(): AppointmentOrder {
     problem_client: '',
     appointment_date: todayISO(),
     appointment_time: '10:00',
-    status: 'non_confirme',
+    status: 'confirmed',
   }
 }
 
@@ -61,6 +61,14 @@ export function OrdersPage() {
   useEffect(() => {
     void load('')
   }, [])
+
+  useEffect(() => {
+    function onCreated() {
+      void load(q)
+    }
+    window.addEventListener('hel:appointment-created', onCreated)
+    return () => window.removeEventListener('hel:appointment-created', onCreated)
+  }, [load, q])
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -159,11 +167,10 @@ export function OrdersPage() {
           full_name: creating.full_name,
           phone_number: creating.phone_number,
           city: creating.city,
-          problem: creating.problem || creating.problem_details || 'consultation générale',
-          problem_details: creating.problem_details || creating.problem_client || creating.problem || '',
+          problem: creating.problem || 'consultation générale',
           appointment_date: toDateISO(creating.appointment_date) || creating.appointment_date,
           appointment_time: creating.appointment_time,
-          status: creating.status || 'non_confirme',
+          status: 'confirmed',
         },
       })
       setCreating(null)
@@ -460,7 +467,9 @@ export function OrdersPage() {
       {creating ? (
         <Modal onClose={() => setCreating(null)}>
           <h2 className="font-display text-2xl">Nouveau rendez-vous</h2>
-          <p className="mb-5 text-sm text-muted">Ajoutez un rendez-vous manuellement dans le CRM.</p>
+          <p className="mb-5 text-sm text-muted">
+            Ajout manuel — le rendez-vous sera créé avec le statut Confirmé.
+          </p>
           <div className="space-y-3">
             <Field label="Nom complet">
               <Input
@@ -483,22 +492,11 @@ export function OrdersPage() {
                 placeholder="Casablanca"
               />
             </Field>
-            <Field label="Motif (IA / résumé)">
+            <Field label="Motif">
               <Input
                 value={creating.problem || ''}
                 onChange={(e) => setCreating({ ...creating, problem: e.target.value, problem_ai: e.target.value })}
                 placeholder="Ex: douleur dentaire"
-              />
-            </Field>
-            <Field label="Message / détail patient">
-              <Input
-                value={creating.problem_details || ''}
-                onChange={(e) => setCreating({
-                  ...creating,
-                  problem_details: e.target.value,
-                  problem_client: e.target.value,
-                })}
-                placeholder="Texte exact du patient"
               />
             </Field>
             <div className="grid grid-cols-2 gap-3">
@@ -517,16 +515,6 @@ export function OrdersPage() {
                 />
               </Field>
             </div>
-            <Field label="Statut">
-              <Select
-                value={creating.status}
-                onChange={(e) => setCreating({ ...creating, status: e.target.value })}
-              >
-                <option value="non_confirme">en attente</option>
-                <option value="confirmed">Confirmé</option>
-                <option value="cancelled">Annulé</option>
-              </Select>
-            </Field>
           </div>
           <div className="mt-6 flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setCreating(null)}>

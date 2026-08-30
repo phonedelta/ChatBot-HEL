@@ -9,60 +9,25 @@ const {
   looksLikeServiceText,
   containsForbiddenNameTerm,
   isOfficialService,
+  looksLikeAdminOrCatalogQuestion,
 } = require('./services')
+const {
+  validateFullName,
+  assessFullNameCandidate,
+} = require('./name-validator')
+const {
+  isConfirmationYes: binaryYes,
+  isConfirmationNo: binaryNo,
+} = require('./binary-confirmation')
+const {
+  MOROCCAN_CITY_TOKENS,
+  resolveMoroccanCity,
+  isKnownMoroccanCity,
+  listMoroccanCityMentions,
+} = require('./morocco-cities')
 
-const MOROCCAN_CITIES = [
-  'casablanca', 'casa', 'rabat', 'marrakech', 'marrakesh', 'fes', 'fès', 'meknes', 'meknès',
-  'tanger', 'tangier', 'agadir', 'oujda', 'kenitra', 'kénitra', 'tetouan', 'tétouan',
-  'el jadida', 'safi', 'mohammedia', 'nador', 'beni mellal', 'khouribga', 'settat',
-  'sale', 'salé', 'temara', 'témara', 'berrechid', 'larache', 'essaouira', 'ouarzazate',
-  'ifran', 'ifrane',
-  'el oulfa', 'oulfa', 'ain sebaa', 'ain diab', 'maarif', 'sidi maarouf', 'hay hassani',
-  'الدار البيضاء', 'كازا', 'الرباط', 'مراكش', 'فاس', 'طنجة', 'أكادير', 'وجدة', 'القنيطرة', 'تطوان', 'سلا', 'تمارة',
-  'إفران', 'افران',
-]
-
-const CITY_ALIASES = {
-  casa: 'Casablanca',
-  casablanca: 'Casablanca',
-  'el oulfa': 'Casablanca',
-  oulfa: 'Casablanca',
-  'الدار البيضاء': 'Casablanca',
-  'كازا': 'Casablanca',
-  rabat: 'Rabat',
-  'الرباط': 'Rabat',
-  marrakech: 'Marrakech',
-  marrakesh: 'Marrakech',
-  'مراكش': 'Marrakech',
-  fes: 'Fès',
-  'fès': 'Fès',
-  'فاس': 'Fès',
-  meknes: 'Meknès',
-  'meknès': 'Meknès',
-  tanger: 'Tanger',
-  tangier: 'Tanger',
-  'طنجة': 'Tanger',
-  agadir: 'Agadir',
-  'أكادير': 'Agadir',
-  oujda: 'Oujda',
-  'وجدة': 'Oujda',
-  kenitra: 'Kénitra',
-  'kénitra': 'Kénitra',
-  'القنيطرة': 'Kénitra',
-  tetouan: 'Tétouan',
-  'tétouan': 'Tétouan',
-  'تطوان': 'Tétouan',
-  sale: 'Salé',
-  'salé': 'Salé',
-  'سلا': 'Salé',
-  temara: 'Témara',
-  'témara': 'Témara',
-  'تمارة': 'Témara',
-  ifran: 'Ifrane',
-  ifrane: 'Ifrane',
-  'إفران': 'Ifrane',
-  'افران': 'Ifrane',
-}
+/** @deprecated Prefer resolveMoroccanCity — kept for tests/exports. */
+const MOROCCAN_CITIES = MOROCCAN_CITY_TOKENS
 
 /** Weekday aliases → JS getDay() (0=Sunday). French + Darija Latin + Arabic. */
 const WEEKDAY_ALIASES = {
@@ -84,18 +49,6 @@ const WEEKDAY_ALIASES = {
   الجمعة: 5,
   السبت: 6,
 }
-
-const CONFIRM_YES = [
-  /^(oui+|ouais|ok+|okay|yes|yep)$/i,
-  /^(نعم+|موافق|أكيد|اكيد|ايوا|أيوا|واخا|تمام|صح)$/i,
-  /^(إيوا\s*نعم|ايوا\s*نعم|je confirme|c'est bon|c est bon)$/i,
-]
-
-const CONFIRM_NO = [
-  /^(non+|no|nn|pas|annule|annuler|annulé|annulee)$/i,
-  /^(لا|لاء|ماشي|كانسل|الغ|ألغ|تعديل)$/i,
-  /\b(pas possible|autre date|n'est pas bon)\b/i,
-]
 
 const BOOKING_INTENT = [
   /\brendez[- ]?vous\b/i,
@@ -137,36 +90,14 @@ function titleCaseName(value) {
     .join(' ')
 }
 
-/** Full name = prénom + nom (at least 2 words). Single first name is rejected. */
-function validateFullName(value) {
-  const cleaned = String(value || '')
-    .replace(/^(je m'appelle|mon nom (est|c'est)|ismi|smiyti|اسمي)\s*/i, '')
-    .replace(/[^\p{L}\s'-]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  if (!cleaned) return null
-  if (containsForbiddenNameTerm(cleaned) || looksLikeServiceText(cleaned)) return null
-
-  const parts = cleaned.split(' ').filter((p) => p.length >= 2)
-  if (parts.length < 2) return null
-  if (cleaned.length < 5 || cleaned.length > 80) return null
-  if (parts.some((p) => looksLikeServiceText(p))) return null
-
-  return titleCaseName(parts.join(' '))
-}
-
 function isKnownCityToken(value) {
-  const key = normalizeText(value).replace(/\s+/g, ' ')
-  if (!key) return false
-  if (CITY_ALIASES[key]) return true
-  return MOROCCAN_CITIES.some((city) => normalizeText(city) === key)
+  return isKnownMoroccanCity(value)
 }
 
 /** True when the patient sent only a first name (needs prénom + nom). */
 function looksLikePartialFirstName(value) {
   const cleaned = String(value || '')
-    .replace(/^(je m'appelle|mon nom (est|c'est)|ismi|smiyti|اسمي)\s*/i, '')
+    .replace(/^(je m'appelle|mon nom (est|c'est)|ismi|smiti|smiyti|اسمي|سميتي)\s*/i, '')
     .replace(/[^\p{L}\s'-]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -199,39 +130,63 @@ function matchWeekday(normalized) {
 }
 
 function resolveCityValue(value) {
-  const key = normalizeText(value).replace(/\s+/g, ' ')
-  if (!key) return null
-  if (looksLikeServiceText(value) && !CITY_ALIASES[key]) return null
-  if (CITY_ALIASES[key]) return CITY_ALIASES[key]
-  for (const city of MOROCCAN_CITIES) {
-    const cityKey = normalizeText(city)
-    if (key === cityKey || key.includes(cityKey)) {
-      return CITY_ALIASES[cityKey] || CITY_ALIASES[city] || titleCaseName(city)
-    }
-  }
-  if (/^[\p{L}\s'-]{3,40}$/u.test(String(value || '').trim())) {
-    return titleCaseName(value)
-  }
-  return null
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  if (looksLikeServiceText(raw) && !isKnownMoroccanCity(raw)) return null
+  // Morocco whitelist only — never invent a free-text city.
+  return resolveMoroccanCity(raw)
 }
 
 function extractPhone(text) {
-  const match = String(text || '').match(/(?:\+?212|0)?[\s.-]*[5-7](?:[\s.-]*\d){8}/)
+  const raw = String(text || '')
+  // Never invent a booking phone from a WhatsApp @lid identifier.
+  if (/@lid\b/i.test(raw) && !/(?:\+212|00212|0)[\s.-]*[5-7]/.test(raw)) {
+    return null
+  }
+  const match = raw.match(/(?:\+?212|0)?[\s.-]*[5-7](?:[\s.-]*\d){8}/)
   if (!match) return null
   const e164 = toE164(match[0])
   return isValidPhone(e164) ? e164 : null
 }
 
 function extractProblem(text) {
-  const resolved = resolveService(text)
-  if (!resolved) return null
-  return {
-    problem: resolved.service,
-    details: resolved.clientLabel,
-    urgency: resolved.urgency,
-    category: resolved.service,
-    display: resolved.displayLabel,
+  const exact = String(text || '').trim()
+  if (!exact) return null
+  if (looksLikeAdminOrCatalogQuestion(exact)) return null
+
+  const resolved = resolveService(exact)
+  if (resolved) {
+    return {
+      problem: resolved.service,
+      details: resolved.clientLabel,
+      urgency: resolved.urgency,
+      category: resolved.service,
+      display: resolved.displayLabel,
+    }
   }
+
+  try {
+    const { classifyDentalProblem } = require('../voice-nlu/dental-problem-classifier')
+    const classified = classifyDentalProblem(exact)
+    if (
+      classified.service
+      && isOfficialService(classified.service)
+      && Number(classified.confidence || 0) >= 0.55
+      && classified.dentalProblem
+      && classified.dentalProblem !== 'UNKNOWN_DENTAL_PROBLEM'
+    ) {
+      return {
+        problem: classified.service,
+        details: exact.slice(0, 280),
+        urgency: classified.service === 'Urgences dentaires' ? 'haute' : 'moyenne',
+        category: classified.service,
+        display: classified.service,
+      }
+    }
+  } catch {
+    // Classifier is a fallback only; CRM extraction must still work without it.
+  }
+  return null
 }
 
 function resolveMotifPair(rawText) {
@@ -342,6 +297,221 @@ function looksLikeCityLine(line) {
   return words.length >= 1 && words.length <= 3
 }
 
+function hasKnownCityMention(text) {
+  return listMoroccanCityMentions(text).length > 0 || Boolean(resolveMoroccanCity(String(text || '').trim()))
+}
+
+function canonicalCityName(value) {
+  return resolveMoroccanCity(value) || null
+}
+
+function looksLikeClinicLocationQuestion(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return false
+  const n = normalizeText(raw)
+  // Latin Darija cabinet questions (no city mention required)
+  if (/\b(ntoma|ntuma|ntouma)\b/.test(n) && /\b(fin|fayn|kayn|kaynin|kayna)\b/.test(n)) {
+    return true
+  }
+  if (/\b(fin|fayn)\s+(kaynin|kayn|kayna)\b/.test(n)) return true
+  if (/\b(ou|w)\s+kayn(in|a)?\b/.test(n) && /\b(cabinet|clinique|centre)\b/.test(n)) return true
+  if (hasKnownCityMention(raw)) {
+    if (/\b(vous etes|vous situez|votre (cabinet|clinique|adresse|centre)|le cabinet|le centre dentaire)\b/.test(n)) {
+      return true
+    }
+    if (/[?؟]/.test(raw) && /\b(vous|votre|cabinet|wach|wachi|فين|واش)\b/i.test(n)) {
+      return true
+    }
+  }
+  if (/واش\s*(نتوما|كاينين)|فين\s*كاين|واش\s*كاين/.test(raw)) return true
+  if (/نتوما\s*فين|فين\s*نتوما/.test(raw)) return true
+  return false
+}
+
+function patientStatesOwnCity(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return false
+  if (extractLabeledValue(raw, LABEL_CITY)) return true
+  const n = normalizeText(raw)
+  if (/\b(je (suis|habite|vis|viens)|j habite|jhabite|ma ville)\b/.test(n)) return true
+  if (/\b(ana (men|mn|min|f|fi|kayn|kayna|saken|sakna|kan3ich|3ayech)|saken|sakna|kanskn|mdinti|ville dyali)\b/.test(n)) {
+    return true
+  }
+  if (/أنا\s*(من|ف|في|ساكن|ساكنة)|كانسكن|ساكن|كنعيش|مدينتي/.test(raw)) return true
+  return false
+}
+
+function isStandaloneCityMessage(text) {
+  const raw = String(text || '').trim()
+  if (!raw || /[?؟]/.test(raw)) return false
+  if (isBookingIntent(raw) || isConfirmationYes(raw) || isConfirmationNo(raw)) return false
+  const words = raw.split(/\s+/).filter(Boolean)
+  if (words.length > 3) return false
+  if (extractPhone(raw) || looksLikeDateLine(raw) || looksLikeServiceText(raw)) return false
+  return Boolean(isKnownCityToken(raw) || (looksLikeCityLine(raw) && resolveCityValue(raw) && isKnownCityToken(raw)))
+}
+
+function looksLikeAvailabilityProbe(text) {
+  const raw = String(text || '').trim()
+  const n = normalizeText(raw)
+  const hasDay = matchWeekday(n) !== null || /\b(demain|ghedda|غدا|غداً|aujourdhui|aujourd hui|lyoum|اليوم)\b/.test(n)
+  if (!hasDay) return false
+  const hasClock = /\b\d{1,2}\s*(?:h|:|مع|m3a)\s*\d{0,2}\b/i.test(raw)
+    || /\bà\s*\d{1,2}\b/i.test(raw)
+  const questionish = /[?؟]/.test(raw)
+    || /\b(vous avez|avez vous|etes vous|kayn chi|wach kayn|wach 3ndkom)\b/.test(n)
+    || /عندكم|واش كاين/.test(raw)
+  if (questionish && !hasClock) return true
+  if (/\b(quelque chose|dispo|disponible|un creneau)\b/.test(n) && !hasClock) return true
+  return false
+}
+
+function citiesNegatedInText(text) {
+  const n = ` ${normalizeText(text)} `
+  const negated = new Set()
+  const mentions = listMoroccanCityMentions(text)
+  for (const city of mentions) {
+    const cityKey = normalizeText(city)
+    if (!cityKey) continue
+    const re = new RegExp(`(?:^|\\s)(?:pas|not|machi|maachi)\\s+${cityKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`)
+    if (re.test(n)) negated.add(city)
+  }
+  for (const token of MOROCCAN_CITY_TOKENS) {
+    if (token.length < 3) continue
+    const re = new RegExp(`(?:^|\\s)(?:pas|not|machi|maachi)\\s+${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`)
+    if (re.test(n)) {
+      const resolved = resolveMoroccanCity(token)
+      if (resolved) negated.add(resolved)
+    }
+  }
+  if (/ماشي\s*(كازا|الدار البيضاء)/.test(String(text || ''))) negated.add('Casablanca')
+  if (/ماشي\s*الرباط/.test(String(text || ''))) negated.add('Rabat')
+  return negated
+}
+
+/**
+ * Prefer explicit patient self-location over any other city mention in the same message.
+ * Example: "Ah Casa ana kayn f kenitra" → Kénitra (not Casablanca).
+ */
+function extractPersonalCity(text) {
+  const raw = String(text || '').trim()
+  if (!raw || looksLikeClinicLocationQuestion(raw)) return null
+
+  const patterns = [
+    /(?:ana\s+(?:kayn|kayna)\s+(?:f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /(?:ana\s+(?:saken|sakna|kan3ich|3ayech)\s+(?:f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /(?:ana\s+(?:men|mn|min|f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /(?:(?:saken|sakna|kanskn|kan3ich)\s+(?:f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /(?:(?:howa|howwa|hiya|hta\s+howa)\s+(?:mn|men|min|f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /(?:\b(?:mn|men|min)\s+)([\p{L}][\p{L}']{2,40})(?=\s|$)/iu,
+    /(?:mdinti|ville\s+dyali)\s*[:\s]+([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /(?:je\s+(?:suis|habite|vis)\s+(?:à|a|sur|en)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /(?:j['’]?habite\s+(?:à|a|sur)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /(?:ma\s+ville\s+(?:est|c['’]est)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /أنا\s*(?:ساكن|ساكنة)?\s*(?:ف|في|من)\s*([\u0600-\u06FF][\u0600-\u06FF\s]{1,40})/u,
+    /كنعيش\s*(?:ف|في)\s*([\u0600-\u06FF][\u0600-\u06FF\s]{1,40})/u,
+    /مدينتي\s*[:\s]*([\u0600-\u06FF][\u0600-\u06FF\s]{1,40})/u,
+  ]
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern)
+    if (!match?.[1]) continue
+    const candidate = String(match[1]).trim().split(/[.,;!?؟]/)[0].trim()
+    // Stop at contrast words ("walakin", "mais")
+    const clipped = candidate.split(/\s+(?:walakin|mais|mais\s+ana|و\s*لكن)\b/i)[0].trim()
+    const city = resolveCityValue(clipped.split(/\s+/).slice(0, 3).join(' '))
+    if (city) return city
+  }
+  return null
+}
+
+function clipNameCandidate(value) {
+  let s = String(value || '').trim()
+  if (!s) return ''
+  const stop = s.search(
+    /\s+(?:3ando|3ndi|3andha|3endi|3endo|bghit|bgha|baghi|bagha|baghya|ydir|ndir|ndiro|kaydir|tabyid|tabyit|tbyid|blanch|appareil|apareil|kayn|mochkil|mochkel|darssa|darsa|derssa|drssa|rendez|rdv|w\s+khass|hta|howwa|howa\s+mn|و|موعد|عندو|عنده|عندها|ando|khassha|t7ayd|بغا|باغي|بغيت|يدير)\b/i,
+  )
+  if (stop > 0) s = s.slice(0, stop)
+  s = s.replace(/[,:;.\-–—]+$/g, '').trim()
+  s = s.replace(
+    /^(?:khoya|khti|marti|mra|zawji|fr[eè]re|soeur|sœur|femme|mari|fils|fille|enfant|mon|ma|son|sa)\s+/ig,
+    '',
+  ).trim()
+  return s
+}
+
+function extractIntroducedName(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return { full_name: null, name_incomplete: false }
+  // Speaker only — never smito/smitha (third-party).
+  const re = /(?:je m['’]appelle|mon nom(?: complet)?(?:\s+(?:est|c['’]est))?|moi c['’]est|c['’]est moi|smiti|smiyti|smiytiya|smiyiti|ismi|اسمي(?:\s+الكامل)?|سميتي|سميتيا|أنا\s+سميتي)\s+([\p{L}][\p{L}'’\-]{1,40}(?:\s+[\p{L}][\p{L}'’\-]{1,40}){0,4})/iu
+  const match = raw.match(re)
+  if (!match) return { full_name: null, name_incomplete: false }
+  let candidate = clipNameCandidate(match[1])
+  candidate = candidate.replace(/\s+(?:et|و|depuis|من|depuis hier)\b.*$/i, '').trim()
+  const full = validateFullName(candidate)
+  if (full) return { full_name: full, name_incomplete: false }
+  if (looksLikePartialFirstName(candidate)) {
+    return { full_name: null, name_incomplete: true }
+  }
+  return { full_name: null, name_incomplete: false }
+}
+
+/**
+ * Extract a third-party / target patient name from natural Darija / FR booking phrasing.
+ * Never returns a relation word ("khoya", "ma femme") as identity.
+ */
+function extractTargetPersonName(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return null
+
+  const patterns = [
+    /(?:smito|smiyto|smitou|smiytu|smiytou|smitha|smita|اسمو|سميتو|سميته|سميتها)\s+([\p{L}][\p{L}'’\-]{1,40}(?:\s+[\p{L}][\p{L}'’\-]{1,40}){1,3})/iu,
+    /(?:اسم(?:\s+الكامل)?\s+ديالو|الاسم\s+ديالو|السمية\s+ديالو)\s*[:\s]*([\p{L}][\p{L}'’\-]{1,40}(?:\s+[\p{L}][\p{L}'’\-]{1,40}){1,3})/iu,
+    /(?:rendez[- ]?vous|rdv|موعد)\s+(?:pour|l|li|لي)\s+([\p{L}][\p{L}'’\-]{1,40}(?:\s+[\p{L}][\p{L}'’\-]{1,40}){1,3})/iu,
+    /\bpour(?:\s+(?:mon|ma|son|sa)\s+(?:fr[eè]re|soeur|sœur|femme|mari|fils|fille|enfant))?\s+([\p{L}][\p{L}'’\-]{1,40}(?:\s+[\p{L}][\p{L}'’\-]{1,40}){1,3})/iu,
+    /\bbghit\s+(?:nakhod\s+)?(?:lih|liha)\s+(?:rendez[- ]?vous\s*|rdv\s*)?(?:,\s*)?(?:smito\s+)?([\p{L}][\p{L}'’\-]{1,40}(?:\s+[\p{L}][\p{L}'’\-]{1,40}){1,3})/iu,
+    /\bbghit\s+(?:nakhod\s+)?(?:rendez[- ]?vous|rdv)\s+l(?:ih|iha)?\s+([\p{L}][\p{L}'’\-]{1,40}(?:\s+[\p{L}][\p{L}'’\-]{1,40}){1,3})/iu,
+    /(?:khoya|khti|marti|mra|zawji)\s+(?:smito|smiyto|smiytu|smitha|smita)?\s*([\p{L}][\p{L}'’\-]{1,40}(?:\s+[\p{L}][\p{L}'’\-]{1,40}){1,3})/iu,
+  ]
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern)
+    if (!match?.[1]) continue
+    const clipped = clipNameCandidate(match[1])
+    const full = validateFullName(clipped)
+    if (full) return full
+  }
+
+  const introduced = extractIntroducedName(raw)
+  if (introduced.full_name) return introduced.full_name
+  return null
+}
+
+function detectClearedFields(text, extracted = {}) {
+  const n = normalizeText(text)
+  const cleared = {}
+  const deniesPhone = /\b(numero|telephone|tel|phone|رقم(?:\s*الهاتف)?).{0,28}(faux|fausse|pas bon|pas correct|incorrect|mauvais|غالط|ماشي صحيح)\b/.test(n)
+    || /\b(faux|incorrect).{0,16}(numero|telephone|رقم)\b/.test(n)
+  if (deniesPhone && !extracted.phone_number) cleared.phone_number = true
+
+  const deniesCity = /\b(ville|city|مدينة).{0,20}(fausse|pas (bonne|correcte)|faux|غالطة|ماشي صحيحة)\b/.test(n)
+  if (deniesCity && !extracted.city) cleared.city = true
+
+  const deniesName = /\b(nom(?: complet)?|اسم(?: الكامل)?).{0,20}(faux|pas (bon|correct)|غالط|ماشي صحيح)\b/.test(n)
+  if (deniesName && !extracted.full_name) cleared.full_name = true
+
+  const deniesProblem = /\b(probleme|motif|مشكل).{0,24}(faux|pas (bon|le bon)|غالط|ماشي)\b/.test(n)
+    && !extracted.problem
+  if (deniesProblem) cleared.problem = true
+
+  const deniesSlot = /\b(date|heure|creneau|jour|موعد|ساعة|نهار).{0,20}(fausse|faux|pas (bon|bonne|correct)|غالط|ماشي)\b/.test(n)
+  if (deniesSlot && !extracted.appointment_date && !extracted.appointment_time) {
+    cleared.appointment = true
+  }
+  return cleared
+}
+
 function emptyResult() {
   return {
     full_name: null,
@@ -436,6 +606,7 @@ function extractBulkBookingFields(text, options = {}) {
   const result = emptyResult()
   if (!raw) return result
 
+  const conservative = Boolean(options.conservative)
   const now = options.now || new Date()
   const lines = raw
     .split(/\r?\n|•|\u2022|;/)
@@ -522,15 +693,22 @@ function extractBulkBookingFields(text, options = {}) {
       }
     }
 
-    if (!result.city) {
-      const lineKey = normalizeText(line)
-      const knownCity = MOROCCAN_CITIES.some((city) => {
-        const cityKey = normalizeText(city)
-        return lineKey === cityKey || lineKey.includes(cityKey)
-      })
+    if (
+      !result.city
+      && !looksLikeClinicLocationQuestion(line)
+      && !isConfirmationYes(line)
+      && !isConfirmationNo(line)
+      && !isBookingIntent(line)
+    ) {
+      const personal = extractPersonalCity(line)
+      if (personal && !citiesNegatedInText(line).has(personal)) {
+        result.city = personal
+        continue
+      }
+      const knownCity = isKnownCityToken(line) || listMoroccanCityMentions(line).length > 0
       if ((knownCity || looksLikeCityLine(line)) && !looksLikeServiceText(line)) {
         const city = resolveCityValue(line)
-        if (city) {
+        if (city && !citiesNegatedInText(line).has(city)) {
           result.city = city
           continue
         }
@@ -544,26 +722,62 @@ function extractBulkBookingFields(text, options = {}) {
       continue
     }
 
-    if (!result.full_name) {
-      const name = validateFullName(line)
-      if (name && !looksLikeDateLine(line) && !extractPhone(line) && !looksLikeServiceText(line)) {
-        result.full_name = name
-        continue
-      }
-      if (looksLikePartialFirstName(line) && !looksLikeDateLine(line) && !extractPhone(line)) {
-        result.name_incomplete = true
+  if (!result.full_name) {
+    const name = validateFullName(line)
+    if (name && !looksLikeDateLine(line) && !extractPhone(line) && !looksLikeServiceText(line)) {
+      result.full_name = name
+      continue
+    }
+    if (looksLikePartialFirstName(line) && !looksLikeDateLine(line) && !extractPhone(line)) {
+      result.name_incomplete = true
+    }
+  }
+  }
+
+  if (!result.full_name) {
+    const introduced = extractIntroducedName(raw)
+    if (introduced.full_name) result.full_name = introduced.full_name
+    else if (introduced.name_incomplete) result.name_incomplete = true
+  }
+
+  if (!result.full_name) {
+    const targetName = extractTargetPersonName(raw)
+    if (targetName) result.full_name = targetName
+  }
+
+  const negated = citiesNegatedInText(raw)
+  if (looksLikeClinicLocationQuestion(raw) || (result.city && negated.has(result.city))) {
+    result.city = null
+  }
+
+  // Explicit patient self-location always wins over incidental city mentions (e.g. Casa).
+  const personalCity = extractPersonalCity(raw)
+  if (personalCity && !negated.has(personalCity) && !looksLikeClinicLocationQuestion(raw)) {
+    result.city = personalCity
+  }
+
+  if (!result.city) {
+    const allowWholeTextCity = !looksLikeClinicLocationQuestion(raw)
+      && !isBookingIntent(raw)
+      && !isConfirmationYes(raw)
+      && !isConfirmationNo(raw)
+      && (!conservative || patientStatesOwnCity(raw) || isStandaloneCityMessage(raw))
+    if (allowWholeTextCity) {
+      const mentions = listMoroccanCityMentions(raw)
+      for (const resolved of mentions) {
+        if (!negated.has(resolved)) {
+          result.city = resolved
+          break
+        }
       }
     }
   }
 
-  if (!result.city) {
-    for (const city of MOROCCAN_CITIES) {
-      const cityKey = normalizeText(city)
-      if (cityKey && normalizeText(raw).includes(cityKey)) {
-        result.city = CITY_ALIASES[cityKey] || CITY_ALIASES[city] || titleCaseName(city)
-        break
-      }
-    }
+  if (looksLikeAvailabilityProbe(raw)) {
+    result.appointment_date = null
+    result.appointment_time = null
+  } else if (conservative && result.appointment_date && !result.appointment_time) {
+    result.appointment_date = null
   }
 
   if (!result.problem) {
@@ -577,6 +791,13 @@ function extractBulkBookingFields(text, options = {}) {
 
   if (result.full_name && (looksLikeServiceText(result.full_name) || !validateFullName(result.full_name))) {
     result.full_name = null
+  }
+
+  if (isConfirmationYes(raw) || isConfirmationNo(raw)) {
+    if (!patientStatesOwnCity(raw) && !extractLabeledValue(raw, LABEL_CITY)) {
+      result.city = result.city && isKnownCityToken(result.city) ? result.city : null
+      if (result.city === 'Oui' || normalizeText(result.city) === 'oui') result.city = null
+    }
   }
 
   return result
@@ -611,14 +832,11 @@ function isBookingIntent(text, voiceIntent = null) {
 }
 
 function isConfirmationYes(text) {
-  const raw = String(text || '').trim()
-  // Exact summary template uses *OUI* (French keyword even in Arabic chats)
-  if (/^\*?oui\*?$/i.test(raw)) return true
-  return CONFIRM_YES.some((pattern) => pattern.test(raw))
+  return binaryYes(text, 'generic')
 }
 
 function isConfirmationNo(text) {
-  return CONFIRM_NO.some((pattern) => pattern.test(String(text || '').trim()))
+  return binaryNo(text, 'generic')
 }
 
 function extractCustomerSignals(text, options = {}) {
@@ -636,11 +854,13 @@ function extractCustomerSignals(text, options = {}) {
     booking_intent: isBookingIntent(text, options.voiceIntent),
     confirmation_yes: isConfirmationYes(text),
     confirmation_no: isConfirmationNo(text),
+    _cleared: detectClearedFields(text, bulk),
   }
 }
 
 module.exports = {
   validateFullName,
+  assessFullNameCandidate,
   looksLikePartialFirstName,
   extractFullName,
   extractCity,
@@ -650,10 +870,17 @@ module.exports = {
   extractAppointment,
   extractBulkBookingFields,
   extractCustomerSignals,
+  extractIntroducedName,
+  extractTargetPersonName,
+  detectClearedFields,
+  looksLikeClinicLocationQuestion,
+  looksLikeAvailabilityProbe,
+  extractPersonalCity,
   isBookingIntent,
   isConfirmationYes,
   isConfirmationNo,
   isOfficialService,
   MOROCCAN_CITIES,
+  resolveCityValue,
   WEEKDAY_ALIASES,
 }

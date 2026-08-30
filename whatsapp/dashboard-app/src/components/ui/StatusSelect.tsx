@@ -5,7 +5,7 @@ import { formatStatus, statusTone, cn } from '@/lib/format'
 import { Badge } from '@/components/ui/Badge'
 
 export const STATUS_OPTIONS = [
-  { value: 'non_confirme', label: 'En attente' },
+  { value: 'non_confirme', label: 'À confirmer' },
   { value: 'confirmed', label: 'Confirmé' },
   { value: 'cancelled', label: 'Annulé' },
 ] as const

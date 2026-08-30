@@ -14,10 +14,25 @@ const {
   updateVoiceNluLog,
   classifyIntent,
   routePatientMessage,
+  buildRouterLlmBlock,
 } = require('./voice-nlu')
+const {
+  shouldUseNluFallback,
+  clarificationMessage,
+} = require('./voice-nlu/nlu-fallback')
+const {
+  hasPriorityOverBooking,
+} = require('./crm/smart/conversation-routing')
 const { detectReplyLanguageHint } = require('./voice-nlu/language')
-const { createDashboardAuth } = require('./dashboard/auth')
+const { createDashboardAuth, SESSION_TTL_MS } = require('./dashboard/auth')
+const { createEnsureDashboardSession, assertPermission } = require('./dashboard/auth-middleware')
+const { PERMISSIONS } = require('./dashboard/permissions')
+const { createUserManagementRouter } = require('./dashboard/user-routes')
+const { createDashboardUsers } = require('./dashboard/users')
+const { createSmartCrmRouter } = require('./dashboard/smart-routes')
 const { createCrmService } = require('./crm')
+const { openCrmDatabase } = require('./crm/db')
+const { getAuthenticatedActor } = require('./crm/smart/activity-actors')
 
 const port = Number(process.env.PORT || 8081)
 const provider = (process.env.WHATSAPP_PROVIDER || 'custom').toLowerCase()
@@ -102,17 +117,18 @@ const aiHistoryPath = process.env.AI_HISTORY_PATH || path.join(process.cwd(), 's
 const dashboardDir = path.join(__dirname, 'dashboard')
 const dashboardAuthPath = process.env.DASHBOARD_AUTH_PATH
   || path.join(process.cwd(), 'storage', 'dashboard-auth.json')
-const dashboardAuth = createDashboardAuth(dashboardAuthPath)
 const crmEnabled = parseBoolean(process.env.CRM_ENABLED, true)
 const crmDbPath = process.env.CRM_DB_PATH || path.join(process.cwd(), 'storage', 'crm.sqlite')
 const crmStaffNotifyChatId = String(process.env.CRM_STAFF_NOTIFY_CHAT_ID || '').trim()
-const crm = crmEnabled ? createCrmService({ dbPath: crmDbPath }) : null
 const waAutoStart = parseBoolean(process.env.WA_AUTO_START, true)
 const waSessionPath = process.env.WA_SESSION_PATH || path.join(process.cwd(), 'storage', 'wa-auth')
 const qrWaitMs = Number(process.env.WA_QR_WAIT_MS || 7000)
 const mediaTmpDir = process.env.WA_MEDIA_TMP_DIR || path.join(os.tmpdir(), 'iadis-wa-media')
 const mediaMaxBytes = Number(process.env.WA_MEDIA_MAX_BYTES || 15 * 1024 * 1024)
 const outboundMediaMaxBytes = Number(process.env.WA_OUTBOUND_MEDIA_MAX_BYTES || Math.max(mediaMaxBytes, 64 * 1024 * 1024))
+const dashboardImageMaxBytes = Number(process.env.DASHBOARD_IMAGE_MAX_BYTES || 10 * 1024 * 1024)
+const crmMediaDir = process.env.CRM_MEDIA_DIR || path.join(process.cwd(), 'storage', 'media')
+const allowedDashboardImageMimes = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp'])
 const outboundMediaDownloadTimeoutMs = Number(process.env.WA_OUTBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS || Math.max(requestTimeout, 120000))
 const mediaIngestTimeoutMs = Number(process.env.WA_ODOO_INGEST_TIMEOUT_MS || 180000)
 const reconnectDelayMs = Number(process.env.WA_RECONNECT_DELAY_MS || 5000)
@@ -154,6 +170,7 @@ if (!backendEnabled && !openAiApiKey) {
 
 fs.mkdirSync(waSessionPath, { recursive: true })
 fs.mkdirSync(mediaTmpDir, { recursive: true })
+fs.mkdirSync(crmMediaDir, { recursive: true })
 fs.mkdirSync(path.dirname(automationStatePath), { recursive: true })
 fs.mkdirSync(path.dirname(aiHistoryPath), { recursive: true })
 if (aiVoiceNluEnabled) {
@@ -178,6 +195,29 @@ try {
 const instances = new Map()
 const automationState = loadAutomationState()
 const aiConversationHistory = loadAiConversationHistory()
+/** @type {Record<string, number>} */
+const nluUnclearCounts = Object.create(null)
+
+function bumpNluUnclearCount(key) {
+  const k = String(key || '').trim()
+  if (!k) return 1
+  nluUnclearCounts[k] = Number(nluUnclearCounts[k] || 0) + 1
+  return nluUnclearCounts[k]
+}
+
+function resetNluUnclearCount(key) {
+  const k = String(key || '').trim()
+  if (k) delete nluUnclearCounts[k]
+}
+
+function isActiveCrmDeterministicWorkflow(lead) {
+  if (!lead) return false
+  const stage = String(lead.stage || '')
+  return stage === 'awaiting_form'
+    || stage === 'confirmation'
+    || stage === 'crm_collection'
+    || stage === 'awaiting_patient'
+}
 const aiConversationQueues = new Map()
 const aiKnowledgeBase = loadAiKnowledgeBase()
 const openAiInstructions = buildOpenAiInstructions()
@@ -189,6 +229,34 @@ const openAiClient = openAiApiKey
       maxRetries: 2,
     })
   : null
+
+const crm = crmEnabled ? createCrmService({
+  dbPath: crmDbPath,
+  ai: openAiApiKey && openAiClient
+    ? { openAiClient, openAiModel }
+    : null,
+}) : null
+
+const dashboardDb = crm?.db || openCrmDatabase(crmDbPath)
+const dashboardUsers = createDashboardUsers(dashboardDb, dashboardAuthPath)
+const dashboardAuth = createDashboardAuth({
+  users: dashboardUsers,
+  getSessionTtlMs: () => (crm?.smart?.getSessionTtlMs ? crm.smart.getSessionTtlMs() : SESSION_TTL_MS),
+})
+const ensureDashboardSession = createEnsureDashboardSession(dashboardAuth, dashboardUsers)
+
+if (crm?.smart?.setAppointmentConfirmationSender) {
+  crm.smart.setAppointmentConfirmationSender(async ({ chatId, phone, text }) => {
+    const record = getInstance('main') || ensureInstance('main')
+    const state = String(record?.state || '').toLowerCase()
+    if (!record?.client || (state !== 'ready' && state !== 'authenticated')) {
+      const err = new Error(`WhatsApp instance not ready (${record?.state || 'missing'})`)
+      err.code = 'WA_NOT_READY'
+      throw err
+    }
+    return sendTextThroughInstance(record, phone || chatId, text, chatId || null)
+  })
+}
 
 const apiClient = axios.create({
   baseURL: apiBaseUrl,
@@ -255,16 +323,20 @@ function buildLanguageDirective(languageHint, options = {}) {
   const voicePrefix = isVoice
     ? 'This turn is a WhatsApp VOICE NOTE transcription. Answer the patient question from that voice note.'
     : 'This turn is a normal WhatsApp text message.'
+  const activeNote = options.fromConversationMemory
+    ? 'Use the CONVERSATION ACTIVE LANGUAGE below (stable memory). Do NOT switch based only on this single latest message.'
+    : 'Follow the language rule for this turn.'
 
   if (languageHint === 'darija') {
     return [
       voicePrefix,
+      activeNote,
+      'CONVERSATION ACTIVE LANGUAGE: Moroccan Darija.',
       'ABSOLUTE LANGUAGE RULE (highest priority, never ignore):',
-      'The patient used Moroccan Darija (Arabic script, Latin keyboard like bghit/3andi/wach/chno, OR mixed with French loanwords).',
       'Reply EXCLUSIVELY in Arabic script (دارجة/عربية).',
       'NEVER reply in French.',
       'NEVER reply in Latin-letter Darija (forbidden: "bghit", "labas", "safi", "wach", etc.).',
-      'Do not keep French from earlier turns.',
+      'Do not keep French from earlier turns unless active language is French.',
       'Answer the concrete question/request in this latest message.',
     ].join(' ')
   }
@@ -272,10 +344,11 @@ function buildLanguageDirective(languageHint, options = {}) {
   if (languageHint === 'fr') {
     return [
       voicePrefix,
+      activeNote,
+      'CONVERSATION ACTIVE LANGUAGE: French.',
       'ABSOLUTE LANGUAGE RULE (highest priority, never ignore):',
-      'The patient message is entirely or mostly French.',
       'Reply EXCLUSIVELY in French.',
-      'Do NOT reply in Arabic/Darija, even if earlier turns used Darija.',
+      'Do NOT reply in Arabic/Darija.',
       'Answer the concrete question/request in this latest message.',
     ].join(' ')
   }
@@ -596,7 +669,7 @@ async function enrichBookingMotifWithAi(booking) {
 async function generateStandaloneAiReply(conversationId, rawContent, options = {}) {
   const key = String(conversationId || '').trim()
   const content = String(rawContent || '').trim().slice(0, aiMaxInputCharacters)
-  if (!key || !content) {
+  if (!key || (!content && !options.mediaPath)) {
     return { reply: null, reason: 'empty_input' }
   }
 
@@ -612,11 +685,76 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
     }
   }
 
-  if (!openAiApiKey) {
-    return { reply: null, reason: 'openai_not_configured' }
+  const isVoiceEarly = Boolean(options.isVoice || options.audioTranscript || options.voiceNlu || /\[Message vocal/i.test(content))
+  const inboundPersistText = stripVoiceTranscriptPrefix(
+    options.voiceNlu?.correctedText || options.audioTranscript || content,
+  ).trim() || (options.mediaPath ? '' : content)
+
+  // ALWAYS persist inbound first — even when HUMAN owns the conversation.
+  // Human handoff must silence AI replies, never stop listening / storing.
+  if (crm?.smart) {
+    try {
+      crm.smart.trackWhatsAppTurn({
+        chatId: options.chatId || key,
+        conversationId: key,
+        customerId: options.customerId || null,
+        inboundText: inboundPersistText,
+        inboundMessageId: options.providerMessageId || null,
+        inboundType: options.inboundMediaType
+          || (options.mediaPath ? 'image' : (isVoiceEarly ? 'voice' : 'text')),
+        contactName: options.contactName || null,
+        phoneNumber: options.phoneNumber || null,
+        mediaPath: options.mediaPath || null,
+        mediaMime: options.mediaMime || null,
+        mediaFilename: options.mediaFilename || null,
+        mediaSize: options.mediaSize || null,
+      })
+    } catch (trackError) {
+      console.warn('[iadis-wa] smart inbound track failed', trackError.message || trackError)
+    }
   }
 
+  // Language memory + reply share the per-conversation queue (race-safe).
+  // HUMAN mode still updates language; it only skips AI replies.
   return enqueueAiConversation(key, async () => {
+    let languageState = null
+    if (crm?.smart?.applyInboundLanguage) {
+      try {
+        languageState = crm.smart.applyInboundLanguage({
+          chatId: options.chatId || key,
+          conversationId: key,
+          text: inboundPersistText,
+          isVoice: isVoiceEarly,
+        })
+      } catch (langError) {
+        console.warn('[iadis-wa] language memory update failed', langError.message || langError)
+      }
+    }
+
+    const activeLanguage = languageState?.responseLanguage
+      || languageState?.activeLanguage
+      || crm?.smart?.getActiveConversationLanguage?.(options.chatId || key)
+      || crm?.smart?.getActiveConversationLanguage?.(key)
+      || null
+
+    if (!openAiApiKey) {
+      return { reply: null, reason: 'openai_not_configured', language_hint: activeLanguage }
+    }
+
+    if (crm?.smart && !crm.smart.canAiAutoReply(key) && !crm.smart.canAiAutoReply(options.chatId || key)) {
+      console.log('[iadis-wa] AI auto-reply blocked (handoff or assistant paused)', {
+        conversation_id: key,
+        chat_id: options.chatId || null,
+        active_language: activeLanguage,
+      })
+      return {
+        reply: null,
+        reason: 'human_handoff_or_assistant_paused',
+        language_hint: activeLanguage,
+        language_switched: Boolean(languageState?.switched),
+      }
+    }
+
     const history = Array.isArray(aiConversationHistory[key])
       ? aiConversationHistory[key].slice(-aiHistoryLimit)
       : []
@@ -627,33 +765,359 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
     )
     const patientPlainText = (isVoice && cleanPatientText ? cleanPatientText : content).trim()
 
-    // ── Intent Router (BEFORE CRM + LLM) ──────────────────────────────
-    // Message → language → intent → service → structured route
+    // Intent router: detect message signals for intent/service.
+    // Reply language comes from conversation active language memory.
     const router = routePatientMessage(patientPlainText, {
-      languageHint: normalizeReplyLanguageHint(
-        options.languageHint || voiceNlu?.replyLanguageHint || null,
-      ),
+      languageHint: null,
       voiceIntent: voiceNlu?.intent || options.voiceIntent || null,
       interpreterIntent: voiceNlu?.interpreter?.intent || null,
       voiceService: voiceNlu?.serviceDetection || options.voiceService || null,
     })
-    const languageHint = router.language || detectUserLanguageHint(patientPlainText)
-    const languageDirective = buildLanguageDirective(languageHint, { isVoice })
+
+    const languageHint = activeLanguage
+      || normalizeReplyLanguageHint(options.languageHint)
+      || router.language
+      || detectUserLanguageHint(patientPlainText)
+      || 'fr'
+
+    router.language = (languageHint === 'darija' || languageHint === 'ar')
+      ? 'darija'
+      : (languageHint === 'fr' ? 'fr' : router.language)
+    router.llmBlock = buildRouterLlmBlock(router)
+
+    const languageDirective = buildLanguageDirective(languageHint, {
+      isVoice,
+      fromConversationMemory: Boolean(activeLanguage),
+    })
 
     console.log('[iadis-wa] intent router', {
       conversation_id: key,
       language: router.language,
+      detected_language: languageState?.detection?.language || null,
+      active_language: activeLanguage,
+      language_switched: Boolean(languageState?.switched),
       intent: router.intent,
       intent_confidence: router.intentConfidence,
       service: router.service,
       service_confidence: router.serviceConfidence,
+      dental_problem: router.dentalProblem,
+      dental_problem_confidence: router.dentalProblemConfidence,
       book_appointment: router.bookAppointment,
+      cancel_appointment: router.cancelAppointment,
     })
+
+    try {
+      if (crm?.smart?.recordActivity) {
+        const conv = crm.smart.getOrCreateConversation?.({
+          external_key: options.chatId || key,
+          phone_number: options.phoneNumber || null,
+          push_name: options.contactName || null,
+        })
+        const convId = conv?.id || null
+        const customerId = conv?.customer_id || null
+
+        if (isVoice && cleanPatientText) {
+          crm.smart.recordActivity({
+            event_type: 'voice_transcribed',
+            category: 'assistant',
+            actor_type: 'ai',
+            source: 'whatsapp',
+            conversation_id: convId,
+            patient_id: customerId,
+            title: 'Message vocal transcrit',
+            description: cleanPatientText.slice(0, 180),
+            metadata: {
+              language: router.language,
+              intent: router.intent,
+              intent_label: router.intent,
+            },
+            source_event_id: `voice:${convId}:${Date.now()}`,
+          })
+        }
+
+        if (
+          router.dentalProblem
+          && router.dentalProblem !== 'UNKNOWN_DENTAL_PROBLEM'
+          && Number(router.dentalProblemConfidence || 0) >= 0.8
+        ) {
+          const problemLabels = {
+            BLEEDING_GUMS: 'Saignement des gencives',
+            TARTAR: 'Tartre',
+            CAVITY: 'Carie mentionnée',
+            YELLOW_TEETH: 'Dents jaunes',
+            OVERLAPPING_TEETH: 'Dents qui se chevauchent',
+            GAPS_BETWEEN_TEETH: 'Espaces entre les dents',
+            GUM_PAIN: 'Douleur aux gencives',
+            EMERGENCY_REQUEST: 'Urgence exprimée',
+          }
+          crm.smart.recordActivity({
+            event_type: 'dental_problem_detected',
+            category: 'assistant',
+            actor_type: 'ai',
+            source: 'whatsapp',
+            conversation_id: convId,
+            patient_id: customerId,
+            title: 'Problème dentaire détecté',
+            description: 'Classification de la demande exprimée (sans diagnostic).',
+            metadata: {
+              problem: router.dentalProblem,
+              problem_label: problemLabels[router.dentalProblem] || router.dentalProblem,
+              service: router.service,
+              confidence: router.dentalProblemConfidence,
+            },
+            source_event_id: `dental:${convId}:${router.dentalProblem}:${Math.floor(Date.now() / 60000)}`,
+          })
+        }
+
+        if (router.intent && router.intent !== 'OTHER' && Number(router.intentConfidence || 0) >= 0.85) {
+          const { intentLabel } = require('./crm/smart/labels')
+          crm.smart.recordActivity({
+            event_type: 'intent_detected',
+            category: 'assistant',
+            actor_type: 'ai',
+            source: 'whatsapp',
+            conversation_id: convId,
+            patient_id: customerId,
+            title: 'Intention détectée',
+            description: intentLabel(router.intent),
+            metadata: { intent: router.intent, confidence: router.intentConfidence },
+            source_event_id: `intent:${convId}:${router.intent}:${Math.floor(Date.now() / 300000)}`,
+          })
+        }
+      }
+    } catch (activityErr) {
+      console.warn('[iadis-wa] activity history log failed', activityErr?.message || activityErr)
+    }
+
+    // Context-first routing — load structured state before deterministic workflows
+    let routingState = null
+    if (crm?.smart?.resolveConversationRouting) {
+      try {
+        routingState = crm.smart.resolveConversationRouting(options.chatId || key)
+        crm.smart.logContextRouter?.(routingState, patientPlainText, 'loaded')
+      } catch (routingErr) {
+        console.warn('[iadis-wa] conversation routing load failed', routingErr.message || routingErr)
+      }
+    }
+
+    // Patient self-cancel (pending confirm / select first) — before proposal & 24h confirmation OUI
+    let cancelTurn = null
+    if (crm?.smart?.handleInboundCancel && !isVoice) {
+      try {
+        const leadPeekCancel = crm.repo.getLead?.(key) || null
+        const inBookingConfirmCancel = leadPeekCancel?.stage === 'confirmation'
+        if (!inBookingConfirmCancel) {
+          cancelTurn = await crm.smart.handleInboundCancel({
+            chatKey: options.chatId || key,
+            text: patientPlainText,
+            language: languageHint === 'darija' || languageHint === 'ar' ? 'darija' : 'fr',
+            routerIntent: router.intent,
+            conversation: null,
+          })
+        }
+      } catch (error) {
+        console.warn('[iadis-wa] whatsapp cancel flow failed', error.message || error)
+      }
+    }
+
+    if (cancelTurn?.handled && cancelTurn.forceReply) {
+      try {
+        crm.smart?.trackWhatsAppTurn?.({
+          chatId: options.chatId || key,
+          conversationId: key,
+          outboundText: cancelTurn.forceReply,
+          outboundAuthor: 'ai',
+          contactName: options.contactName || null,
+        })
+      } catch (trackError) {
+        console.warn('[iadis-wa] smart track failed', trackError.message || trackError)
+      }
+      setAiConversationHistory(key, [
+        ...history,
+        { role: 'user', content: isVoice && cleanPatientText ? `[vocal] ${cleanPatientText}` : content },
+        { role: 'assistant', content: cancelTurn.forceReply },
+      ])
+      return {
+        reply: cancelTurn.forceReply,
+        reason: cancelTurn.action === 'cancelled'
+          ? 'appointment_patient_cancelled'
+          : (cancelTurn.action === 'kept' || cancelTurn.action === 'aborted'
+            ? 'appointment_cancel_aborted'
+            : 'appointment_cancel_flow'),
+        model: openAiModel,
+        language_hint: languageHint,
+        is_voice: isVoice,
+        intent: router.intent || 'CANCEL_APPOINTMENT',
+        appointment_id: cancelTurn.appointmentId || null,
+        should_skip_llm: true,
+        router,
+      }
+    }
+
+    // Manual slot-move proposal reply (staff-sent) — before 24h confirmation OUI
+    let slotProposalTurn = null
+    if (crm?.smart?.handleInboundSlotProposalReply && !isVoice) {
+      try {
+        const leadPeek = crm.repo.getLead?.(key) || null
+        const inBookingConfirm = leadPeek?.stage === 'confirmation'
+        if (!inBookingConfirm) {
+          slotProposalTurn = await crm.smart.handleInboundSlotProposalReply({
+            chatKey: options.chatId || key,
+            text: patientPlainText,
+          })
+        }
+      } catch (error) {
+        console.warn('[iadis-wa] slot proposal reply failed', error.message || error)
+      }
+    }
+
+    if (slotProposalTurn?.handled && slotProposalTurn.forceReply) {
+      try {
+        crm.smart?.trackWhatsAppTurn?.({
+          chatId: options.chatId || key,
+          conversationId: key,
+          outboundText: slotProposalTurn.forceReply,
+          outboundAuthor: 'ai',
+          contactName: options.contactName || null,
+        })
+      } catch (trackError) {
+        console.warn('[iadis-wa] smart track failed', trackError.message || trackError)
+      }
+      setAiConversationHistory(key, [
+        ...history,
+        { role: 'user', content: isVoice && cleanPatientText ? `[vocal] ${cleanPatientText}` : content },
+        { role: 'assistant', content: slotProposalTurn.forceReply },
+      ])
+      return {
+        reply: slotProposalTurn.forceReply,
+        reason: slotProposalTurn.action === 'declined'
+          ? 'slot_proposal_declined'
+          : (slotProposalTurn.action === 'accepted' ? 'slot_proposal_accepted' : 'slot_proposal_reply'),
+        model: openAiModel,
+        language_hint: languageHint,
+        is_voice: isVoice,
+        intent: router.intent,
+        appointment_id: slotProposalTurn.appointmentId || null,
+        router,
+      }
+    }
+
+    // Appointment confirmation reply (24h WhatsApp) — only if NOT booking-form confirmation
+    let confirmationTurn = null
+    if (crm?.smart?.handleInboundConfirmationReply && !isVoice) {
+      try {
+        const leadPeek = crm.repo.getLead?.(key) || null
+        const inBookingConfirm = leadPeek?.stage === 'confirmation'
+        if (!inBookingConfirm) {
+          confirmationTurn = await crm.smart.handleInboundConfirmationReply({
+            chatKey: options.chatId || key,
+            text: patientPlainText,
+          })
+        }
+      } catch (error) {
+        console.warn('[iadis-wa] appointment confirmation reply failed', error.message || error)
+      }
+    }
+
+    if (confirmationTurn?.handled && confirmationTurn.forceReply) {
+      // Short automation templates (not free-form LLM) — allowed even under handoff
+      try {
+        crm.smart?.trackWhatsAppTurn?.({
+          chatId: options.chatId || key,
+          conversationId: key,
+          outboundText: confirmationTurn.forceReply,
+          outboundAuthor: 'ai',
+          contactName: options.contactName || null,
+        })
+      } catch (trackError) {
+        console.warn('[iadis-wa] smart track failed', trackError.message || trackError)
+      }
+      setAiConversationHistory(key, [
+        ...history,
+        { role: 'user', content: isVoice && cleanPatientText ? `[vocal] ${cleanPatientText}` : content },
+        { role: 'assistant', content: confirmationTurn.forceReply },
+      ])
+      return {
+        reply: confirmationTurn.forceReply,
+        reason: confirmationTurn.action === 'cancelled'
+          ? 'appointment_auto_cancelled'
+          : 'appointment_auto_confirmed',
+        model: openAiModel,
+        language_hint: languageHint,
+        is_voice: isVoice,
+        intent: router.intent,
+        intent_confidence: router.intentConfidence,
+        service: router.service,
+        appointment_id: confirmationTurn.appointmentId || null,
+        router,
+      }
+    }
+
+    // NLU fallback — gibberish / low confidence must NOT start booking or LLM form collection
+    const leadPeekFallback = crm?.repo?.getLead?.(key) || null
+    const inCrmWorkflow = isActiveCrmDeterministicWorkflow(leadPeekFallback)
+      && !hasPriorityOverBooking(routingState)
+    const fallbackLang = languageHint === 'darija' || languageHint === 'ar' ? 'darija' : 'fr'
+
+    const needsContextualFallback = !isVoice && (
+      shouldUseNluFallback(router, patientPlainText)
+      || (routingState?.activeWorkflow && routingState.activeWorkflow !== 'booking')
+    )
+
+    if (needsContextualFallback && !inCrmWorkflow && !slotProposalTurn?.handled && !cancelTurn?.handled) {
+      const attempt = bumpNluUnclearCount(key)
+      const fallbackReply = routingState?.activeWorkflow
+        ? (crm.smart?.contextualClarificationMessage?.(routingState, fallbackLang, attempt)
+          || clarificationMessage(fallbackLang, attempt))
+        : clarificationMessage(fallbackLang, attempt)
+      if (process.env.CRM_DEBUG_NLU === '1' || process.env.CRM_DEBUG_CONTEXT === '1' || process.env.NODE_ENV !== 'production') {
+        console.log('[NLU_FALLBACK]', {
+          text: patientPlainText,
+          intent: router.intent,
+          confidence: router.intentConfidence,
+          action: 'clarification',
+          activeWorkflow: routingState?.activeWorkflow || null,
+          attempt,
+        })
+        crm.smart?.logContextRouter?.(routingState, patientPlainText, 'contextual_clarification')
+      }
+      try {
+        crm.smart?.trackWhatsAppTurn?.({
+          chatId: options.chatId || key,
+          conversationId: key,
+          outboundText: fallbackReply,
+          outboundAuthor: 'ai',
+          contactName: options.contactName || null,
+        })
+      } catch (trackError) {
+        console.warn('[iadis-wa] smart track failed', trackError.message || trackError)
+      }
+      setAiConversationHistory(key, [
+        ...history,
+        { role: 'user', content: content },
+        { role: 'assistant', content: fallbackReply },
+      ])
+      return {
+        reply: fallbackReply,
+        reason: 'nlu_fallback_clarification',
+        model: openAiModel,
+        language_hint: languageHint,
+        is_voice: isVoice,
+        intent: router.intent || 'UNKNOWN',
+        intent_confidence: router.intentConfidence,
+        should_skip_llm: true,
+        router,
+      }
+    }
+
+    if (!shouldUseNluFallback(router, patientPlainText)) {
+      resetNluUnclearCount(key)
+    }
 
     let crmTurn = null
     if (crm) {
       try {
-        crmTurn = crm.processCrmTurn({
+        crmTurn = await crm.processCrmTurn({
           conversationId: key,
           chatId: options.chatId || null,
           phoneDigits: options.phoneDigits || options.phoneNumber || null,
@@ -682,6 +1146,7 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
             })(),
           languageHint,
           router,
+          routingState,
         })
       } catch (error) {
         console.error('[iadis-wa] CRM turn failed', {
@@ -691,39 +1156,66 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       }
     }
 
-    // Exact CRM templates (formulaire 1 message / résumé / confirmation) — never rewrite with AI.
-    if (crmTurn?.shouldSkipLlm && crmTurn.forceReply) {
+    // Exact CRM templates — never rewrite with AI.
+    const crmReplies = Array.isArray(crmTurn?.forceReplies) && crmTurn.forceReplies.length
+      ? crmTurn.forceReplies.map((item) => String(item || '').trim()).filter(Boolean)
+      : (crmTurn?.shouldSkipLlm && crmTurn.forceReply ? [String(crmTurn.forceReply).trim()] : [])
+    if (crmTurn?.shouldSkipLlm && crmReplies.length) {
+      if (crmTurn.conversationReset) {
+        setAiConversationHistory(key, [])
+        try {
+          resetNluUnclearCount(key)
+        } catch { /* optional */ }
+      }
+      if (crm?.smart && !crm.smart.canAiAutoReply(key) && !crm.smart.canAiAutoReply(options.chatId || key)) {
+        return { reply: null, reason: 'human_handoff_or_assistant_paused' }
+      }
       const historyUserContent = isVoice && cleanPatientText
         ? `[vocal] ${cleanPatientText}`
         : content
       if (crm) {
-        crm.repo.logConversation({
-          conversation_id: key,
-          whatsapp_chat_id: options.chatId || null,
-          customer_id: crmTurn.booking?.customer?.id || null,
-          direction: 'outbound',
-          message_text: crmTurn.forceReply,
-          extracted: {
-            ...(crmTurn.extracted || {}),
-            router,
-          },
-          appointment_status: crmTurn.lead?.stage || null,
-        })
+        for (const outboundText of crmReplies) {
+          crm.repo.logConversation({
+            conversation_id: key,
+            whatsapp_chat_id: options.chatId || null,
+            customer_id: crmTurn.booking?.customer?.id || null,
+            direction: 'outbound',
+            message_text: outboundText,
+            extracted: {
+              ...(crmTurn.extracted || {}),
+              router,
+            },
+            appointment_status: crmTurn.lead?.stage || null,
+          })
+          try {
+            crm.smart?.trackWhatsAppTurn?.({
+              chatId: options.chatId || key,
+              conversationId: key,
+              customerId: crmTurn.booking?.customer?.id || null,
+              language: languageHint === 'darija' || languageHint === 'ar' ? 'darija' : 'fr',
+              outboundText,
+              outboundAuthor: 'ai',
+              contactName: options.contactName || null,
+            })
+          } catch (trackError) {
+            console.warn('[iadis-wa] smart track failed', trackError.message || trackError)
+          }
+        }
       }
       if (crmTurn.booking) {
         void enrichBookingMotifWithAi(crmTurn.booking)
-        // After RDV validation: forget the whole chat memory for a fresh next booking
         setAiConversationHistory(key, [])
         console.log('[iadis-wa] conversation memory cleared after booking', { conversation_id: key })
       } else {
         setAiConversationHistory(key, [
           ...history,
           { role: 'user', content: historyUserContent },
-          { role: 'assistant', content: crmTurn.forceReply },
+          ...crmReplies.map((outboundText) => ({ role: 'assistant', content: outboundText })),
         ])
       }
       return {
-        reply: crmTurn.forceReply,
+        reply: crmReplies[0],
+        extraReplies: crmReplies.slice(1),
         reason: crmTurn.booking ? 'crm_booking_confirmed' : 'crm_workflow',
         model: openAiModel,
         language_hint: languageHint,
@@ -784,6 +1276,14 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       throw error
     }
 
+    // Final guard — never send AI reply if human took over during OpenAI generation
+    if (crm?.smart && !crm.smart.canAiAutoReply(key) && !crm.smart.canAiAutoReply(options.chatId || key)) {
+      console.log('[iadis-wa] AI reply discarded after generation (human control)', {
+        conversation_id: key,
+      })
+      return { reply: null, reason: 'human_handoff_or_assistant_paused' }
+    }
+
     const historyUserContent = isVoice && cleanPatientText
       ? `[vocal] ${cleanPatientText}`
       : content
@@ -798,11 +1298,23 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
         extracted: crmTurn?.extracted || null,
         appointment_status: crmTurn?.lead?.stage || null,
       })
+      try {
+        crm.smart?.trackWhatsAppTurn?.({
+          chatId: options.chatId || key,
+          conversationId: key,
+          customerId: crmTurn?.booking?.customer?.id || null,
+          language: languageHint === 'darija' || languageHint === 'ar' ? 'darija' : 'fr',
+          outboundText: reply,
+          outboundAuthor: 'ai',
+          contactName: options.contactName || null,
+        })
+      } catch (trackError) {
+        console.warn('[iadis-wa] smart track failed', trackError.message || trackError)
+      }
     }
 
     if (crmTurn?.booking) {
       void enrichBookingMotifWithAi(crmTurn.booking)
-      // After RDV validation: forget the whole chat memory for a fresh next booking
       setAiConversationHistory(key, [])
       console.log('[iadis-wa] conversation memory cleared after booking', { conversation_id: key })
     } else {
@@ -853,9 +1365,22 @@ async function getStandaloneIncomingDecision(normalizedPayload, context = {}) {
       languageHint: meta.reply_language_hint || meta.voice_nlu?.replyLanguageHint || null,
       voiceNlu: meta.voice_nlu || null,
       chatId: meta.chat_id || null,
-      phoneDigits: normalizePhone(normalizedPayload?.from || meta.participant_phone || meta.chat_id || ''),
-      phoneNumber: coerceIncomingPhone(normalizedPayload?.from || ''),
+      phoneDigits: normalizePhone(
+        meta.contact_phone
+        || (isLidChatId(normalizedPayload?.from) ? '' : normalizedPayload?.from)
+        || meta.participant_phone
+        || '',
+      ),
+      phoneNumber: meta.contact_phone
+        || coerceIncomingPhone(isLidChatId(normalizedPayload?.from) ? '' : (normalizedPayload?.from || '')),
       voiceIntent: meta.voice_nlu?.intent || null,
+      providerMessageId: normalizedPayload?.provider_message_id || null,
+      contactName: normalizedPayload?.contact_name || null,
+      mediaPath: meta.crm_media?.media_path || null,
+      mediaMime: meta.crm_media?.media_mime || null,
+      mediaFilename: meta.crm_media?.media_filename || null,
+      mediaSize: meta.crm_media?.media_size || null,
+      inboundMediaType: meta.crm_media?.message_type || null,
     })
     return {
       conversation: null,
@@ -985,15 +1510,6 @@ function ensureInternalToken(req, res, next) {
   return next()
 }
 
-function ensureDashboardSession(req, res, next) {
-  const token = req.header('x-dashboard-token') || ''
-  const session = dashboardAuth.getSession(token)
-  if (!session) {
-    return res.status(401).json({ ok: false, error: 'Authentification requise' })
-  }
-  req.dashboardSession = session
-  return next()
-}
 
 async function notifyCrmStaffBooking(record, booking) {
   if (!crm || !booking?.staffNotification) {
@@ -1224,15 +1740,29 @@ function normalizeInstanceId(value) {
   return normalized || 'main'
 }
 
+function isLidChatId(value) {
+  return String(value || '').toLowerCase().includes('@lid')
+}
+
 function normalizePhone(value) {
   const raw = String(value || '').trim()
   if (!raw) {
     return ''
   }
 
+  // WhatsApp LID is NOT a phone number — never extract digits as MSISDN
+  if (isLidChatId(raw)) {
+    return ''
+  }
+
   const withoutPrefix = raw.replace(/^whatsapp:/i, '')
 
   if (withoutPrefix.includes('@')) {
+    const lower = withoutPrefix.toLowerCase()
+    // Only treat @c.us / @s.whatsapp.net as telephone JIDs
+    if (!lower.includes('@c.us') && !lower.includes('@s.whatsapp.net')) {
+      return ''
+    }
     const beforeAt = withoutPrefix.split('@')[0] || ''
     const beforeDeviceSuffix = beforeAt.split(':')[0] || beforeAt
     const digitsFromJid = beforeDeviceSuffix.replace(/\D+/g, '')
@@ -1246,9 +1776,12 @@ function normalizePhone(value) {
 }
 
 function coerceIncomingPhone(value) {
+  if (isLidChatId(value)) {
+    return ''
+  }
   const digits = normalizePhone(value)
   if (!digits) {
-    return String(value || '').trim()
+    return ''
   }
 
   return `+${digits}`
@@ -1269,9 +1802,17 @@ function resolveInboundConversationKey(chatId, senderId, groupChat) {
     return fallback ? `group:${fallback}` : ''
   }
 
-  const senderDigits = normalizePhone(senderId || chatId)
+  const rawChat = String(chatId || '').trim()
+  const rawSender = String(senderId || chatId || '').trim()
+
+  // Keep @lid as technical conversation key — never invent +digits from LID
+  if (isLidChatId(rawChat) || isLidChatId(rawSender)) {
+    return rawChat.includes('@') ? rawChat : rawSender
+  }
+
+  const senderDigits = normalizePhone(rawSender)
   if (!senderDigits) {
-    return ''
+    return rawChat.includes('@') ? rawChat : ''
   }
 
   return `+${senderDigits}`
@@ -1481,6 +2022,50 @@ function isAudioMedia(media, messageType = '') {
 
   const mime = String(media?.mimeType || '').toLowerCase()
   return mime.startsWith('audio/')
+}
+
+function isImageMedia(media, messageType = '') {
+  const type = String(messageType || '').toLowerCase()
+  if (type === 'image' || type === 'sticker') return true
+  const mime = String(media?.mimeType || media?.mimetype || '').toLowerCase()
+  return mime.startsWith('image/')
+}
+
+/**
+ * Copy inbound/outbound media into durable CRM storage (not tmp).
+ * Returns relative path under storage/media for DB reference.
+ */
+function persistCrmMediaFile(sourcePath, {
+  conversationKey = 'unknown',
+  filename = 'image.jpg',
+  mimeType = 'image/jpeg',
+} = {}) {
+  const src = String(sourcePath || '').trim()
+  if (!src || !fs.existsSync(src)) return null
+
+  const safeKey = String(conversationKey || 'unknown')
+    .replace(/[^a-zA-Z0-9@._-]+/g, '_')
+    .slice(0, 80) || 'unknown'
+  const dir = path.join(crmMediaDir, safeKey)
+  fs.mkdirSync(dir, { recursive: true })
+
+  const ext = extensionFromMimeType(mimeType) || path.extname(filename) || '.jpg'
+  const safeName = sanitizeFilename(
+    `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`,
+    `image${ext}`,
+  )
+  const dest = path.join(dir, safeName)
+  fs.copyFileSync(src, dest)
+
+  // Store path relative to cwd for portability
+  const relative = path.relative(process.cwd(), dest).replace(/\\/g, '/')
+  return {
+    absolutePath: dest,
+    mediaPath: relative,
+    mediaFilename: filename || safeName,
+    mediaMime: mimeType,
+    mediaSize: fs.statSync(dest).size,
+  }
 }
 
 function scoreTranscriptQuality(text) {
@@ -3535,6 +4120,8 @@ async function processRealtimeMessage(record, message, options = {}) {
     if (fromMe) {
       if (groupChat) {
         conversationKey = resolveInboundConversationKey(chatId, senderId || chatId, true)
+      } else if (isLidChatId(chatId) || isLidChatId(message?.to)) {
+        conversationKey = String(chatId || message?.to || '').trim()
       } else {
         const recipientDigits = normalizePhone(chatId || message?.to || '')
         if (!recipientDigits) {
@@ -3551,6 +4138,7 @@ async function processRealtimeMessage(record, message, options = {}) {
     }
 
     let contactName = chatName
+    let contactPhoneE164 = null
     try {
       if (!groupChat) {
         const contact = chat && typeof chat.getContact === 'function'
@@ -3568,7 +4156,23 @@ async function processRealtimeMessage(record, message, options = {}) {
             ]),
             'message.getContact',
           )
-        contactName = contact?.pushname || contact?.name || contactName
+        contactName = contact?.pushname || contact?.name || contact?.shortName || contactName
+        try {
+          const { resolvePhoneFromWhatsAppContact } = require('./crm/smart/contact-resolver')
+          contactPhoneE164 = await resolvePhoneFromWhatsAppContact(contact, {
+            client: record?.client || null,
+          })
+        } catch {
+          contactPhoneE164 = null
+        }
+        if (contactPhoneE164 || contactName) {
+          console.log('[IDENTITY_RESOLUTION]', {
+            whatsappId: chatId,
+            phoneResolved: Boolean(contactPhoneE164),
+            phoneSource: contactPhoneE164 ? 'whatsapp_contact' : null,
+            pushname: contactName || null,
+          })
+        }
       }
     } catch {
       // Keep chat name fallback.
@@ -3652,9 +4256,25 @@ async function processRealtimeMessage(record, message, options = {}) {
         })
         if (aiReplyToAudio && !fromMe && !backendEnabled && isAudioMessageType(messageType)) {
           audioTranscriptionFailed = true
+        } else if (!fromMe && isImageMedia(null, messageType)) {
+          // Keep going — image may still be referenced as unavailable
+          media = null
         } else {
           throw error
         }
+      }
+    }
+
+    let crmInboundMedia = null
+    if (!fromMe && media && isImageMedia(media, messageType)) {
+      try {
+        crmInboundMedia = persistCrmMediaFile(media.filePath, {
+          conversationKey: chatId,
+          filename: media.filename || 'image.jpg',
+          mimeType: media.mimeType || 'image/jpeg',
+        })
+      } catch (error) {
+        console.warn('[iadis-wa] failed to persist inbound image for CRM', error.message || error)
       }
     }
 
@@ -3924,6 +4544,16 @@ async function processRealtimeMessage(record, message, options = {}) {
       chat_id: chatId,
       is_group: groupChat,
       chat_name: chatName,
+      contact_phone: contactPhoneE164 || null,
+      crm_media: crmInboundMedia
+        ? {
+          media_path: crmInboundMedia.mediaPath,
+          media_mime: crmInboundMedia.mediaMime,
+          media_filename: crmInboundMedia.mediaFilename,
+          media_size: crmInboundMedia.mediaSize,
+          message_type: 'image',
+        }
+        : null,
       participant_id: groupChat ? (senderId || null) : null,
       participant_phone: groupChat && senderId ? toDisplayPhone(senderId) : null,
       has_media: hasMedia,
@@ -4092,8 +4722,28 @@ async function processRealtimeMessage(record, message, options = {}) {
       return
     }
 
+    // Race guard: human may have taken over while AI was generating
+    if (
+      crm?.smart
+      && !crm.smart.canAiAutoReply(chatId)
+      && !crm.smart.canAiAutoReply(`${record.instanceId}:${chatId}`)
+      && !crm.smart.canAiAutoReply(conversationKey)
+    ) {
+      console.log('[iadis-wa] AI reply suppressed before WhatsApp send (human control)', {
+        chat_id: chatId,
+        message_id: messageId,
+        reason: chatbot.reason || null,
+      })
+      return
+    }
+
     const replyDigits = normalizePhone(senderId)
-    const sent = await replyToInboundMessage(message, record, replyDigits, chatbot.reply, chatId)
+    const outboundReplies = [
+      chatbot.reply,
+      ...(Array.isArray(chatbot.extraReplies) ? chatbot.extraReplies : []),
+    ].map((item) => String(item || '').trim()).filter(Boolean)
+    const firstReply = outboundReplies[0] || chatbot.reply
+    const sent = await replyToInboundMessage(message, record, replyDigits, firstReply, chatId)
     console.log('[iadis-wa] chatbot reply sent', {
       chat_id: sent.chatId,
       message_id: messageId,
@@ -4103,7 +4753,33 @@ async function processRealtimeMessage(record, message, options = {}) {
       intent: voiceNluAnalysis?.intent || chatbot.intent || null,
       language_hint: voiceNluAnalysis?.replyLanguageHint || replyLanguageHint || null,
       crm_stage: chatbot.crm_stage || null,
+      extra_replies: Math.max(0, outboundReplies.length - 1),
     })
+
+    for (const extraText of outboundReplies.slice(1)) {
+      try {
+        const extraSent = await sendTextThroughInstance(record, replyDigits, extraText, chatId)
+        console.log('[iadis-wa] chatbot extra reply sent', {
+          chat_id: extraSent.chatId,
+          reply_message_id: extraSent.messageId,
+        })
+        if (backendEnabled) {
+          await storeOutboundMessage(
+            ingestion?.conversation?.id,
+            extraText,
+            chatbot,
+            extraSent.messageId,
+            {
+              instance_id: record.instanceId,
+              chat_id: extraSent.chatId,
+              automated: true,
+            },
+          )
+        }
+      } catch (extraError) {
+        console.warn('[iadis-wa] extra CRM reply failed', extraError.message || extraError)
+      }
+    }
 
     if (chatbot.crm_booking && crm) {
       await notifyCrmStaffBooking(record, chatbot.crm_booking)
@@ -4303,6 +4979,62 @@ async function sendDocumentThroughInstance(record, options = {}) {
   }
 }
 
+async function sendImageThroughInstance(record, options = {}) {
+  const preferredChatId = String(options.chatId || '').trim()
+  const caption = String(options.caption || '').trim()
+  const mediaSource = options.mediaSource
+  const messageMedia = buildOutboundMessageMedia(mediaSource)
+  let targetChatId = preferredChatId
+
+  if (!(targetChatId && targetChatId.includes('@'))) {
+    targetChatId = await resolveChatIdForSend(record, options.toPhone)
+  }
+
+  await runWithRetries(
+    () => Promise.race([
+      record.client.getChatById(targetChatId),
+      timeoutAfter(instancePingTimeoutMs, `getChatById ${targetChatId}`),
+    ]),
+    `getChatById ${targetChatId}`,
+  )
+
+  const sendImage = () => runWithRetries(
+    () => Promise.race([
+      record.client.sendMessage(targetChatId, messageMedia, {
+        caption: caption || undefined,
+        sendMediaAsDocument: false,
+      }),
+      timeoutAfter(protocolTimeoutMs, `sendImage ${targetChatId}`),
+    ]),
+    `sendImage ${targetChatId}`,
+  )
+
+  let sent = null
+  try {
+    sent = await sendImage()
+  } catch (error) {
+    if (!isProtocolTimeoutError(error)) {
+      throw error
+    }
+    console.warn('[iadis-wa] recovering instance after outbound image send failure', {
+      instance_id: record.instanceId,
+      chat_id: targetChatId,
+      reason: error.message || String(error),
+    })
+    await recoverInstance(record, error.message || `Failed to send image to ${targetChatId}`)
+    await waitForInstanceReady(record)
+    sent = await sendImage()
+  }
+
+  updateState(record, 'ready', { lastError: null })
+
+  return {
+    messageId: resolveMessageId(sent),
+    chatId: targetChatId,
+    filename: messageMedia.filename || mediaSource.filename || null,
+  }
+}
+
 async function listInstanceChats(record, options = {}) {
   const groupsOnly = Boolean(options.groupsOnly)
   const search = String(options.search || '').trim().toLowerCase()
@@ -4386,17 +5118,55 @@ app.get('/health', (_req, res) => {
 const dashboardDistDir = path.join(dashboardDir, 'dist')
 const dashboardSpaIndex = path.join(dashboardDistDir, 'index.html')
 
+app.get('/dashboard/api/auth/accounts', (_req, res) => {
+  try {
+    const accounts = dashboardUsers.listActivePublicAccounts()
+    return res.json({ ok: true, accounts })
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: 'Impossible de charger les comptes' })
+  }
+})
+
 app.post('/dashboard/api/auth/login', (req, res) => {
   try {
-    const session = dashboardAuth.login(req.body?.username, req.body?.password)
+    const accountId = req.body?.accountId ?? req.body?.account_id ?? null
+    const username = req.body?.username ?? null
+    const password = req.body?.password
+    const { session, user } = dashboardAuth.login({ accountId, username, password })
+    const resolved = dashboardUsers.resolveSessionUser(user.id)
+    try {
+      crm?.smart?.recordActivity?.({
+        event_type: 'dashboard_login',
+        category: 'system',
+        actor: {
+          type: 'human',
+          userId: resolved.id,
+          displayName: resolved.displayName,
+          role: resolved.role,
+        },
+        source: 'dashboard',
+        title: 'Connexion au dashboard',
+        description: `${resolved.displayName} s’est connecté(e) au Smart CRM.`,
+        source_event_id: `login:${resolved.id}:${Date.now()}`,
+        severity: 'sensitive',
+      })
+    } catch { /* non-blocking */ }
     return res.json({
       ok: true,
       token: session.token,
-      username: session.username,
+      user: {
+        id: resolved.id,
+        displayName: resolved.displayName,
+        role: resolved.role,
+        roleLabel: resolved.roleLabel,
+        permissions: resolved.permissions || [],
+      },
+      username: user.username,
       expires_at: new Date(session.expiresAt).toISOString(),
     })
   } catch (error) {
-    const code = error.code === 'AUTH_FAILED' || error.code === 'AUTH_INVALID' ? 401 : 400
+    const code = error.code === 'AUTH_FAILED' ? 401
+      : (error.code === 'AUTH_DISABLED' ? 403 : 400)
     return res.status(code).json({
       ok: false,
       error: error.message || 'Connexion impossible',
@@ -4410,20 +5180,53 @@ app.post('/dashboard/api/auth/logout', ensureDashboardSession, (req, res) => {
 })
 
 app.get('/dashboard/api/auth/me', ensureDashboardSession, (req, res) => {
+  const user = req.dashboardUser
+  const security = crm?.smart?.getSecuritySettings?.() || null
   return res.json({
     ok: true,
-    username: req.dashboardSession.username,
+    id: user.id,
+    displayName: user.displayName,
+    role: user.role,
+    roleLabel: user.roleLabel,
+    permissions: user.permissions || [],
+    username: user.username,
     expires_at: new Date(req.dashboardSession.expiresAt).toISOString(),
+    security,
   })
 })
 
 app.post('/dashboard/api/auth/change-password', ensureDashboardSession, (req, res) => {
   try {
+    const user = req.dashboardUser
     const result = dashboardAuth.changePassword(
-      req.dashboardSession.username,
+      user.id,
       req.body?.current_password,
       req.body?.new_password,
     )
+    try {
+      crm?.smart?.recordActivity?.({
+        event_type: 'dashboard_user_password_changed',
+        category: 'system',
+        actor: {
+          type: 'human',
+          userId: user.id,
+          displayName: user.displayName,
+          role: user.role,
+        },
+        source: 'dashboard',
+        title: `Mot de passe mis à jour : ${user.displayName}`,
+        metadata: {
+          user_id: user.id,
+          display_name: user.displayName,
+          role: user.role,
+          role_label: user.roleLabel,
+        },
+        source_event_id: `user:pwchanged:${user.id}:${Date.now()}`,
+        severity: 'sensitive',
+      })
+    } catch {
+      /* ignore activity errors */
+    }
     return res.json({
       ok: true,
       ...result,
@@ -4431,13 +5234,102 @@ app.post('/dashboard/api/auth/change-password', ensureDashboardSession, (req, re
   } catch (error) {
     const code = error.code === 'AUTH_FAILED' || error.code === 'AUTH_FORBIDDEN'
       ? 401
-      : (error.code === 'AUTH_WEAK_PASSWORD' ? 400 : 400)
+      : (error.code === 'WEAK_PASSWORD' || error.code === 'VALIDATION' ? 400 : 400)
     return res.status(code).json({
       ok: false,
       error: error.message || 'Impossible de changer le mot de passe',
     })
   }
 })
+
+app.use(
+  '/dashboard/api',
+  ensureDashboardSession,
+  createUserManagementRouter({
+    users: dashboardUsers,
+    recordActivity: (payload) => crm?.smart?.recordActivity?.(payload),
+    destroyUserSessions: (userId) => dashboardAuth.destroySessionsForUser(userId),
+  }),
+)
+
+app.use(
+  '/dashboard/api',
+  ensureDashboardSession,
+  createSmartCrmRouter({
+    getSmart: () => (crm ? crm.smart : null),
+    getCrm: () => crm,
+    assertPermission,
+    sendWhatsAppText: async ({ chatId = null, phone = null, text }) => {
+      const body = String(text || '').trim()
+      if (!body) {
+        const error = new Error('Message vide')
+        error.code = 'EMPTY_MESSAGE'
+        throw error
+      }
+      const record = ensureInstance('main')
+      const state = String(record.state || '').toLowerCase()
+      if (state !== 'ready' && state !== 'authenticated') {
+        const error = new Error(`WhatsApp non connecté (${record.state || 'missing'})`)
+        error.code = 'WA_NOT_READY'
+        throw error
+      }
+      const rawChat = String(chatId || '').replace(/^[^:]+:/, '').trim()
+      const preferredChatId = rawChat.includes('@') ? rawChat : ''
+      return sendTextThroughInstance(record, phone || preferredChatId, body, preferredChatId || null)
+    },
+    sendWhatsAppImage: async ({ chatId = null, phone = null, caption = '', filePath, filename, mimeType }) => {
+      const record = ensureInstance('main')
+      const state = String(record.state || '').toLowerCase()
+      if (state !== 'ready' && state !== 'authenticated') {
+        const error = new Error(`WhatsApp non connecté (${record.state || 'missing'})`)
+        error.code = 'WA_NOT_READY'
+        throw error
+      }
+      if (!filePath || !fs.existsSync(filePath)) {
+        const error = new Error('Fichier image introuvable')
+        error.code = 'MEDIA_MISSING'
+        throw error
+      }
+      const mime = String(mimeType || '').toLowerCase()
+      if (!allowedDashboardImageMimes.has(mime) && !mime.startsWith('image/')) {
+        const error = new Error('Ce type de fichier n’est pas pris en charge.')
+        error.code = 'MEDIA_TYPE'
+        throw error
+      }
+      const size = fs.statSync(filePath).size
+      if (size > dashboardImageMaxBytes) {
+        const error = new Error('L’image est trop volumineuse.')
+        error.code = 'MEDIA_TOO_LARGE'
+        throw error
+      }
+      const rawChat = String(chatId || '').replace(/^[^:]+:/, '').trim()
+      const preferredChatId = rawChat.includes('@') ? rawChat : ''
+      return sendImageThroughInstance(record, {
+        chatId: preferredChatId || null,
+        toPhone: phone || preferredChatId,
+        caption,
+        mediaSource: {
+          filePath,
+          filename: filename || path.basename(filePath),
+          mimeType: mime || 'image/jpeg',
+          size,
+        },
+      })
+    },
+    resolveCrmMediaAbsolutePath: (mediaPath) => {
+      const relative = String(mediaPath || '').replace(/\\/g, '/').trim()
+      if (!relative || relative.includes('..')) return null
+      const absolute = path.resolve(process.cwd(), relative)
+      const root = path.resolve(crmMediaDir)
+      if (!absolute.startsWith(root)) return null
+      if (!fs.existsSync(absolute)) return null
+      return absolute
+    },
+    dashboardImageMaxBytes,
+    allowedDashboardImageMimes,
+    persistCrmMediaFile,
+  }),
+)
 
 app.get('/dashboard/api/overview', ensureDashboardSession, (_req, res) => {
   const instances = listKnownInstanceIds().map(serializeDashboardInstance)
@@ -4463,13 +5355,18 @@ app.get('/dashboard/api/overview', ensureDashboardSession, (_req, res) => {
     : []
   const readyCount = instances.filter((item) => String(item.state || '').toLowerCase() === 'ready').length
   const messagesTotal = Number(crmStats.messages_total || 0) + voiceOrders.length
+  const clinicProfile = crm?.smart?.getClinicSettings?.()?.clinic || {
+    name: 'Centre Dentaire HEL',
+    city: 'Casablanca',
+    neighborhood: 'El Oulfa',
+  }
 
   return res.json({
     ok: true,
     clinic: {
-      name: 'Centre Dentaire HEL',
-      city: 'Casablanca',
-      neighborhood: 'El Oulfa',
+      name: clinicProfile.name || 'Centre Dentaire HEL',
+      city: clinicProfile.city || 'Casablanca',
+      neighborhood: clinicProfile.neighborhood || 'El Oulfa',
     },
     chatbot: {
       mode: chatbotMode,
@@ -4565,6 +5462,7 @@ app.get('/dashboard/api/orders', ensureDashboardSession, (req, res) => {
 })
 
 app.get('/dashboard/api/crm/customers', ensureDashboardSession, (req, res) => {
+  if (!assertPermission(req, res, PERMISSIONS.VIEW_PATIENTS)) return undefined
   if (!crm) {
     return res.status(503).json({ ok: false, error: 'CRM désactivé' })
   }
@@ -4577,6 +5475,7 @@ app.get('/dashboard/api/crm/customers', ensureDashboardSession, (req, res) => {
 })
 
 app.get('/dashboard/api/crm/appointments', ensureDashboardSession, (req, res) => {
+  if (!assertPermission(req, res, PERMISSIONS.VIEW_AGENDA)) return undefined
   if (!crm) {
     return res.status(503).json({ ok: false, error: 'CRM désactivé' })
   }
@@ -4588,12 +5487,59 @@ app.get('/dashboard/api/crm/appointments', ensureDashboardSession, (req, res) =>
 })
 
 app.post('/dashboard/api/crm/appointments', ensureDashboardSession, (req, res) => {
+  if (!assertPermission(req, res, PERMISSIONS.CREATE_APPOINTMENT)) return undefined
   if (!crm) {
     return res.status(503).json({ ok: false, error: 'CRM désactivé' })
   }
 
   try {
     const result = crm.repo.createManualAppointment(req.body || {})
+    const appointmentId = Number(result.appointment_id || result.appointment?.id || 0) || null
+    const patientId = Number(result.customer_id || result.customer?.id || 0) || null
+    const patientName = result.full_name || result.customer?.full_name || null
+    const actor = getAuthenticatedActor(req.dashboardUser)
+    if (appointmentId) {
+      const date = String(req.body?.appointment_date || result.appointment?.appointment_date || '')
+      const time = String(req.body?.appointment_time || result.appointment?.appointment_time || '').slice(0, 5)
+      const slotLabel = date && time ? `${date} ${time}` : null
+      crm.smart?.recordActivity?.({
+        event_type: 'appointment_created',
+        category: 'appointment',
+        actor: actor || {
+          type: 'dashboard_user',
+          userId: req.dashboardUser?.id != null ? Number(req.dashboardUser.id) : null,
+          displayName: String(
+            req.dashboardUser?.displayName
+            || req.dashboardUser?.username
+            || 'Utilisateur',
+          ),
+          role: String(req.dashboardUser?.role || 'secretary'),
+        },
+        origin: 'dashboard',
+        source: 'dashboard',
+        patient_id: patientId,
+        appointment_id: appointmentId,
+        title: 'Rendez-vous créé',
+        description: [patientName, slotLabel].filter(Boolean).join(' — ') || null,
+        new_value: {
+          date: date || null,
+          time: time || null,
+          status: result.appointment?.status || 'confirmed',
+          patient_name: patientName,
+          created_via: 'dashboard_manual',
+        },
+        metadata: {
+          actor_user_id: actor?.userId || req.dashboardUser?.id || null,
+          actor_display_name: actor?.displayName
+            || req.dashboardUser?.displayName
+            || req.dashboardUser?.username
+            || null,
+          actor_role: actor?.role || req.dashboardUser?.role || null,
+          account_username: req.dashboardUser?.username || null,
+        },
+        source_event_id: `appointment:created:${appointmentId}`,
+      })
+    }
     return res.status(201).json({
       ok: true,
       ...result,
@@ -4607,12 +5553,110 @@ app.post('/dashboard/api/crm/appointments', ensureDashboardSession, (req, res) =
 })
 
 app.patch('/dashboard/api/crm/appointments/:id', ensureDashboardSession, (req, res) => {
+  const body = req.body || {}
+  const isCancel = String(body.status || '') === 'cancelled'
+  const isConfirm = String(body.status || '') === 'confirmed'
+  const perm = isCancel
+    ? PERMISSIONS.CANCEL_APPOINTMENT
+    : (isConfirm ? PERMISSIONS.CONFIRM_APPOINTMENT : PERMISSIONS.EDIT_APPOINTMENT)
+  if (!assertPermission(req, res, perm)) return undefined
   if (!crm) {
     return res.status(503).json({ ok: false, error: 'CRM désactivé' })
   }
 
   try {
-    const appointment = crm.repo.updateAppointment(req.params.id, req.body || {})
+    // Central cancel — same engine as WhatsApp patient self-cancel
+    if (String(body.status || '') === 'cancelled' && crm.smart?.cancelAppointment) {
+      const result = crm.smart.cancelAppointment(req.params.id, {
+        source: body.source || 'staff_dashboard',
+        actorName: req.dashboardUser?.displayName || req.dashboardUser?.username || null,
+        actor: getAuthenticatedActor(req.dashboardUser),
+      })
+      if (!result.ok && result.reason === 'not_found') {
+        return res.status(404).json({ ok: false, error: 'Rendez-vous introuvable' })
+      }
+      if (!result.ok && result.reason === 'not_cancellable') {
+        return res.status(400).json({ ok: false, error: 'Ce rendez-vous ne peut pas être annulé' })
+      }
+      const appt = result.appointment || null
+      return res.json({
+        ok: true,
+        already: Boolean(result.already),
+        appointment: appt
+          ? {
+            id: appt.id,
+            status: appt.status || 'cancelled',
+            appointment_date: appt.appointment_date,
+            appointment_time: appt.appointment_time,
+            customer_id: appt.customer_id,
+            full_name: appt.full_name,
+            phone_number: appt.phone_number,
+          }
+          : { id: Number(req.params.id), status: 'cancelled' },
+      })
+    }
+
+    const beforeRow = crm?.db?.prepare(`
+      SELECT a.id, a.appointment_date, a.appointment_time, a.status, a.customer_id
+      FROM appointments a WHERE a.id = ?
+    `).get(Number(req.params.id))
+
+    const appointment = crm.repo.updateAppointment(req.params.id, body)
+    const actor = getAuthenticatedActor(req.dashboardUser)
+    if (actor && appointment && beforeRow) {
+      const oldDate = String(beforeRow.appointment_date || '')
+      const oldTime = String(beforeRow.appointment_time || '').slice(0, 5)
+      const newDate = String(appointment.appointment_date || oldDate)
+      const newTime = String(appointment.appointment_time || oldTime).slice(0, 5)
+      const statusChanged = String(body.status || beforeRow.status) !== String(beforeRow.status)
+      const dateChanged = body.appointment_date != null && newDate !== oldDate
+      const timeChanged = body.appointment_time != null && newTime !== oldTime
+
+      let eventType = 'appointment_updated'
+      let title = 'Rendez-vous modifié'
+      if (statusChanged && String(body.status) === 'confirmed') {
+        eventType = 'appointment_confirmed'
+        title = 'Rendez-vous confirmé'
+      } else if (dateChanged && timeChanged) {
+        eventType = 'appointment_rescheduled'
+        title = 'Rendez-vous déplacé'
+      } else if (dateChanged) {
+        eventType = 'appointment_rescheduled'
+        title = 'Date du rendez-vous modifiée'
+      } else if (timeChanged) {
+        eventType = 'appointment_rescheduled'
+        title = 'Horaire du rendez-vous modifié'
+      }
+
+      crm.smart?.recordActivity?.({
+        event_type: eventType,
+        category: 'appointment',
+        actor,
+        origin: 'dashboard',
+        source: 'dashboard',
+        patient_id: appointment.customer_id || beforeRow.customer_id,
+        appointment_id: Number(req.params.id),
+        title,
+        old_value: { date: oldDate, time: oldTime, status: beforeRow.status },
+        new_value: { date: newDate, time: newTime, status: appointment.status },
+        source_event_id: `appointment:update:${req.params.id}:${Date.now()}`,
+      })
+    }
+    if (appointment?._slot_released && crm.smart?.notifySlotReleased) {
+      try {
+        const released = appointment._slot_released
+        crm.smart.notifySlotReleased({
+          slotDate: released.slot_date,
+          slotTime: released.slot_time,
+          appointmentId: released.appointment_id,
+          sourceEvent: released.source_event || 'appointment_cancelled',
+          durationMinutes: released.duration_minutes || 30,
+        })
+      } catch (notifyError) {
+        console.warn('[iadis-wa] slot release notification failed', notifyError.message || notifyError)
+      }
+      delete appointment._slot_released
+    }
     return res.json({
       ok: true,
       appointment,
@@ -4627,12 +5671,35 @@ app.patch('/dashboard/api/crm/appointments/:id', ensureDashboardSession, (req, r
 })
 
 app.delete('/dashboard/api/crm/appointments/:id', ensureDashboardSession, (req, res) => {
+  if (!assertPermission(req, res, PERMISSIONS.CANCEL_APPOINTMENT)) return undefined
   if (!crm) {
     return res.status(503).json({ ok: false, error: 'CRM désactivé' })
   }
 
   try {
+    const beforeRow = crm?.db?.prepare(`
+      SELECT a.id, a.customer_id, a.appointment_date, a.appointment_time, c.full_name
+      FROM appointments a
+      JOIN customers c ON c.id = a.customer_id
+      WHERE a.id = ?
+    `).get(Number(req.params.id))
     const result = crm.repo.deleteAppointment(req.params.id)
+    const actor = getAuthenticatedActor(req.dashboardUser)
+    if (actor && beforeRow) {
+      crm.smart?.recordActivity?.({
+        event_type: 'appointment_deleted',
+        category: 'appointment',
+        actor,
+        origin: 'dashboard',
+        source: 'dashboard',
+        patient_id: beforeRow.customer_id,
+        appointment_id: beforeRow.id,
+        title: 'Rendez-vous supprimé',
+        description: beforeRow.full_name || null,
+        old_value: { date: beforeRow.appointment_date, time: beforeRow.appointment_time },
+        source_event_id: `appointment:deleted:${beforeRow.id}`,
+      })
+    }
     return res.json({
       ok: true,
       ...result,
@@ -4646,7 +5713,8 @@ app.delete('/dashboard/api/crm/appointments/:id', ensureDashboardSession, (req, 
   }
 })
 
-app.get('/dashboard/api/instances', ensureDashboardSession, (_req, res) => {
+app.get('/dashboard/api/instances', ensureDashboardSession, (req, res) => {
+  if (!assertPermission(req, res, PERMISSIONS.VIEW_INTEGRATIONS)) return undefined
   return res.json({
     ok: true,
     instances: listKnownInstanceIds().map(serializeDashboardInstance),
@@ -4654,6 +5722,7 @@ app.get('/dashboard/api/instances', ensureDashboardSession, (_req, res) => {
 })
 
 app.post('/dashboard/api/instances', ensureDashboardSession, async (req, res) => {
+  if (!assertPermission(req, res, PERMISSIONS.MANAGE_WHATSAPP)) return undefined
   const instanceId = normalizeInstanceId(req.body?.instance_id)
   const force = parseBoolean(req.body?.force, false)
 
@@ -4685,6 +5754,7 @@ app.post('/dashboard/api/instances', ensureDashboardSession, async (req, res) =>
 })
 
 app.get('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, (req, res) => {
+  if (!assertPermission(req, res, PERMISSIONS.MANAGE_WHATSAPP)) return undefined
   const instanceId = normalizeInstanceId(req.params.instanceId)
   const record = getInstance(instanceId)
 
@@ -4699,6 +5769,7 @@ app.get('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, (req,
 })
 
 app.post('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, async (req, res) => {
+  if (!assertPermission(req, res, PERMISSIONS.MANAGE_WHATSAPP)) return undefined
   const instanceId = normalizeInstanceId(req.params.instanceId)
   const force = parseBoolean(req.body?.force, true)
   const rawWait = Number(req.body?.wait_ms)
@@ -4752,6 +5823,7 @@ app.post('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, asyn
 })
 
 app.delete('/dashboard/api/instances/:instanceId', ensureDashboardSession, async (req, res) => {
+  if (!assertPermission(req, res, PERMISSIONS.MANAGE_WHATSAPP)) return undefined
   const instanceId = normalizeInstanceId(req.params.instanceId)
 
   try {
@@ -5414,4 +6486,14 @@ if (automationHistorySyncEnabled) {
       syncAutomationHistory(record, 'interval')
     }
   }, automationHistorySyncIntervalMs).unref()
+}
+
+// Appointment confirmation scheduler (24h ask / 4h follow-up / 24h staff task)
+if (crm?.smart?.runConfirmationTick) {
+  const confirmationTickMs = Number(process.env.CRM_CONFIRMATION_TICK_MS || 60000)
+  setInterval(() => {
+    crm.smart.runConfirmationTick().catch((error) => {
+      console.warn('[CONFIRMATION] tick failed', error.message || error)
+    })
+  }, Math.max(15000, confirmationTickMs)).unref()
 }

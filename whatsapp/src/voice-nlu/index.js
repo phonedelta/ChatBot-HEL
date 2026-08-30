@@ -3,7 +3,7 @@
  */
 
 const { analyzeVoiceTranscript, buildLowConfidenceVoiceReply } = require('./pipeline')
-const { detectLanguage, toReplyLanguageHint } = require('./language')
+const { detectLanguage, detectLanguageWithConfidence, isLanguageNeutral, toReplyLanguageHint } = require('./language')
 const { cleanupTranscript } = require('./preprocess')
 const { normalizeDarijaText, buildMeaningHint } = require('./normalize')
 const { normalizeTranscript } = require('./normalize-transcript')
@@ -33,11 +33,25 @@ const {
   SERVICE_BOOKING_CONFIDENCE,
 } = require('./intent-table')
 const { routePatientMessage, buildRouterLlmBlock } = require('./intent-router')
+const {
+  shouldUseNluFallback,
+  clarificationMessage,
+  formAwaitingClarifyMessage,
+  CONFIDENCE_EXECUTE,
+  CONFIDENCE_UNKNOWN_MAX,
+} = require('./nlu-fallback')
+const {
+  classifyDentalProblem,
+  DENTAL_PROBLEMS,
+  shouldPreferClassification,
+} = require('./dental-problem-classifier')
 
 module.exports = {
   analyzeVoiceTranscript,
   buildLowConfidenceVoiceReply,
   detectLanguage,
+  detectLanguageWithConfidence,
+  isLanguageNeutral,
   toReplyLanguageHint,
   cleanupTranscript,
   normalizeTranscript,
@@ -62,4 +76,12 @@ module.exports = {
   SERVICE_BOOKING_CONFIDENCE,
   routePatientMessage,
   buildRouterLlmBlock,
+  shouldUseNluFallback,
+  clarificationMessage,
+  formAwaitingClarifyMessage,
+  CONFIDENCE_EXECUTE,
+  CONFIDENCE_UNKNOWN_MAX,
+  classifyDentalProblem,
+  DENTAL_PROBLEMS,
+  shouldPreferClassification,
 }

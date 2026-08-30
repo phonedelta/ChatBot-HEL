@@ -14,21 +14,21 @@ const SERVICE_BOOKING_CONFIDENCE = 0.8
 /** Arabic labels used in booking intro when service is already known. */
 const SERVICE_AR_LABELS = {
   'Extraction dentaire': 'خلع السن',
-  'Détartrage': 'تنظيف الأسنان (إزالة الجير)',
+  'Détartrage': 'إزالة الجير',
   'Blanchiment des dents': 'تبييض الأسنان',
   Orthodontie: 'تقويم الأسنان',
   'Implants dentaires': 'زراعة الأسنان',
   'Implant dentaire': 'زراعة الأسنان',
-  'Soins dentaires et traitement des caries': 'علاج تسوس الأسنان',
+  'Soins dentaires et traitement des caries': 'علاج التسوس',
   'Soins des gencives': 'علاج اللثة',
-  'Facettes dentaires': 'قشور الأسنان',
+  'Facettes dentaires': 'القشور التجميلية',
   'Dentisterie pédiatrique': 'طب أسنان الأطفال',
-  'Urgences dentaires': 'علاج الحالات المستعجلة',
+  'Urgences dentaires': 'علاج حالات ألم الأسنان المستعجلة',
   Consultation: 'استشارة',
 }
 
 /** Clear appointment words (enough alone). */
-const BOOKING_HINT = /\b(rendez[- ]?vous|rdv|appointment|موعد|رنديفو|رونديفو|mow3id|mo3id)\b/i
+const BOOKING_HINT = /\b(rendez[- ]?vous|rdv|appointment|mow3id|mo3id)\b|موعد|رنديفو|رونديفو/i
 
 /**
  * True only when the patient clearly asks to book / come for an appointment.

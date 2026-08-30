@@ -28,8 +28,8 @@ function run() {
   assert.ok(replyFr.includes('Blanchiment des dents'))
 
   const replyDarija = buildIntentDirectReply('ASK_SERVICES', 'darija')
-  assert.ok(replyDarija.includes('Orthodontie'))
-  assert.ok(/خدمات|كاينين|أهلا/.test(replyDarija))
+  assert.ok(replyDarija.includes('تقويم'))
+  assert.ok(/خدمات|كاينين|أهلا|نقدم/.test(replyDarija))
 
   const booking = classifyIntent('Bghit rendez-vous')
   assert.strictEqual(booking.intent, 'BOOK_APPOINTMENT')
