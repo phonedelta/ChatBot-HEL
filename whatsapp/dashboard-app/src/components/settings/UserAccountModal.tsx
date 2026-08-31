@@ -555,6 +555,62 @@ export function DeleteUserConfirmModal({
   )
 }
 
+export function DeactivateUserConfirmModal({
+  user,
+  open,
+  onClose,
+  onConfirm,
+  loading,
+  error,
+}: {
+  user: DashboardUser | null
+  open: boolean
+  onClose: () => void
+  onConfirm: () => Promise<void>
+  loading: boolean
+  error?: string
+}) {
+  return (
+    <AnimatePresence>
+      {open && user ? (
+        <ModalShell
+          open
+          onClose={onClose}
+          maxWidth={480}
+          zIndex={70}
+          titleId="deactivate-user-title"
+          header={
+            <div className="px-6 py-5">
+              <h3 id="deactivate-user-title" className="text-lg font-semibold text-navy">
+                Désactiver ce compte ?
+              </h3>
+            </div>
+          }
+          footer={
+            <div className="flex justify-end gap-2 px-6 py-4">
+              <Button variant="secondary" size="sm" onClick={onClose} disabled={loading}>
+                Retour
+              </Button>
+              <Button variant="danger" size="sm" loading={loading} onClick={() => void onConfirm()}>
+                Désactiver
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-2 px-6 py-5">
+            <p className="text-sm text-[var(--color-muted-accessible)]">
+              {user.displayName} ne pourra plus accéder au Smart CRM.
+            </p>
+            {error ? (
+              <p className="rounded-xl border border-danger/20 bg-danger/5 px-3 py-2 text-sm text-danger">{error}</p>
+            ) : null}
+          </div>
+        </ModalShell>
+      ) : null}
+    </AnimatePresence>
+  )
+}
+
 export function UserAccountModal({
   mode,
   user,

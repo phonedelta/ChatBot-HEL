@@ -7,7 +7,7 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Hand, ImagePlus, RefreshCw, Send, X } from 'lucide-react'
+import { ChevronLeft, Hand, ImagePlus, Info, RefreshCw, Send, X } from 'lucide-react'
 import { api, getStoredToken } from '@/lib/api'
 import { cn, initials } from '@/lib/format'
 import { conversationStatusLabel, safePersonLabel } from '@/lib/labels'
@@ -18,6 +18,8 @@ import { EmptyState } from '@/components/smart/PageBits'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { usePermissions } from '@/hooks/usePermissions'
 import { PERMISSIONS } from '@/lib/permissions'
+import { useIsLgUp } from '@/hooks/useMediaQuery'
+import { Modal } from '@/components/ui/Modal'
 
 type Conversation = {
   id: number
@@ -159,10 +161,11 @@ function mediaUrlWithAuth(url?: string | null) {
 
 export function MessagesPage() {
   const { can } = usePermissions()
+  const isLgUp = useIsLgUp()
   const canSend = can(PERMISSIONS.SEND_MANUAL_MESSAGE)
   const canTakeOver = can(PERMISSIONS.TAKE_OVER_CONVERSATION)
   const canReturnToAi = can(PERMISSIONS.RETURN_CONVERSATION_TO_AI)
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const initialStatus = params.get('status') || 'all'
   const initialConv = params.get('c')
   const [status, setStatus] = useState(initialStatus)
@@ -171,6 +174,7 @@ export function MessagesPage() {
   const [selectedId, setSelectedId] = useState<number | null>(
     initialConv && Number(initialConv) ? Number(initialConv) : null,
   )
+  const [mobileInfoOpen, setMobileInfoOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [context, setContext] = useState<ConversationContextPayload | null>(null)
@@ -206,7 +210,14 @@ export function MessagesPage() {
         `/dashboard/api/conversations?${query.toString()}`,
       )
       setList(payload.conversations || [])
-      setSelectedId((prev) => prev || payload.conversations?.[0]?.id || null)
+      // Desktop: keep/select first. Mobile master-detail: never auto-open a thread.
+      setSelectedId((prev) => {
+        if (prev) return prev
+        if (typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches) {
+          return payload.conversations?.[0]?.id || null
+        }
+        return null
+      })
     } catch (err) {
       if (!soft) setError(err instanceof Error ? err.message : 'Chargement impossible')
     } finally {
@@ -282,6 +293,17 @@ export function MessagesPage() {
   useEffect(() => {
     if (selectedId) void loadContext(selectedId)
   }, [selectedId, loadContext])
+
+  // Sync open conversation to ?c= so the shell can hide global search on mobile.
+  useEffect(() => {
+    const current = params.get('c')
+    const next = selectedId ? String(selectedId) : null
+    if ((current || null) === next) return
+    const nextParams = new URLSearchParams(params)
+    if (next) nextParams.set('c', next)
+    else nextParams.delete('c')
+    setParams(nextParams, { replace: true })
+  }, [selectedId, params, setParams])
 
   // Live refresh — patient messages must appear without full page reload (esp. HUMAN mode)
   useEffect(() => {
@@ -449,9 +471,12 @@ export function MessagesPage() {
     || 'Numéro non identifié'
 
   const nextApptDisplay = context?.next_appointment?.display || null
+  const showListPane = isLgUp || !selectedId
+  const showChatPane = isLgUp || Boolean(selectedId)
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden">
+      <h1 className="sr-only">Messages</h1>
       {toast ? (
         <div className="mb-2 shrink-0 rounded-xl border border-primary/30 bg-cyan-tint px-3 py-2 text-sm text-navy">
           {toast}
@@ -463,39 +488,45 @@ export function MessagesPage() {
         </div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 overflow-hidden rounded-2xl border border-border bg-white shadow-soft lg:grid-cols-[minmax(280px,320px)_minmax(0,1fr)_minmax(300px,330px)] lg:grid-rows-1">
-        {/* Colonne conversations — fixe ; seule la liste scroll */}
-        <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden border-b border-border lg:border-b-0 lg:border-r">
+      <div className="grid min-h-0 min-w-0 w-full flex-1 overflow-hidden rounded-2xl border border-border bg-white shadow-soft lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)_minmax(260px,330px)] lg:grid-rows-1">
+        {/* Colonne conversations */}
+        <aside
+          className={cn(
+            'min-h-0 min-w-0 flex-col overflow-hidden border-border lg:border-r',
+            showListPane ? 'flex' : 'hidden lg:flex',
+          )}
+        >
           <div className="shrink-0 space-y-2 border-b border-border p-3">
             <div className="flex items-center gap-2">
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Nom, téléphone…"
-                className="h-10 min-w-0 flex-1 rounded-xl border border-border bg-bg px-3 text-sm outline-none focus:border-primary"
+                className="h-11 min-w-0 flex-1 rounded-xl border border-border bg-bg px-3 text-sm outline-none focus:border-primary"
                 aria-label="Rechercher une conversation"
               />
               <button
                 type="button"
                 onClick={() => void loadList()}
-                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border text-muted hover:bg-cyan-tint hover:text-navy"
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border text-muted hover:bg-cyan-tint hover:text-navy"
                 aria-label="Actualiser les conversations"
                 title="Actualiser"
               >
                 <RefreshCw className="h-4 w-4" />
               </button>
             </div>
-            <div className="flex flex-wrap gap-1">
+            <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-0.5 scrollbar-thin">
               {FILTERS.map((f) => (
                 <button
                   key={f.key}
                   type="button"
+                  aria-pressed={status === f.key}
                   onClick={() => setStatus(f.key)}
                   className={cn(
-                    'rounded-full px-2.5 py-1 text-[11px] font-medium',
+                    'shrink-0 rounded-full px-3 py-2 text-[11px] font-medium',
                     status === f.key
                       ? 'bg-navy text-white'
-                      : 'bg-bg text-muted hover:bg-cyan-tint hover:text-navy',
+                      : 'bg-bg text-[var(--color-muted-accessible)] hover:bg-cyan-tint hover:text-navy',
                   )}
                 >
                   {f.label}
@@ -523,7 +554,10 @@ export function MessagesPage() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setSelectedId(item.id)}
+                  onClick={() => {
+                    setSelectedId(item.id)
+                    setMobileInfoOpen(false)
+                  }}
                   className={cn(
                     'flex w-full items-start gap-3 border-b border-border px-3 py-3 text-left hover:bg-cyan-tint/60',
                     selectedId === item.id && 'bg-cyan-tint',
@@ -539,7 +573,7 @@ export function MessagesPage() {
                     </div>
                     <p
                       dir="auto"
-                      className="truncate text-xs text-muted"
+                      className="truncate text-xs text-[var(--color-muted-accessible)]"
                       style={{ unicodeBidi: 'plaintext' }}
                     >
                       {item.last_message_preview || item.display_subtitle || '—'}
@@ -554,51 +588,79 @@ export function MessagesPage() {
           </div>
         </aside>
 
-        {/* Colonne chat — header + messages scroll + composer hors scroller */}
-        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        {/* Colonne chat */}
+        <section
+          className={cn(
+            'min-h-0 min-w-0 flex-col overflow-hidden',
+            showChatPane ? 'flex' : 'hidden lg:flex',
+          )}
+        >
           {!selectedId ? (
             <div className="flex min-h-0 flex-1 items-center justify-center p-6">
               <EmptyState title="Sélectionnez une conversation pour afficher les messages." />
             </div>
           ) : (
             <>
-              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-white px-4 py-3">
-                <div className="min-w-0">
-                  <p className="truncate font-semibold text-navy">{displayName(selected)}</p>
-                  <p className="truncate text-xs text-muted">
-                    {phoneLabel}
-                    {nextApptDisplay ? ` · Prochain RDV : ${nextApptDisplay}` : ''}
-                  </p>
-                  {handoffBanner ? (
-                    <p className="mt-1 text-xs font-medium text-warning">{handoffBanner}</p>
-                  ) : (
-                    <p className="mt-1 text-xs text-muted">
-                      {selected?.owner === 'HUMAN'
-                        ? `Prise en charge par ${selected.owner_user || 'l’équipe'} · automation suspendue`
-                        : 'Contrôle IA actif'}
+              <div className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-b border-border bg-white px-2 py-2.5 sm:gap-3 sm:px-4 sm:py-3">
+                <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
+                  <button
+                    type="button"
+                    className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-navy hover:bg-bg lg:hidden"
+                    aria-label="Retour aux conversations"
+                    onClick={() => {
+                      setSelectedId(null)
+                      setMobileInfoOpen(false)
+                    }}
+                  >
+                    <ChevronLeft className="h-5 w-5" />
+                  </button>
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold text-navy">{displayName(selected)}</p>
+                    <p className="truncate text-xs text-[var(--color-muted-accessible)]">
+                      {phoneLabel}
+                      {nextApptDisplay ? ` · Prochain RDV : ${nextApptDisplay}` : ''}
                     </p>
-                  )}
+                    {handoffBanner ? (
+                      <p className="mt-1 text-xs font-medium text-warning">{handoffBanner}</p>
+                    ) : (
+                      <p className="mt-1 text-xs text-[var(--color-muted-accessible)]">
+                        {selected?.owner === 'HUMAN'
+                          ? `Prise en charge par ${selected.owner_user || 'l’équipe'} · automation suspendue`
+                          : 'Contrôle IA actif'}
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+                  <button
+                    type="button"
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-border text-navy hover:bg-cyan-tint lg:hidden"
+                    aria-label="Infos patient"
+                    onClick={() => setMobileInfoOpen(true)}
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
                   {selectedId ? (
                     <Link
                       to={`/historique?conversationId=${selectedId}`}
-                      className="hidden rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted hover:bg-cyan-tint/40 hover:text-navy sm:inline"
+                      className="hidden rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted hover:bg-cyan-tint/40 hover:text-navy xl:inline"
                     >
                       Historique
                     </Link>
                   ) : null}
-                {selected?.owner === 'HUMAN' ? (
-                  canReturnToAi ? (
-                    <Button size="sm" variant="secondary" onClick={() => void handoff('AI')}>
-                      Rendre la main à l’IA
+                  {selected?.owner === 'HUMAN' ? (
+                    canReturnToAi ? (
+                      <Button size="sm" variant="secondary" onClick={() => void handoff('AI')}>
+                        <span className="hidden sm:inline">Rendre la main à l’IA</span>
+                        <span className="sm:hidden">IA</span>
+                      </Button>
+                    ) : null
+                  ) : canTakeOver ? (
+                    <Button size="sm" icon={<Hand className="h-4 w-4" />} onClick={() => void handoff('HUMAN')}>
+                      <span className="hidden sm:inline">Prendre la main</span>
+                      <span className="sm:hidden">Main</span>
                     </Button>
-                  ) : null
-                ) : canTakeOver ? (
-                  <Button size="sm" icon={<Hand className="h-4 w-4" />} onClick={() => void handoff('HUMAN')}>
-                    Prendre la main
-                  </Button>
-                ) : null}
+                  ) : null}
                 </div>
               </div>
 
@@ -657,7 +719,7 @@ export function MessagesPage() {
                           >
                             <div
                               className={cn(
-                                'min-w-0 max-w-[min(75%,760px)] rounded-2xl border px-3 py-2 text-sm shadow-sm',
+                                'min-w-0 max-w-[min(88%,520px)] sm:max-w-[min(75%,760px)] rounded-2xl border px-3 py-2 text-sm shadow-sm break-words',
                                 meta.tone === 'patient' && 'border-border bg-white text-navy',
                                 meta.tone === 'ai' && 'border-primary/20 bg-cyan-tint text-navy',
                                 meta.tone === 'human' && 'border-navy/20 bg-navy text-white',
@@ -720,63 +782,128 @@ export function MessagesPage() {
               </div>
 
               {canSend ? (
-              <div className="shrink-0 space-y-2 border-t border-border bg-white p-3">
+              <div className="shrink-0 border-t border-border bg-[#F4F7F9] px-2.5 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:bg-white sm:p-3 sm:pb-3">
                 {pendingPreviewUrl ? (
-                  <div className="relative inline-block max-w-full">
-                    <img
-                      src={pendingPreviewUrl}
-                      alt="Aperçu"
-                      className="max-h-28 max-w-[220px] rounded-xl border border-border object-contain"
-                    />
+                  <div className="mb-2 inline-flex max-w-full items-start gap-2 rounded-2xl border border-border bg-white p-2 shadow-sm">
+                    <div className="relative">
+                      <img
+                        src={pendingPreviewUrl}
+                        alt="Aperçu"
+                        className="max-h-24 max-w-[180px] rounded-xl object-contain"
+                      />
+                      {sending ? (
+                        <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-black/40 text-xs font-semibold text-white">
+                          Envoi…
+                        </span>
+                      ) : null}
+                    </div>
                     <button
                       type="button"
                       onClick={clearPendingImage}
-                      className="absolute -right-2 -top-2 rounded-full bg-navy p-1 text-white shadow"
+                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bg text-navy hover:bg-border"
                       aria-label="Retirer l’image"
                     >
-                      <X className="h-3.5 w-3.5" />
+                      <X className="h-4 w-4" />
                     </button>
-                    {sending ? (
-                      <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-black/40 text-xs font-semibold text-white">
-                        Envoi…
-                      </span>
-                    ) : null}
                   </div>
                 ) : null}
-                <div className="flex items-center gap-2">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className="hidden"
-                    onChange={(e) => onPickImage(e.target.files?.[0] || null)}
-                  />
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={(e) => onPickImage(e.target.files?.[0] || null)}
+                />
+
+                {/* Mobile: barre unifiée type messagerie */}
+                <div className="flex items-end gap-2 sm:hidden">
+                  <button
+                    type="button"
+                    className="mb-0.5 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-white text-navy shadow-sm active:scale-95 disabled:opacity-50"
+                    aria-label="Ajouter une image"
+                    disabled={sending}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <ImagePlus className="h-5 w-5" />
+                  </button>
+                  <div className="flex min-w-0 flex-1 items-end gap-1 rounded-[22px] border border-border bg-white py-1 pl-3.5 pr-1 shadow-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
+                    <label htmlFor="message-composer-mobile" className="sr-only">
+                      Écrire une réponse
+                    </label>
+                    <textarea
+                      id="message-composer-mobile"
+                      value={draft}
+                      onChange={(e) => {
+                        setDraft(e.target.value)
+                        const el = e.target
+                        el.style.height = 'auto'
+                        el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+                      }}
+                      onKeyDown={onComposerKeyDown}
+                      rows={1}
+                      placeholder="Écrire une réponse…"
+                      className="max-h-[120px] min-h-[40px] min-w-0 flex-1 resize-none bg-transparent py-2.5 text-[15px] leading-5 text-navy outline-none [scrollbar-width:none] placeholder:text-muted/80 [&::-webkit-scrollbar]:hidden"
+                    />
+                    <button
+                      type="button"
+                      className={cn(
+                        'mb-0.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition active:scale-95 disabled:opacity-40',
+                        draft.trim() || pendingImage
+                          ? 'bg-[var(--color-primary-cta)] text-white shadow-[0_6px_16px_rgba(11,132,148,0.28)]'
+                          : 'bg-bg text-muted',
+                      )}
+                      aria-label="Envoyer"
+                      disabled={sending || (!draft.trim() && !pendingImage)}
+                      onClick={() => void sendMessage()}
+                    >
+                      {sending ? (
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                      ) : (
+                        <Send className="h-4 w-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Desktop / tablette: composer classique */}
+                <div className="hidden items-end gap-2 sm:flex">
                   <Button
                     type="button"
                     variant="secondary"
                     size="lg"
-                    className="shrink-0 self-center px-3"
+                    className="h-11 w-11 shrink-0 self-center !px-0"
                     icon={<ImagePlus className="h-4 w-4" />}
                     aria-label="Ajouter une image"
                     disabled={sending}
                     onClick={() => fileInputRef.current?.click()}
                   />
+                  <label htmlFor="message-composer-desktop" className="sr-only">
+                    Écrire une réponse
+                  </label>
                   <textarea
+                    id="message-composer-desktop"
                     value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
+                    onChange={(e) => {
+                      setDraft(e.target.value)
+                      const el = e.target
+                      el.style.height = 'auto'
+                      el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+                    }}
                     onKeyDown={onComposerKeyDown}
                     rows={1}
                     placeholder="Écrire une réponse…"
-                    className="h-12 min-h-[48px] max-h-[120px] min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border border-border bg-white px-4 py-3 text-[15px] leading-6 outline-none focus:border-primary [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                    className="h-11 min-h-[44px] max-h-[120px] min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border border-border bg-white px-4 py-2.5 text-[15px] leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                     aria-label="Écrire une réponse"
                   />
                   <Button
                     size="lg"
-                    className="shrink-0 self-center"
+                    className="h-11 shrink-0 self-center !px-4"
                     icon={<Send className="h-4 w-4" />}
                     loading={sending}
                     disabled={!draft.trim() && !pendingImage}
                     onClick={() => void sendMessage()}
+                    aria-label="Envoyer"
                   >
                     Envoyer
                   </Button>
@@ -791,7 +918,7 @@ export function MessagesPage() {
           )}
         </section>
 
-        {/* Colonne patient — contexte opérationnel */}
+        {/* Colonne patient — desktop */}
         <aside className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-l border-border bg-white lg:flex">
           <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain p-4 scrollbar-thin">
             <ConversationContextPanel
@@ -807,9 +934,36 @@ export function MessagesPage() {
         </aside>
       </div>
 
+      {mobileInfoOpen && selectedId ? (
+        <Modal onClose={() => setMobileInfoOpen(false)} className="max-w-lg">
+          <div className="flex items-start justify-between gap-3">
+            <h2 className="text-lg font-semibold text-navy">Infos conversation</h2>
+            <button
+              type="button"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted hover:bg-bg"
+              aria-label="Fermer"
+              onClick={() => setMobileInfoOpen(false)}
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <div className="mt-3 max-h-[min(70dvh,560px)] overflow-y-auto overflow-x-hidden">
+            <ConversationContextPanel
+              conversationId={selectedId}
+              context={context}
+              loading={contextLoading}
+              error={contextError}
+              onRetry={() => {
+                if (selectedId) void loadContext(selectedId)
+              }}
+            />
+          </div>
+        </Modal>
+      ) : null}
+
       {lightboxUrl ? (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          className="app-zoom-cover z-50 flex items-center justify-center bg-black/70 p-4"
           onClick={() => setLightboxUrl(null)}
           role="dialog"
           aria-modal="true"

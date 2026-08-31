@@ -28,27 +28,33 @@ export function ModalShell({
   enableEscape = true,
 }: ModalShellProps) {
   const panelRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  const enableEscapeRef = useRef(enableEscape)
+  onCloseRef.current = onClose
+  enableEscapeRef.current = enableEscape
 
+  // Focus + scroll lock only when the modal opens — not on every parent re-render
+  // (unstable onClose/enableEscape used to steal focus from inputs after each keystroke).
   useEffect(() => {
-    if (!open) return
+    if (!open) return undefined
     panelRef.current?.focus()
     const prev = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && enableEscape) onClose()
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape' && enableEscapeRef.current) onCloseRef.current()
     }
     window.addEventListener('keydown', onKey)
     return () => {
       document.body.style.overflow = prev
       window.removeEventListener('keydown', onKey)
     }
-  }, [open, onClose, enableEscape])
+  }, [open])
 
   return (
     <AnimatePresence>
       {open ? (
         <div
-          className="fixed inset-0 flex items-center justify-center p-5 sm:p-6"
+          className="app-zoom-cover flex items-center justify-center p-5 sm:p-6"
           style={{ zIndex }}
           role="presentation"
         >
@@ -60,7 +66,7 @@ export function ModalShell({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            onClick={onClose}
+            onClick={() => onCloseRef.current()}
           />
 
           <motion.div
@@ -70,10 +76,10 @@ export function ModalShell({
             aria-labelledby={titleId}
             tabIndex={-1}
             className={cn(
-              'relative flex w-[calc(100vw-20px)] flex-col overflow-hidden sm:w-[calc(100vw-32px)]',
+              'relative flex w-[calc(100%-20px)] max-w-full flex-col overflow-hidden sm:w-[calc(100%-32px)]',
               'rounded-[20px] border border-border bg-white',
               'shadow-[0_24px_60px_rgba(18,50,74,0.18)]',
-              'max-h-[calc(100vh-20px)] sm:max-h-[calc(100vh-64px)]',
+              'max-h-[calc(100dvh/var(--app-zoom)-20px)] sm:max-h-[calc(100dvh/var(--app-zoom)-64px)]',
               className,
             )}
             style={{ maxWidth: `${maxWidth}px` }}

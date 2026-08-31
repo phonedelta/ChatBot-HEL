@@ -2,6 +2,7 @@ import {
   Bell,
   BellRing,
   CalendarDays,
+  Monitor,
   ShieldCheck,
   UsersRound,
   Zap,
@@ -16,10 +17,12 @@ export type SettingsSectionId =
   | 'automations'
   | 'security'
   | 'notifications'
+  | 'appearance'
 
 export type SettingsSection = {
   id: SettingsSectionId
   label: string
+  shortLabel: string
   description: string
   icon: LucideIcon
   viewPermission: PermissionKey
@@ -30,6 +33,7 @@ export const settingsSections: SettingsSection[] = [
   {
     id: 'users',
     label: 'Utilisateurs et accès',
+    shortLabel: 'Accès',
     description: 'Comptes et autorisations',
     icon: UsersRound,
     viewPermission: PERMISSIONS.MANAGE_USERS,
@@ -38,6 +42,7 @@ export const settingsSections: SettingsSection[] = [
   {
     id: 'appointments',
     label: 'Rendez-vous',
+    shortLabel: 'RDV',
     description: 'Règles de réservation',
     icon: CalendarDays,
     viewPermission: PERMISSIONS.VIEW_SETTINGS,
@@ -46,6 +51,7 @@ export const settingsSections: SettingsSection[] = [
   {
     id: 'reminders',
     label: 'Confirmations & rappels',
+    shortLabel: 'Rappels',
     description: 'Confirmations et relances',
     icon: BellRing,
     viewPermission: PERMISSIONS.VIEW_SETTINGS,
@@ -54,6 +60,7 @@ export const settingsSections: SettingsSection[] = [
   {
     id: 'automations',
     label: 'Automatisations',
+    shortLabel: 'Auto',
     description: 'Actions automatiques',
     icon: Zap,
     viewPermission: PERMISSIONS.VIEW_SETTINGS,
@@ -62,6 +69,7 @@ export const settingsSections: SettingsSection[] = [
   {
     id: 'security',
     label: 'Sécurité & sessions',
+    shortLabel: 'Sécurité',
     description: 'Durée et inactivité',
     icon: ShieldCheck,
     viewPermission: PERMISSIONS.VIEW_SETTINGS,
@@ -70,10 +78,20 @@ export const settingsSections: SettingsSection[] = [
   {
     id: 'notifications',
     label: 'Notifications internes',
+    shortLabel: 'Alertes',
     description: 'Alertes de l’équipe',
     icon: Bell,
     viewPermission: PERMISSIONS.VIEW_SETTINGS,
     managePermission: PERMISSIONS.MANAGE_SETTINGS,
+  },
+  {
+    id: 'appearance',
+    label: 'Apparence',
+    shortLabel: 'Zoom',
+    description: 'Zoom de toute l’interface',
+    icon: Monitor,
+    viewPermission: PERMISSIONS.VIEW_SETTINGS,
+    managePermission: PERMISSIONS.VIEW_SETTINGS,
   },
 ]
 

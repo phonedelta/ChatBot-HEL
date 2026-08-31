@@ -5,6 +5,7 @@
   --color-navy: #12324A;
   --color-navy-800: #1D4966;
   --color-primary: #13AEC1;
+  --color-primary-cta: #0B8494;
   --color-cyan: #13AEC1;
   --color-cyan-tint: #E4F6F8;
   --color-secondary: #13AEC1;
@@ -13,6 +14,7 @@
   --color-border: #DCEAF0;
   --color-text: #12324A;
   --color-muted: #708299;
+  --color-muted-accessible: #546575;
   --color-success: #20B26B;
   --color-warning: #F59E0B;
   --color-danger: #E34C4C;
@@ -32,12 +34,88 @@
   box-sizing: border-box;
 }
 
+:root {
+  --app-zoom: 1;
+  --app-zoom-factor: 1;
+  --app-zoom-inverse: 1;
+  /* Width: Chrome already expands used width under CSS zoom — do NOT / zoom here. */
+  --app-virtual-width: 100%;
+  /* Height: must be compensated (100dvh alone collapses under zoom). */
+  --app-virtual-height: calc(100dvh / var(--app-zoom));
+}
+
 html,
-body,
-#root {
+body {
+  width: 100%;
   min-height: 100%;
   max-width: 100%;
-  overflow-x: hidden;
+  margin: 0;
+  background: var(--color-bg);
+}
+
+#root {
+  width: 100%;
+  min-height: 100dvh;
+  background: var(--color-bg);
+}
+
+/*
+ * App zoom architecture:
+ * - viewport = physical fill
+ * - canvas = CSS zoom; width 100% (Chrome layout-expands under zoom);
+ *   height compensated so shell still fills the screen
+ * Never transform:scale. Never double-compensate width.
+ */
+.app-zoom-viewport {
+  position: relative;
+  width: 100%;
+  min-height: 100dvh;
+  background: var(--color-bg);
+  overflow-x: clip;
+}
+
+.app-zoom-canvas {
+  position: relative;
+  box-sizing: border-box;
+  zoom: var(--app-zoom);
+  width: 100%;
+  min-height: calc(100dvh / var(--app-zoom));
+  transform: none !important;
+  background: var(--color-bg);
+}
+
+/* Structural heights inside the zoomed canvas (not raw 100dvh) */
+.min-h-app {
+  min-height: calc(100dvh / var(--app-zoom));
+}
+
+.h-app {
+  height: calc(100dvh / var(--app-zoom));
+}
+
+.max-h-app {
+  max-height: calc(100dvh / var(--app-zoom));
+}
+
+/*
+ * Fixed overlays inside the zoomed canvas.
+ * Width follows the same rule as the canvas (100vw — Chrome expands under zoom).
+ * Height stays compensated.
+ */
+.app-zoom-cover {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: calc(100dvh / var(--app-zoom));
+}
+
+@supports (height: 100dvh) {
+  html.messages-lock,
+  html.messages-lock body,
+  html.messages-lock #root {
+    height: 100dvh;
+  }
 }
 
 html.messages-lock,
@@ -45,6 +123,33 @@ html.messages-lock body,
 html.messages-lock #root {
   height: 100%;
   overflow: hidden;
+}
+
+html.messages-lock .app-zoom-viewport {
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+}
+
+html.messages-lock .app-zoom-canvas {
+  height: calc(100dvh / var(--app-zoom));
+  min-height: calc(100dvh / var(--app-zoom));
+  overflow: hidden;
+}
+
+/* Local horizontal chip scroll without body overflow */
+.chips-scroll {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.375rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.chips-scroll > * {
+  flex-shrink: 0;
 }
 
 body {

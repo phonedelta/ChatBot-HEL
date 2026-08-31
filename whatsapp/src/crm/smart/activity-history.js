@@ -799,6 +799,28 @@ function enrichRow(row) {
     return lines.join('\n')
   }
 
+  function exportActivityPdf(filters = {}) {
+    const { buildSimplePdf } = require('../../dashboard/simple-pdf')
+    const { where, params } = buildWhereClause(filters)
+    const rows = db.prepare(`
+      SELECT a.*, c.full_name AS patient_name
+      FROM activity_history a
+      LEFT JOIN customers c ON c.id = a.patient_id
+      WHERE ${where}
+      ORDER BY a.created_at DESC, a.id DESC
+      LIMIT 500
+    `).all(...params)
+
+    const lines = rows.map((row) => {
+      const dt = String(row.created_at || '')
+      const meta = parseJson(row.metadata_json, {})
+      const executedBy = executedByDisplayName(row, meta, db)
+      const originLabel = row.origin || resolveOrigin(row.source, row.actor_type, row.event_type, meta)
+      return `${dt.slice(0, 16)} | ${row.title || activityTitle(row.event_type)} | ${row.patient_name || '—'} | ${executedBy} | ${originLabel}`
+    })
+    return buildSimplePdf('Historique HEL — Smart CRM', lines.length ? lines : ['Aucune activité sur la période sélectionnée.'])
+  }
+
   function listHistoryActorFilters() {
     const groups = [
       {
@@ -918,6 +940,7 @@ function enrichRow(row) {
     getActivitySummary,
     getActivityEvent,
     exportActivityCsv,
+    exportActivityPdf,
     backfillFromLegacy,
     listHistoryActorFilters,
     activityTitle,

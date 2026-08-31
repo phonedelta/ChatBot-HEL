@@ -376,6 +376,43 @@ function askConfirmation(lead, language = 'fr') {
   ].filter((line) => line !== null).join('\n')
 }
 
+/**
+ * Slot occupied — never reveal who holds the créneau.
+ * @param {{ appointment_date?: string, appointment_time?: string }} leadOrSlot
+ * @param {string} [language]
+ * @param {{ alternatives?: string[], lateConflict?: boolean }} [options]
+ */
+function slotUnavailableMessage(leadOrSlot, language = 'fr', options = {}) {
+  const date = formatDateDisplay(leadOrSlot?.appointment_date)
+  const time = String(leadOrSlot?.appointment_time || '').slice(0, 5) || '—'
+  const alts = Array.isArray(options.alternatives)
+    ? options.alternatives.map((t) => String(t).slice(0, 5)).filter(Boolean).slice(0, 3)
+    : []
+  const late = Boolean(options.lateConflict)
+
+  if (isDarija(language)) {
+    const head = late
+      ? `هاد الموعد ولى محجوز دابا، الساعة ${time} نهار ${date} ما بقاتش متاحة.`
+      : `هاد الموعد عامر، الساعة ${time} نهار ${date} راه محجوزة.`
+    const lines = [head, '', 'اختار ليا ساعة أخرى ولا نهار آخر.']
+    if (alts.length) {
+      lines.push('', 'نقدر نقترح عليك:')
+      for (const t of alts) lines.push(`• ${t}`)
+    }
+    return lines.join('\n')
+  }
+
+  const head = late
+    ? `Ce créneau vient d’être réservé. Le ${date} à ${time} n’est plus disponible.`
+    : `Ce créneau est déjà réservé. Le ${date} à ${time} n’est plus disponible.`
+  const lines = [head, '', 'Choisissez une autre heure ou un autre jour.']
+  if (alts.length) {
+    lines.push('', 'Créneaux possibles :')
+    for (const t of alts) lines.push(`• ${t}`)
+  }
+  return lines.join('\n')
+}
+
 function patientConfirmationMessage(lead, language = 'fr') {
   const name = personDisplayName(lead, language) || 'Patient'
   const date = formatDateDisplay(lead.appointment_date)
@@ -460,6 +497,7 @@ module.exports = {
   missingFieldsMessage,
   buildBookingCollectionReplies,
   askConfirmation,
+  slotUnavailableMessage,
   patientConfirmationMessage,
   staffNotificationText,
   correctionAck,

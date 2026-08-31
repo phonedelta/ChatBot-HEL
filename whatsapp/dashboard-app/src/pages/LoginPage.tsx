@@ -87,7 +87,7 @@ export function LoginPage() {
   })
 
   return (
-    <div className="relative h-dvh max-h-dvh overflow-hidden bg-[#F7FCFD]">
+    <div className="relative h-app max-h-app overflow-hidden bg-[#F7FCFD]">
       <div
         className="pointer-events-none absolute inset-0 opacity-30"
         style={{
@@ -101,16 +101,23 @@ export function LoginPage() {
           initial={{ opacity: 0, x: -16 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.35 }}
-          className="relative hidden h-full flex-1 flex-col justify-between overflow-hidden px-10 py-8 lg:flex xl:px-14 xl:py-10"
+          className="relative hidden h-full min-h-0 flex-1 flex-col justify-between overflow-hidden px-10 py-8 lg:flex xl:px-14 xl:py-10"
         >
+          {/* Single cover photo — avoid CSS multi-layer background tiling under zoom */}
+          <img
+            src="https://images.unsplash.com/photo-1629909613654-28e377c37b09?auto=format&fit=crop&w=1600&q=80"
+            alt=""
+            aria-hidden
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center"
+          />
           <div
-            className="absolute inset-0 bg-cover bg-center"
+            className="pointer-events-none absolute inset-0"
             style={{
-              backgroundImage:
-                'linear-gradient(105deg, rgba(247,252,253,0.94) 0%, rgba(247,252,253,0.78) 45%, rgba(247,252,253,0.4) 100%), url(https://images.unsplash.com/photo-1629909613654-28e377c37b09?auto=format&fit=crop&w=1600&q=80)',
+              background:
+                'linear-gradient(105deg, rgba(247,252,253,0.94) 0%, rgba(247,252,253,0.78) 45%, rgba(247,252,253,0.42) 100%)',
             }}
           />
-          <div className="relative z-10">
+          <div className="relative z-10 shrink-0">
             <img src={helLogo} alt="Centre Dentaire HEL" className="h-12 w-auto max-w-[180px] object-contain drop-shadow-sm" />
             <h1 className="mt-6 max-w-lg font-display text-3xl leading-snug text-text xl:text-4xl">
               Votre solution <span className="text-primary">intelligente</span> pour une gestion simplifiée
@@ -119,7 +126,7 @@ export function LoginPage() {
               Gérez vos rendez-vous, patients et communications en toute simplicité et efficacité.
             </p>
           </div>
-          <div className="relative z-10 grid grid-cols-3 gap-2.5">
+          <div className="relative z-10 mt-8 grid shrink-0 grid-cols-3 gap-2.5">
             {features.map((feature) => (
               <div key={feature.title} className="rounded-[18px] border border-white/70 bg-white/90 p-3 shadow-[0_8px_24px_rgba(16,42,67,0.07)] backdrop-blur">
                 <div className="mb-2 flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">

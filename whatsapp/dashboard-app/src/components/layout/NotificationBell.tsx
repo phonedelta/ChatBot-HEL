@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { Bell, CalendarClock, CheckCheck, X } from 'lucide-react'
 import { useNotifications } from '@/context/NotificationContext'
 import type { DashNotification } from '@/lib/notification-types'
 import { unlockNotificationSound } from '@/lib/notification-sound'
+import { getAppPortalRoot } from '@/lib/portal-root'
 import { cn } from '@/lib/format'
 
 function relativeTime(iso: string) {
@@ -46,16 +48,72 @@ function formatSlotLabel(date?: string | null, time?: string | null) {
   }
 }
 
+function getAppZoomFactor(): number {
+  const raw = document.documentElement.style.getPropertyValue('--app-zoom')
+    || document.documentElement.style.getPropertyValue('--app-zoom-factor')
+  const n = Number(raw)
+  if (Number.isFinite(n) && n > 0) return n
+  const canvas = document.querySelector('.app-zoom-canvas')
+  if (canvas) {
+    const z = Number.parseFloat(getComputedStyle(canvas).zoom)
+    if (Number.isFinite(z) && z > 0) return z
+  }
+  return 1
+}
+
+type PanelPos = { top: number; left: number; width: number }
+
+function computePanelPos(btn: HTMLElement): PanelPos {
+  const rect = btn.getBoundingClientRect()
+  const z = getAppZoomFactor()
+  const gap = 8
+  const widthVisual = Math.min(400, window.innerWidth - 16)
+  let leftVisual = rect.right - widthVisual
+  if (leftVisual < 8) leftVisual = 8
+  if (leftVisual + widthVisual > window.innerWidth - 8) {
+    leftVisual = Math.max(8, window.innerWidth - widthVisual - 8)
+  }
+  const topVisual = rect.bottom + gap
+  // Portal mounts inside zoomed canvas: convert visual px → zoom-local px.
+  return {
+    top: topVisual / z,
+    left: leftVisual / z,
+    width: widthVisual / z,
+  }
+}
+
 export function NotificationBell() {
   const navigate = useNavigate()
   const { items, unreadCount, refresh, markRead, markAllRead } = useNotifications()
   const [open, setOpen] = useState(false)
-  const rootRef = useRef<HTMLDivElement | null>(null)
+  const [pos, setPos] = useState<PanelPos | null>(null)
+  const btnRef = useRef<HTMLButtonElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) {
+      setPos(null)
+      return
+    }
+    const update = () => {
+      if (btnRef.current) setPos(computePanelPos(btnRef.current))
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) return undefined
     function onDoc(e: MouseEvent) {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (btnRef.current?.contains(t)) return
+      if (panelRef.current?.contains(t)) return
+      setOpen(false)
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false)
@@ -88,42 +146,23 @@ export function NotificationBell() {
 
   const badge = unreadCount > 9 ? '9+' : String(unreadCount)
 
-  return (
-    <div className="relative" ref={rootRef}>
-      <button
-        type="button"
-        className="relative inline-flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-white text-navy hover:bg-cyan-tint"
-        aria-label="Notifications"
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        onClick={() => {
-          unlockNotificationSound()
-          setOpen((v) => !v)
-          if (!open) void refresh()
-        }}
-      >
-        <Bell className="h-4 w-4" />
-        {unreadCount > 0 ? (
-          <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-semibold text-white">
-            {badge}
-          </span>
-        ) : null}
-      </button>
-
-      {open ? (
+  const panel = open && pos
+    ? createPortal(
         <div
+          ref={panelRef}
           role="dialog"
           aria-label="Notifications"
-          className="absolute right-0 top-[calc(100%+8px)] z-40 flex w-[min(100vw-1.5rem,400px)] flex-col overflow-hidden rounded-[14px] border border-border bg-white shadow-soft"
+          style={{ top: pos.top, left: pos.left, width: pos.width }}
+          className="fixed z-[10040] flex max-h-[min(70dvh,480px)] flex-col overflow-hidden rounded-[14px] border border-border bg-white shadow-soft"
         >
           <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-            <div>
+            <div className="min-w-0">
               <p className="text-sm font-semibold text-navy">Notifications</p>
               <p className="text-[11px] text-muted">
                 {unreadCount > 0 ? `${unreadCount} nouvelle${unreadCount > 1 ? 's' : ''}` : 'À jour'}
               </p>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               {unreadCount > 0 ? (
                 <button
                   type="button"
@@ -147,7 +186,7 @@ export function NotificationBell() {
 
           <div
             className={cn(
-              'overflow-x-hidden overflow-y-auto scrollbar-thin',
+              'min-w-0 overflow-x-hidden overflow-y-auto scrollbar-thin',
               items.length > 2 ? 'max-h-[360px]' : 'max-h-none',
             )}
           >
@@ -219,9 +258,37 @@ export function NotificationBell() {
               </ul>
             )}
           </div>
-        </div>
-      ) : null}
-    </div>
+        </div>,
+        getAppPortalRoot(),
+      )
+    : null
+
+  return (
+    <>
+      <div className="relative">
+        <button
+          ref={btnRef}
+          type="button"
+          className="relative inline-flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-white text-navy hover:bg-cyan-tint"
+          aria-label="Notifications"
+          aria-expanded={open}
+          aria-haspopup="dialog"
+          onClick={() => {
+            unlockNotificationSound()
+            setOpen((v) => !v)
+            if (!open) void refresh()
+          }}
+        >
+          <Bell className="h-4 w-4" />
+          {unreadCount > 0 ? (
+            <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-semibold text-white">
+              {badge}
+            </span>
+          ) : null}
+        </button>
+      </div>
+      {panel}
+    </>
   )
 }
 

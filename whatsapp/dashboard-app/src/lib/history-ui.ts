@@ -49,11 +49,17 @@ export function historyCategoryTint(category: string, severity?: string) {
 function formatDateTimeValue(value: unknown): string {
   if (value == null) return '—'
   if (typeof value === 'string') {
-    if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
-      const d = new Date(value.length <= 10 ? `${value}T12:00:00` : value)
-      if (!Number.isNaN(d.getTime())) {
-        return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+      if (m) {
+        const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+        if (!Number.isNaN(d.getTime())) {
+          return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
+        }
       }
+    }
+    if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
+      return value.slice(0, 10)
     }
     return value
   }
@@ -114,7 +120,7 @@ export function formatHistoryChangePair(
   return `${formatHistoryChangeValue(oldValue)} → ${formatHistoryChangeValue(newValue)}`
 }
 
-export const HISTORY_GRID_CLASS = 'sm:grid sm:grid-cols-[88px_minmax(0,1fr)_260px_52px]'
+export const HISTORY_GRID_CLASS = 'sm:grid sm:grid-cols-[72px_minmax(0,1fr)_minmax(140px,220px)_48px] lg:grid-cols-[88px_minmax(0,1fr)_260px_52px]'
 export const HISTORY_GRID_PAD = 'px-4 sm:px-5'
 
 export function historyChannelLabel(source?: string | null) {

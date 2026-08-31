@@ -35,6 +35,11 @@ CREATE INDEX IF NOT EXISTS idx_appointments_date
 CREATE INDEX IF NOT EXISTS idx_appointments_customer
   ON appointments(customer_id);
 
+-- At most one active appointment per exact créneau (cancelled rows excluded).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_active_slot
+  ON appointments(appointment_date, appointment_time)
+  WHERE status IN ('non_confirme', 'pending_confirmation', 'confirmed');
+
 CREATE TABLE IF NOT EXISTS dental_cases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   customer_id INTEGER NOT NULL,

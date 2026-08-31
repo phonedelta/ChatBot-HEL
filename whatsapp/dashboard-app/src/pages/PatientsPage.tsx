@@ -364,8 +364,13 @@ export function PatientsPage() {
       {/* Toolbar */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
         <div className="relative min-w-0 flex-1">
+          <label htmlFor="patients-search" className="sr-only">
+            Rechercher un patient par nom ou téléphone
+          </label>
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
           <input
+            id="patients-search"
+            name="patientsSearch"
             value={q}
             onChange={(e) => {
               setQ(e.target.value)
@@ -384,6 +389,7 @@ export function PatientsPage() {
             <button
               key={f.key}
               type="button"
+              aria-pressed={filter === f.key}
               onClick={() => setFilter(f.key)}
               className={cn(
                 'h-8 rounded-lg px-3 text-xs font-medium transition',
@@ -400,10 +406,11 @@ export function PatientsPage() {
         <button
           type="button"
           onClick={() => setNewPatientOpen(true)}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-white"
+          className="inline-flex h-11 items-center gap-1.5 rounded-lg bg-[var(--color-primary-cta)] px-3 text-xs font-semibold text-white"
         >
           <Plus className="h-3.5 w-3.5" />
-          Nouveau patient
+          <span className="sm:hidden">+ Patient</span>
+          <span className="hidden sm:inline">Nouveau patient</span>
         </button>
         ) : null}
       </div>

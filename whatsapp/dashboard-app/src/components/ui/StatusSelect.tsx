@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { getAppPortalRoot } from '@/lib/portal-root'
 import { Check, ChevronDown } from 'lucide-react'
 import { formatStatus, statusTone, cn } from '@/lib/format'
 import { Badge } from '@/components/ui/Badge'
@@ -23,19 +24,37 @@ type Props = {
   onChange: (next: string) => void | Promise<void>
 }
 
+function getAppZoomFactor(): number {
+  const raw = document.documentElement.style.getPropertyValue('--app-zoom-factor')
+  const n = Number(raw)
+  if (Number.isFinite(n) && n > 0) return n
+  const root = document.getElementById('root')
+  if (root) {
+    const z = Number.parseFloat(getComputedStyle(root).zoom)
+    if (Number.isFinite(z) && z > 0) return z
+  }
+  return 1
+}
+
 function computeMenuPos(btn: HTMLElement) {
   const rect = btn.getBoundingClientRect()
+  const z = getAppZoomFactor()
   const menuWidth = 196
   const menuHeight = 148
   const gap = 8
   const spaceBelow = window.innerHeight - rect.bottom
   const openUp = spaceBelow < menuHeight + gap
-  const top = openUp ? Math.max(8, rect.top - menuHeight - gap) : rect.bottom + gap
-  let left = rect.left
-  if (left + menuWidth > window.innerWidth - 8) {
-    left = Math.max(8, rect.right - menuWidth)
+  const topVisual = openUp ? Math.max(8, rect.top - menuHeight - gap) : rect.bottom + gap
+  let leftVisual = rect.left
+  if (leftVisual + menuWidth > window.innerWidth - 8) {
+    leftVisual = Math.max(8, rect.right - menuWidth)
   }
-  return { top, left, width: menuWidth }
+  // Portals mount inside the zoomed root: convert visual px → zoom-local px.
+  return {
+    top: topVisual / z,
+    left: leftVisual / z,
+    width: menuWidth / z,
+  }
 }
 
 export function StatusSelect({ value, disabled, onChange }: Props) {
@@ -183,7 +202,7 @@ export function StatusSelect({ value, disabled, onChange }: Props) {
                 )
               })}
             </div>,
-            document.body,
+            getAppPortalRoot(),
           )
         : null}
     </>

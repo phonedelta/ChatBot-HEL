@@ -339,8 +339,11 @@ export function HistoryPage() {
     window.open(url, '_blank')
   }
 
-  const printPdf = () => {
-    window.print()
+  const exportPdf = () => {
+    const qs = buildQueryParams(searchParams)
+    const token = getStoredToken()
+    const url = `/dashboard/api/history/export.pdf?${qs.toString()}${token ? `&token=${encodeURIComponent(token)}` : ''}`
+    window.open(url, '_blank')
   }
 
   const resetFilters = () => {
@@ -389,6 +392,7 @@ export function HistoryPage() {
             <button
               key={p.days}
               type="button"
+              aria-pressed={days === p.days}
               onClick={() => setParam('days', String(p.days))}
               className={cn(
                 'rounded-full px-3 py-1.5 text-xs font-semibold transition-colors',
@@ -414,11 +418,11 @@ export function HistoryPage() {
             </button>
           ))}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <select
             value={actorFilter}
             onChange={(e) => setParam('actor', e.target.value)}
-            className="h-9 min-w-[160px] rounded-lg border border-border bg-white px-3 text-sm text-navy"
+            className="h-11 w-full rounded-lg border border-border bg-white px-3 text-sm text-navy sm:h-9 sm:w-auto sm:min-w-[160px]"
           >
             <option value="all">Tous les exécutants</option>
             {actorGroups.map((group) => (
@@ -429,15 +433,21 @@ export function HistoryPage() {
               </optgroup>
             ))}
           </select>
-          <div className="relative min-w-[180px] flex-1">
+          <div className="relative min-w-0 flex-1 sm:min-w-[180px]">
+            <label htmlFor="history-search" className="sr-only">
+              Rechercher dans l’historique
+            </label>
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
             <input
+              id="history-search"
+              name="historySearch"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Rechercher patient, action, acteur…"
-              className="h-9 w-full rounded-lg border border-border bg-white pl-9 pr-3 text-sm"
+              className="h-11 w-full rounded-lg border border-border bg-white pl-9 pr-3 text-sm sm:h-9"
             />
           </div>
+          <div className="flex flex-wrap items-center gap-2">
           <Button variant="ghost" size="sm" onClick={() => load(true)} title="Actualiser">
             <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
           </Button>
@@ -447,12 +457,13 @@ export function HistoryPage() {
                 <Download className="h-4 w-4" />
                 CSV
               </Button>
-              <Button variant="ghost" size="sm" onClick={printPdf} disabled={!hasItems}>
+              <Button variant="ghost" size="sm" onClick={exportPdf} disabled={Boolean(error)}>
                 <Printer className="h-4 w-4" />
                 PDF
               </Button>
             </>
           ) : null}
+          </div>
         </div>
         {(patientId || conversationId || appointmentId) ? (
           <div className="flex flex-wrap items-center gap-2 text-xs">

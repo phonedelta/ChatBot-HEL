@@ -466,9 +466,9 @@ export function AnalyticsPage() {
                 </div>
               </div>
               {loading && !data ? (
-                <Skeleton className="h-[300px] w-full" />
+                <Skeleton className="h-[240px] w-full sm:h-[300px]" />
               ) : (
-                <div className="h-[300px] w-full" role="img" aria-label="Graphique des rendez-vous créés et confirmés par jour">
+                <div className="h-[240px] w-full sm:h-[300px]" role="img" aria-label="Graphique des rendez-vous créés et confirmés par jour">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={chartData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
                       <defs>

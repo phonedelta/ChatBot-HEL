@@ -489,9 +489,10 @@ export function FollowUpsPage() {
             <button
               key={card.key}
               type="button"
+              aria-pressed={active}
               onClick={() => setCategory(card.key)}
               className={cn(
-                'min-w-[160px] flex-1 rounded-[14px] border bg-white p-3.5 text-left transition sm:min-w-0',
+                'min-w-[140px] flex-1 rounded-[14px] border bg-white p-3.5 text-left transition sm:min-w-0',
                 active ? card.activeClass : 'border-border hover:border-primary/30',
               )}
             >
@@ -513,7 +514,7 @@ export function FollowUpsPage() {
       </div>
 
       {/* Main + sidebar */}
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_290px]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_290px]">
         <section className="overflow-hidden rounded-[14px] border border-border bg-white">
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
             <h2 className="text-sm font-semibold text-navy">{categoryLabel}</h2>

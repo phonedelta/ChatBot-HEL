@@ -56,6 +56,18 @@ export function toDateISO(value?: string | null) {
   return match ? match[1] : ''
 }
 
+/** French date display — 05/09/2026 (non ambigu). */
+export function formatDateFr(value?: string | null, style: 'short' | 'medium' = 'short') {
+  const date = toDateISO(value)
+  if (!date) return '—'
+  const d = parseLocalDate(date)
+  if (!d) return date
+  if (style === 'medium') {
+    return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\.$/, '')
+  }
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
 /** True when appointment_date is today (local). */
 export function isTodayDate(value?: string | null) {
   return toDateISO(value) === todayISO()

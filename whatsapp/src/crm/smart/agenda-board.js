@@ -291,8 +291,12 @@ function createAgendaBoard(deps) {
     })
 
     const activeStatuses = new Set(['non_confirme', 'confirmed', 'no_show', 'completed'])
+    const showCancelled = status === 'cancelled' || status === 'released'
     const appointments = rows
-      .filter((r) => activeStatuses.has(String(r.status)))
+      .filter((r) => {
+        if (showCancelled) return String(r.status) === 'cancelled'
+        return activeStatuses.has(String(r.status))
+      })
       .filter((r) => {
         if (status === 'available' || status === 'released') return false
         return true
@@ -457,8 +461,60 @@ function createAgendaBoard(deps) {
     }
   }
 
+  function getAgendaAppointment(appointmentId) {
+    const id = Number(appointmentId)
+    if (!id) return null
+    const row = db.prepare(`
+      SELECT
+        a.id,
+        a.customer_id,
+        a.appointment_date,
+        a.appointment_time,
+        a.status,
+        COALESCE(a.duration_minutes, 30) AS duration_minutes,
+        a.practitioner_id,
+        a.appointment_type,
+        a.source,
+        c.full_name,
+        c.phone_number,
+        d.problem,
+        d.urgency,
+        p.display_name AS practitioner_name
+      FROM appointments a
+      JOIN customers c ON c.id = a.customer_id
+      LEFT JOIN dental_cases d ON d.appointment_id = a.id
+      LEFT JOIN practitioners p ON p.id = a.practitioner_id
+      WHERE a.id = ?
+    `).get(id)
+    if (!row) return null
+    const time = formatTime(row.appointment_time)
+    const duration = Number(row.duration_minutes) || 30
+    return {
+      id: row.id,
+      appointment_id: row.id,
+      customer_id: row.customer_id,
+      full_name: row.full_name,
+      short_name: shortPatientName(row.full_name),
+      phone_number: row.phone_number,
+      phone_display: formatPhoneDisplay(row.phone_number) || row.phone_number,
+      appointment_date: row.appointment_date,
+      appointment_time: time,
+      duration_minutes: duration,
+      end_time: minutesToTime((toMinutes(time) || 0) + duration),
+      status: row.status,
+      status_label: appointmentStatusLabel(row.status),
+      appointment_type: row.appointment_type || row.problem || 'Consultation',
+      problem: row.problem,
+      practitioner_id: row.practitioner_id || null,
+      practitioner_name: row.practitioner_name || null,
+      source: row.source || 'whatsapp',
+      urgency: row.urgency || null,
+    }
+  }
+
   return {
     getAgendaBoard,
+    getAgendaAppointment,
     resolveWeekRange,
     buildSlotsForDay,
     formatWeekSubtitle,

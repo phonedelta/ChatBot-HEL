@@ -120,10 +120,10 @@ export function TodayPage() {
       />
 
       <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--color-muted-accessible)]">
           À traiter maintenant
         </h2>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
           <AttentionCard
             icon={MessageSquareWarning}
             title="Patients attendant une réponse"
@@ -160,8 +160,8 @@ export function TodayPage() {
       </section>
 
       <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">KPI du jour</h2>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--color-muted-accessible)]">KPI du jour</h2>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
           <StatCard label="Rendez-vous du jour" value={kpis?.appointments_today || 0} />
           <StatCard label="Confirmés" value={kpis?.confirmed || 0} tone="success" />
           <StatCard label="À confirmer" value={kpis?.pending || 0} tone="warning" />
@@ -171,10 +171,10 @@ export function TodayPage() {
       </section>
 
       <div className="grid gap-4 xl:grid-cols-3">
-        <section className="card-surface xl:col-span-2 p-5">
-          <div className="mb-4 flex items-center justify-between">
+        <section className="card-surface order-1 p-4 sm:p-5 xl:col-span-2 xl:order-none">
+          <div className="mb-4 flex items-center justify-between gap-2">
             <h2 className="text-base font-semibold text-navy">Agenda du jour</h2>
-            <Link to="/agenda" className="text-sm font-medium text-primary hover:underline">
+            <Link to="/agenda" className="shrink-0 text-sm font-medium text-primary hover:underline">
               Voir l’agenda
             </Link>
           </div>
@@ -191,10 +191,10 @@ export function TodayPage() {
                   className="flex items-center justify-between gap-3 rounded-xl border border-border px-3 py-2.5"
                 >
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-navy">
+                    <p className="text-sm font-semibold text-navy break-words">
                       {item.appointment_time} · {item.full_name}
                     </p>
-                    <p className="truncate text-xs text-muted">{item.problem || 'Consultation'}</p>
+                    <p className="truncate text-xs text-[var(--color-muted-accessible)]">{item.problem || 'Consultation'}</p>
                   </div>
                   <StatusBadge value={item.status} label={item.status_label || formatStatus(item.status)} />
                 </li>
@@ -202,37 +202,37 @@ export function TodayPage() {
             </ul>
           )}
         </section>
-
-        <section className="card-surface p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <Bot className="h-4 w-4 text-primary" />
-            <h2 className="text-base font-semibold text-navy">Votre assistant IA aujourd’hui</h2>
-          </div>
-          <div className="mb-4 grid grid-cols-2 gap-2 text-sm">
-            <MiniMetric label="Messages auto" value={data?.ai_activity.messages_auto || 0} />
-            <MiniMetric label="RDV créés" value={data?.ai_activity.appointments_created || 0} />
-            <MiniMetric label="Relances" value={data?.ai_activity.followups_sent || 0} />
-            <MiniMetric label="Créneaux récupérés" value={data?.ai_activity.slots_recovered || 0} />
-          </div>
-          <ul className="space-y-2">
-            {(data?.ai_activity.recent || []).slice(0, 5).map((row) => (
-              <li key={row.id} className="rounded-lg bg-bg px-3 py-2 text-xs text-muted">
-                <span className="font-medium text-navy">{row.at || String(row.created_at || '').slice(11, 16)}</span>
-                {' · '}
-                {row.text || row.reason || row.action_type}
-              </li>
-            ))}
-            {!data?.ai_activity.recent?.length ? (
-              <li className="text-sm text-muted">Aucune action IA enregistrée aujourd’hui.</li>
-            ) : null}
-          </ul>
-        </section>
       </div>
 
-      <section className="card-surface p-5">
+      <section className="card-surface p-4 sm:p-5">
+        <div className="mb-4 flex items-center gap-2">
+          <Bot className="h-4 w-4 text-primary" />
+          <h2 className="text-base font-semibold text-navy">Votre assistant IA aujourd’hui</h2>
+        </div>
+        <div className="mb-4 grid grid-cols-2 gap-2 text-sm">
+          <MiniMetric label="Messages auto" value={data?.ai_activity.messages_auto || 0} />
+          <MiniMetric label="RDV créés" value={data?.ai_activity.appointments_created || 0} />
+          <MiniMetric label="Relances" value={data?.ai_activity.followups_sent || 0} />
+          <MiniMetric label="Créneaux récupérés" value={data?.ai_activity.slots_recovered || 0} />
+        </div>
+        <ul className="space-y-2">
+          {(data?.ai_activity.recent || []).slice(0, 5).map((row) => (
+            <li key={row.id} className="rounded-lg bg-bg px-3 py-2 text-xs text-[var(--color-muted-accessible)]">
+              <span className="font-medium text-navy">{row.at || String(row.created_at || '').slice(11, 16)}</span>
+              {' · '}
+              {row.text || row.reason || row.action_type}
+            </li>
+          ))}
+          {!data?.ai_activity.recent?.length ? (
+            <li className="text-sm text-[var(--color-muted-accessible)]">Aucune action IA enregistrée aujourd’hui.</li>
+          ) : null}
+        </ul>
+      </section>
+
+      <section className="card-surface p-4 sm:p-5">
         <h2 className="mb-3 text-base font-semibold text-navy">Demandes fréquentes</h2>
         {!data?.frequent_requests?.length ? (
-          <p className="text-sm text-muted">Pas encore assez de données pour afficher des tendances.</p>
+          <p className="text-sm text-[var(--color-muted-accessible)]">Pas encore assez de données pour afficher des tendances.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {data.frequent_requests.map((item) => (

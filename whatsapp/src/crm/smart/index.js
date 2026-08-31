@@ -1228,6 +1228,10 @@ function createSmartCrm(db, crmRepo = null) {
     return agendaBoard.getAgendaBoard(options)
   }
 
+  function getAgendaAppointment(appointmentId) {
+    return agendaBoard.getAgendaAppointment(appointmentId)
+  }
+
   // Confirmation engine wired after helpers exist — set via late init below
   let appointmentConfirmation = null
 
@@ -2432,7 +2436,10 @@ function createSmartCrm(db, crmRepo = null) {
       JOIN customers c ON c.id = a.customer_id
       WHERE c.full_name LIKE ? OR c.phone_number LIKE ? OR a.appointment_date LIKE ?
       ORDER BY a.appointment_date DESC LIMIT ?
-    `).all(like, like, like, lim)
+    `).all(like, like, like, lim).map((row) => ({
+      ...row,
+      status_label: appointmentStatusLabel(row.status),
+    }))
 
     return { patients, appointments }
   }
@@ -2516,6 +2523,7 @@ function createSmartCrm(db, crmRepo = null) {
     getConversation,
     getConversationContext,
     getAgendaBoard,
+    getAgendaAppointment,
     getAppointmentConfirmation,
     appointmentConfirmation,
     setAppointmentConfirmationSender,
@@ -2618,6 +2626,7 @@ function createSmartCrm(db, crmRepo = null) {
     getActivitySummary: (...args) => activityHistory.getActivitySummary(...args),
     getActivityEvent: (...args) => activityHistory.getActivityEvent(...args),
     exportActivityCsv: (...args) => activityHistory.exportActivityCsv(...args),
+    exportActivityPdf: (...args) => activityHistory.exportActivityPdf(...args),
     recordActivity: (...args) => activityHistory.recordActivity(...args),
     recordUserAuditEvent: (...args) => activityHistory.recordUserAuditEvent(...args),
     recordAssistantAuditEvent: (...args) => activityHistory.recordAssistantAuditEvent(...args),

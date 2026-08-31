@@ -16,6 +16,12 @@ const {
   normalizePersonName,
   channelPhoneFromChat,
 } = require('./contact-patients')
+const {
+  normalizeBusinessDate,
+  assertSlotAvailable,
+  runSlotWriteTransaction,
+  isSlotUnavailableError,
+} = require('./appointment-slots')
 
 /**
  * @param {import('node:sqlite').DatabaseSync} db
@@ -255,119 +261,123 @@ function createCrmRepository(db) {
 
   /**
    * Persist confirmed booking. Never call without explicit patient confirmation.
+   * Re-checks slot availability inside BEGIN IMMEDIATE (race-safe).
    */
   function saveConfirmedBooking(lead) {
     if (!lead?.full_name || !lead?.phone_number || !lead?.appointment_date || !lead?.appointment_time) {
       throw new Error('Incomplete lead — cannot save booking')
     }
 
-    const bookingTarget = String(lead.booking_target || '').trim()
-    const selectedId = lead.selected_patient_id ? Number(lead.selected_patient_id) : null
-    const forceNew = Boolean(Number(lead.allow_duplicate_name)) && bookingTarget === 'new_patient'
-    const existingSelected = bookingTarget === 'existing_patient' && selectedId
-      ? selectedId
-      : null
+    return runSlotWriteTransaction(db, () => {
+      assertSlotAvailable(db, lead.appointment_date, lead.appointment_time)
 
-    const resolved = resolvePatientForBooking(db, {
-      patientId: existingSelected,
-      forceNew,
-      requireCollectedPhone: bookingTarget === 'new_patient' || forceNew,
-      fullName: lead.full_name,
-      phoneNumber: lead.phone_number,
-      city: lead.city,
-      whatsappChatId: lead.whatsapp_chat_id,
-      createdVia: 'whatsapp_booking',
+      const bookingTarget = String(lead.booking_target || '').trim()
+      const selectedId = lead.selected_patient_id ? Number(lead.selected_patient_id) : null
+      const forceNew = Boolean(Number(lead.allow_duplicate_name)) && bookingTarget === 'new_patient'
+      const existingSelected = bookingTarget === 'existing_patient' && selectedId
+        ? selectedId
+        : null
+
+      const resolved = resolvePatientForBooking(db, {
+        patientId: existingSelected,
+        forceNew,
+        requireCollectedPhone: bookingTarget === 'new_patient' || forceNew,
+        fullName: lead.full_name,
+        phoneNumber: lead.phone_number,
+        city: lead.city,
+        whatsappChatId: lead.whatsapp_chat_id,
+        createdVia: 'whatsapp_booking',
+      })
+      const customer = resolved.patient
+      const contactId = resolved.contact?.id || null
+
+      const appointmentInsert = db.prepare(`
+        INSERT INTO appointments (
+          customer_id, appointment_date, appointment_time, status, conversation_id,
+          whatsapp_contact_id, created_at
+        ) VALUES (?, ?, ?, 'non_confirme', ?, ?, ?)
+      `).run(
+        customer.id,
+        lead.appointment_date,
+        String(lead.appointment_time).slice(0, 5),
+        lead.conversation_id || null,
+        contactId,
+        nowIso(),
+      )
+
+      const appointmentId = Number(appointmentInsert.lastInsertRowid)
+      const caseInsert = db.prepare(`
+        INSERT INTO dental_cases (
+          customer_id, appointment_id, problem, description, urgency, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        customer.id,
+        appointmentId,
+        lead.problem || lead.problem_details || 'consultation générale',
+        lead.problem_details || lead.problem || null,
+        lead.urgency || 'moyenne',
+        nowIso(),
+      )
+
+      const appointment = db.prepare('SELECT * FROM appointments WHERE id = ?').get(appointmentId)
+      const dentalCase = db.prepare('SELECT * FROM dental_cases WHERE id = ?').get(caseInsert.lastInsertRowid)
+
+      if (lead.conversation_id || lead.whatsapp_chat_id) {
+        try {
+          const chatKey = lead.whatsapp_chat_id || lead.conversation_id
+          db.prepare(`
+            UPDATE conversations
+            SET whatsapp_contact_id = COALESCE(?, whatsapp_contact_id),
+                customer_id = ?,
+                phone_e164 = COALESCE(phone_e164, ?)
+            WHERE external_key = ? OR external_key = ?
+          `).run(
+            contactId,
+            customer.id,
+            toE164(lead.phone_number) || lead.phone_number,
+            chatKey,
+            String(chatKey || '').replace(/^[^:]+:/, ''),
+          )
+        } catch { /* optional if conversations table absent mid-test */ }
+      }
+
+      const notificationBody = [
+        'Nouveau rendez-vous :',
+        '',
+        `Patient : ${customer.full_name}`,
+        `Contact WhatsApp : ${formatPhoneDisplay(lead.phone_number || customer.phone_number)}`,
+        `Ville : ${customer.city || '—'}`,
+        `Problème (IA) : ${dentalCase.problem}`,
+        `Message client : ${dentalCase.description || '—'}`,
+        `Date : ${appointment.appointment_date}`,
+        `Heure : ${appointment.appointment_time}`,
+        'Statut : À confirmer (confirmation WhatsApp 24 h avant)',
+      ].join('\n')
+
+      const notif = db.prepare(`
+        INSERT INTO staff_notifications (appointment_id, title, body, payload_json, sent_whatsapp, created_at)
+        VALUES (?, ?, ?, ?, 0, ?)
+      `).run(
+        appointmentId,
+        'Nouveau rendez-vous',
+        notificationBody,
+        JSON.stringify({
+          customer_id: customer.id,
+          whatsapp_contact_id: contactId,
+          appointment_id: appointmentId,
+          dental_case_id: dentalCase.id,
+        }),
+        nowIso(),
+      )
+
+      return {
+        customer,
+        contact: resolved.contact,
+        appointment,
+        dentalCase,
+        staffNotification: db.prepare('SELECT * FROM staff_notifications WHERE id = ?').get(notif.lastInsertRowid),
+      }
     })
-    const customer = resolved.patient
-    const contactId = resolved.contact?.id || null
-
-    const appointmentInsert = db.prepare(`
-      INSERT INTO appointments (
-        customer_id, appointment_date, appointment_time, status, conversation_id,
-        whatsapp_contact_id, created_at
-      ) VALUES (?, ?, ?, 'non_confirme', ?, ?, ?)
-    `).run(
-      customer.id,
-      lead.appointment_date,
-      lead.appointment_time,
-      lead.conversation_id || null,
-      contactId,
-      nowIso(),
-    )
-
-    const appointmentId = Number(appointmentInsert.lastInsertRowid)
-    const caseInsert = db.prepare(`
-      INSERT INTO dental_cases (
-        customer_id, appointment_id, problem, description, urgency, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      customer.id,
-      appointmentId,
-      lead.problem || lead.problem_details || 'consultation générale',
-      lead.problem_details || lead.problem || null,
-      lead.urgency || 'moyenne',
-      nowIso(),
-    )
-
-    const appointment = db.prepare('SELECT * FROM appointments WHERE id = ?').get(appointmentId)
-    const dentalCase = db.prepare('SELECT * FROM dental_cases WHERE id = ?').get(caseInsert.lastInsertRowid)
-
-    // Bind conversation to contact + active patient context (not exclusive ownership)
-    if (lead.conversation_id || lead.whatsapp_chat_id) {
-      try {
-        const chatKey = lead.whatsapp_chat_id || lead.conversation_id
-        db.prepare(`
-          UPDATE conversations
-          SET whatsapp_contact_id = COALESCE(?, whatsapp_contact_id),
-              customer_id = ?,
-              phone_e164 = COALESCE(phone_e164, ?)
-          WHERE external_key = ? OR external_key = ?
-        `).run(
-          contactId,
-          customer.id,
-          toE164(lead.phone_number) || lead.phone_number,
-          chatKey,
-          String(chatKey || '').replace(/^[^:]+:/, ''),
-        )
-      } catch { /* optional if conversations table absent mid-test */ }
-    }
-
-    const notificationBody = [
-      'Nouveau rendez-vous :',
-      '',
-      `Patient : ${customer.full_name}`,
-      `Contact WhatsApp : ${formatPhoneDisplay(lead.phone_number || customer.phone_number)}`,
-      `Ville : ${customer.city || '—'}`,
-      `Problème (IA) : ${dentalCase.problem}`,
-      `Message client : ${dentalCase.description || '—'}`,
-      `Date : ${appointment.appointment_date}`,
-      `Heure : ${appointment.appointment_time}`,
-      `Statut : À confirmer (confirmation WhatsApp 24 h avant)`,
-    ].join('\n')
-
-    const notif = db.prepare(`
-      INSERT INTO staff_notifications (appointment_id, title, body, payload_json, sent_whatsapp, created_at)
-      VALUES (?, ?, ?, ?, 0, ?)
-    `).run(
-      appointmentId,
-      'Nouveau rendez-vous',
-      notificationBody,
-      JSON.stringify({
-        customer_id: customer.id,
-        whatsapp_contact_id: contactId,
-        appointment_id: appointmentId,
-        dental_case_id: dentalCase.id,
-      }),
-      nowIso(),
-    )
-
-    return {
-      customer,
-      contact: resolved.contact,
-      appointment,
-      dentalCase,
-      staffNotification: db.prepare('SELECT * FROM staff_notifications WHERE id = ?').get(notif.lastInsertRowid),
-    }
   }
 
   /**
@@ -377,72 +387,82 @@ function createCrmRepository(db) {
     const fullName = validateFullName(String(payload.full_name || '').trim())
     const phone = toE164(payload.phone_number)
     const city = String(payload.city || '').trim() || null
-    const date = String(payload.appointment_date || '').trim()
-    const time = String(payload.appointment_time || '').trim()
-    const problemAi = String(payload.problem || '').trim() || 'consultation générale'
+    const date = normalizeBusinessDate(payload.appointment_date)
+    const time = String(payload.appointment_time || '').trim().slice(0, 5)
+    const problemAi = String(payload.problem || '').trim()
     const problemClient = problemAi
     const status = 'confirmed'
 
     if (!fullName || !phone || !date || !time) {
-      throw new Error('Nom, téléphone, date et heure sont obligatoires')
+      const err = new Error('Nom, téléphone, date et heure sont obligatoires')
+      err.code = 'VALIDATION'
+      throw err
+    }
+    if (!problemAi) {
+      const err = new Error('Le motif est obligatoire')
+      err.code = 'VALIDATION'
+      throw err
     }
     const hours = validateAppointmentHours(date, time)
     if (!hours.ok) {
       throw new Error(outsideWorkingHoursError(hours))
     }
+    return runSlotWriteTransaction(db, () => {
+      assertSlotAvailable(db, date, time)
 
-    const resolved = resolvePatientForBooking(db, {
-      contactId: payload.whatsapp_contact_id || payload.contact_id || null,
-      fullName,
-      phoneNumber: phone,
-      city,
-      createdVia: 'dashboard_manual',
+      const resolved = resolvePatientForBooking(db, {
+        contactId: payload.whatsapp_contact_id || payload.contact_id || null,
+        fullName,
+        phoneNumber: phone,
+        city,
+        createdVia: 'dashboard_manual',
+      })
+      const customer = resolved.patient
+      const contactId = resolved.contact?.id || null
+
+      const createdAt = nowIso()
+      const appointmentInsert = db.prepare(`
+        INSERT INTO appointments (
+          customer_id, appointment_date, appointment_time, status, conversation_id,
+          whatsapp_contact_id, confirmed_at, confirmation_source, created_at
+        ) VALUES (?, ?, ?, ?, NULL, ?, ?, 'staff', ?)
+      `).run(customer.id, date, time, status, contactId, createdAt, createdAt)
+
+      const appointmentId = Number(appointmentInsert.lastInsertRowid)
+      const caseInsert = db.prepare(`
+        INSERT INTO dental_cases (
+          customer_id, appointment_id, problem, description, urgency, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        customer.id,
+        appointmentId,
+        problemAi.slice(0, 120),
+        problemClient,
+        'moyenne',
+        createdAt,
+      )
+
+      return {
+        appointment_id: appointmentId,
+        customer_id: customer.id,
+        full_name: customer.full_name,
+        phone_number: customer.phone_number,
+        customer,
+        contact: resolved.contact,
+        appointment: db.prepare('SELECT * FROM appointments WHERE id = ?').get(appointmentId),
+        dentalCase: db.prepare('SELECT * FROM dental_cases WHERE id = ?').get(caseInsert.lastInsertRowid),
+        order: serializeOrderRow(db.prepare(`
+          SELECT
+            a.id, a.appointment_date, a.appointment_time, a.status, a.created_at,
+            c.id AS customer_id, c.full_name, c.phone_number, c.city,
+            d.problem, d.description AS problem_details, d.urgency
+          FROM appointments a
+          JOIN customers c ON c.id = a.customer_id
+          LEFT JOIN dental_cases d ON d.appointment_id = a.id
+          WHERE a.id = ?
+        `).get(appointmentId)),
+      }
     })
-    const customer = resolved.patient
-    const contactId = resolved.contact?.id || null
-
-    const createdAt = nowIso()
-    const appointmentInsert = db.prepare(`
-      INSERT INTO appointments (
-        customer_id, appointment_date, appointment_time, status, conversation_id,
-        whatsapp_contact_id, confirmed_at, confirmation_source, created_at
-      ) VALUES (?, ?, ?, ?, NULL, ?, ?, 'staff', ?)
-    `).run(customer.id, date, time, status, contactId, createdAt, createdAt)
-
-    const appointmentId = Number(appointmentInsert.lastInsertRowid)
-    const caseInsert = db.prepare(`
-      INSERT INTO dental_cases (
-        customer_id, appointment_id, problem, description, urgency, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      customer.id,
-      appointmentId,
-      problemAi.slice(0, 120),
-      problemClient,
-      'moyenne',
-      createdAt,
-    )
-
-    return {
-      appointment_id: appointmentId,
-      customer_id: customer.id,
-      full_name: customer.full_name,
-      phone_number: customer.phone_number,
-      customer,
-      contact: resolved.contact,
-      appointment: db.prepare('SELECT * FROM appointments WHERE id = ?').get(appointmentId),
-      dentalCase: db.prepare('SELECT * FROM dental_cases WHERE id = ?').get(caseInsert.lastInsertRowid),
-      order: serializeOrderRow(db.prepare(`
-        SELECT
-          a.id, a.appointment_date, a.appointment_time, a.status, a.created_at,
-          c.id AS customer_id, c.full_name, c.phone_number, c.city,
-          d.problem, d.description AS problem_details, d.urgency
-        FROM appointments a
-        JOIN customers c ON c.id = a.customer_id
-        LEFT JOIN dental_cases d ON d.appointment_id = a.id
-        WHERE a.id = ?
-      `).get(appointmentId)),
-    }
   }
 
   function updateDentalCaseAiMotif(caseId, aiMotif) {
@@ -881,17 +901,27 @@ function createCrmRepository(db) {
     const fullName = validateFullName(String(patch.full_name ?? current.full_name ?? '').trim())
     const phone = toE164(patch.phone_number ?? current.phone_number)
     const city = String(patch.city ?? current.city ?? '').trim() || null
-    const date = String(patch.appointment_date ?? current.appointment_date ?? '').trim()
-    const time = String(patch.appointment_time ?? current.appointment_time ?? '').trim()
-    const problem = String(patch.problem ?? current.problem ?? 'consultation générale').trim()
+    const date = normalizeBusinessDate(patch.appointment_date ?? current.appointment_date)
+    const time = String(patch.appointment_time ?? current.appointment_time ?? '').trim().slice(0, 5)
+    const problem = String(patch.problem ?? current.problem ?? '').trim()
     const details = String(patch.problem_details ?? current.problem_details ?? '').trim() || null
 
     if (!fullName || !phone || !date || !time) {
-      throw new Error('Nom, téléphone, date et heure sont obligatoires')
+      const err = new Error('Nom, téléphone, date et heure sont obligatoires')
+      err.code = 'VALIDATION'
+      throw err
+    }
+    if (!problem) {
+      const err = new Error('Le motif est obligatoire')
+      err.code = 'VALIDATION'
+      throw err
     }
     const hours = validateAppointmentHours(date, time)
     if (!hours.ok) {
       throw new Error(outsideWorkingHoursError(hours))
+    }
+    if (nextStatus !== 'cancelled') {
+      assertSlotAvailable(db, date, time, { excludeAppointmentId: id })
     }
 
     db.prepare(`
@@ -1013,6 +1043,7 @@ function createCrmRepository(db) {
   }
 
   return {
+    db,
     getLead,
     upsertLead,
     clearLead,

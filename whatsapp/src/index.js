@@ -267,6 +267,35 @@ const apiClient = axios.create({
 })
 
 const app = express()
+
+function applyDashboardSecurityHeaders(req, res, next) {
+  if (!String(req.path || '').startsWith('/dashboard')) {
+    return next()
+  }
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "object-src 'none'",
+      "frame-ancestors 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com data:",
+      "img-src 'self' data: blob:",
+      "media-src 'self' blob:",
+      "connect-src 'self'",
+      "worker-src 'self' blob:",
+    ].join('; '),
+  )
+  res.setHeader(
+    'Permissions-Policy',
+    'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()',
+  )
+  return next()
+}
+
+app.use(applyDashboardSecurityHeaders)
 app.use(express.json({ limit: '1mb' }))
 
 function sleep(ms) {
@@ -5545,7 +5574,15 @@ app.post('/dashboard/api/crm/appointments', ensureDashboardSession, (req, res) =
       ...result,
     })
   } catch (error) {
-    return res.status(400).json({
+    if (error.code === 'SLOT_CONFLICT') {
+      return res.status(409).json({
+        ok: false,
+        error: error.message || 'Ce créneau n\'est plus disponible.',
+        code: 'SLOT_CONFLICT',
+      })
+    }
+    const status = error.code === 'VALIDATION' ? 400 : 400
+    return res.status(status).json({
       ok: false,
       error: error.message || 'Impossible de créer le rendez-vous',
     })
@@ -5662,6 +5699,13 @@ app.patch('/dashboard/api/crm/appointments/:id', ensureDashboardSession, (req, r
       appointment,
     })
   } catch (error) {
+    if (error.code === 'SLOT_CONFLICT') {
+      return res.status(409).json({
+        ok: false,
+        error: error.message || 'Ce créneau n\'est plus disponible.',
+        code: 'SLOT_CONFLICT',
+      })
+    }
     const code = error.code === 'NOT_FOUND' ? 404 : 400
     return res.status(code).json({
       ok: false,
@@ -6456,8 +6500,9 @@ app.post('/incoming', verifyWebhookSecret, async (req, res) => {
   }
 })
 
-app.listen(port, () => {
-  console.log(`[iadis-wa] service listening on :${port} (provider=${provider})`)
+const host = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0'
+app.listen(port, host, () => {
+  console.log(`[iadis-wa] service listening on http://${host}:${port} (provider=${provider})`)
 
   if (!waAutoStart) {
     console.log('[iadis-wa] automatic WhatsApp instance bootstrap is disabled')

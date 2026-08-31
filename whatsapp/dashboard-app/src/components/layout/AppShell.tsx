@@ -2,9 +2,13 @@ import { Outlet, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { MobileMenuButton, Sidebar } from '@/components/layout/Sidebar'
+import { AccountMenu } from '@/components/layout/AccountMenu'
+import { NotificationBell } from '@/components/layout/NotificationBell'
 import { TopHeader } from '@/components/layout/TopHeader'
+import { useIsLgUp } from '@/hooks/useMediaQuery'
 import { cn } from '@/lib/format'
 import { pageTitleFromPath, useDocumentTitle } from '@/hooks/useDocumentTitle'
+import helIcon from '@/assets/HEL-scaled.png'
 
 const COLLAPSE_KEY = 'hel-dashboard-sidebar-collapsed'
 
@@ -18,6 +22,7 @@ export function AppShell() {
     }
   })
   const location = useLocation()
+  const isLgUp = useIsLgUp()
   useDocumentTitle(pageTitleFromPath(location.pathname))
 
   useEffect(() => {
@@ -28,7 +33,13 @@ export function AppShell() {
     }
   }, [collapsed])
 
+  useEffect(() => {
+    setOpen(false)
+  }, [location.pathname])
+
   const isMessages = /\/messages\/?$/.test(location.pathname) || location.pathname.endsWith('/messages')
+  // Global search: desktop only. Always visible on Messages (desktop).
+  const showGlobalSearch = isLgUp
 
   useEffect(() => {
     if (!isMessages) return undefined
@@ -44,8 +55,8 @@ export function AppShell() {
   return (
     <div
       className={cn(
-        'w-full overflow-x-hidden',
-        isMessages ? 'h-dvh overflow-hidden' : 'min-h-screen',
+        'flex w-full',
+        isMessages ? 'h-app overflow-hidden' : 'min-h-app',
       )}
     >
       <Sidebar
@@ -56,30 +67,36 @@ export function AppShell() {
       />
       <div
         className={cn(
-          'flex min-w-0 flex-col transition-[padding] duration-300',
-          collapsed ? 'lg:pl-[72px]' : 'lg:pl-[248px]',
-          isMessages ? 'h-full overflow-hidden' : 'min-h-screen',
+          'flex min-w-0 flex-1 flex-col',
+          isMessages ? 'h-full min-h-0 overflow-hidden' : 'min-h-full',
         )}
       >
         <div
           className={cn(
-            'flex min-w-0 flex-col px-4 pt-4 sm:px-6 lg:px-6 lg:pt-4',
+            'flex min-w-0 flex-1 flex-col px-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-5 lg:px-6 lg:pt-4',
             isMessages
-              ? 'h-full min-h-0 overflow-hidden pb-3'
-              : 'min-h-0 flex-1 pb-8',
+              ? 'min-h-0 overflow-hidden pb-[max(0.5rem,env(safe-area-inset-bottom))]'
+              : 'pb-[max(1.5rem,env(safe-area-inset-bottom))]',
           )}
         >
-          <div className="mb-3 flex shrink-0 items-center gap-3 lg:hidden">
-            <MobileMenuButton onClick={() => setOpen(true)} />
-            <p className="text-sm font-semibold text-navy">Smart CRM HEL</p>
+          <div className="mb-2 flex shrink-0 items-center gap-2 lg:hidden">
+            <MobileMenuButton onClick={() => setOpen(true)} expanded={open} />
+            <img src={helIcon} alt="" className="h-8 w-8 object-contain" aria-hidden />
+            <p className="min-w-0 flex-1 truncate text-sm font-semibold text-navy">
+              Centre dentaire HEL
+            </p>
+            <NotificationBell />
+            <AccountMenu />
           </div>
-          <TopHeader className={cn('shrink-0', isMessages ? 'mb-3' : undefined)} />
+          {showGlobalSearch ? (
+            <TopHeader className={cn('shrink-0', isMessages ? 'mb-2 sm:mb-3' : undefined)} />
+          ) : null}
           <AnimatePresence mode="wait">
             <motion.div
               key={location.pathname}
               className={cn(
                 'min-w-0',
-                isMessages && 'flex min-h-0 flex-1 flex-col overflow-hidden',
+                isMessages ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'w-full',
               )}
               initial={{ opacity: 0, y: isMessages ? 0 : 10 }}
               animate={{ opacity: 1, y: 0 }}

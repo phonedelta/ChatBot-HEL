@@ -545,8 +545,13 @@ function createPatientsBoard(db, helpers = {}) {
   } = {}) {
     const name = String(fullName || '').trim()
     const phone = safePhone(phoneNumber) || safePhone(linkContactPhone)
-    if (!name) {
+    if (!name || name.length < 2) {
       const err = new Error('Le nom est obligatoire')
+      err.code = 'VALIDATION'
+      throw err
+    }
+    if (name.length > 100) {
+      const err = new Error('Le nom est trop long (100 caractères max.)')
       err.code = 'VALIDATION'
       throw err
     }
@@ -556,36 +561,58 @@ function createPatientsBoard(db, helpers = {}) {
       throw err
     }
 
-    const resolved = resolvePatientForBooking(db, {
-      fullName: name,
-      phoneNumber: phone,
-      city,
-      whatsappChatId: null,
-      createdVia: 'manual',
+    const { upsertWhatsAppContact, linkContactPatient, normalizePersonName } = require('../contact-patients')
+    const norm = normalizePersonName(name)
+    const createdAt = new Date().toISOString()
+
+    const contact = upsertWhatsAppContact(db, {
+      whatsappId: null,
+      phoneE164: phone,
+      displayName: name,
     })
 
-    try {
+    const existing = db.prepare(`
+      SELECT c.*
+      FROM contact_patients cp
+      JOIN customers c ON c.id = cp.patient_id
+      WHERE cp.whatsapp_contact_id = ?
+        AND c.name_normalized = ?
+      ORDER BY c.id ASC
+      LIMIT 1
+    `).get(contact.id, norm)
+
+    let patientRow = existing
+    let created = false
+
+    if (!patientRow) {
+      const insert = db.prepare(`
+        INSERT INTO customers (
+          full_name, phone_number, city, preferred_language,
+          name_normalized, source, created_via, created_at, last_contact_at
+        ) VALUES (?, ?, ?, ?, ?, 'manual', 'manual', ?, ?)
+      `).run(name, phone, city || null, language || 'fr', norm, createdAt, createdAt)
+      patientRow = db.prepare('SELECT * FROM customers WHERE id = ?').get(insert.lastInsertRowid)
+      linkContactPatient(db, contact.id, patientRow.id)
+      created = true
+    } else {
       db.prepare(`
         UPDATE customers
         SET preferred_language = COALESCE(?, preferred_language),
+            city = COALESCE(?, city),
             source = COALESCE(source, 'manual'),
-            created_via = COALESCE(created_via, 'manual')
+            created_via = COALESCE(created_via, 'manual'),
+            last_contact_at = ?
         WHERE id = ?
-      `).run(language || 'fr', resolved.patient.id)
-    } catch {
-      try {
-        db.prepare(`UPDATE customers SET preferred_language = ? WHERE id = ?`)
-          .run(language || 'fr', resolved.patient.id)
-      } catch { /* optional columns */ }
+      `).run(language || 'fr', city || null, createdAt, patientRow.id)
+      linkContactPatient(db, contact.id, patientRow.id)
+      patientRow = db.prepare('SELECT * FROM customers WHERE id = ?').get(patientRow.id)
     }
 
     return {
       ok: true,
-      patient: serializePatient(
-        db.prepare('SELECT * FROM customers WHERE id = ?').get(resolved.patient.id),
-      ),
-      contact: resolved.contact || null,
-      created: Boolean(resolved.created),
+      patient: serializePatient(patientRow),
+      contact: contact || null,
+      created,
     }
   }
 

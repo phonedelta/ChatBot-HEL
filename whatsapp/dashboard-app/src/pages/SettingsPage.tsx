@@ -4,7 +4,8 @@ import { useSearchParams } from 'react-router-dom'
 import { usePermissions } from '@/hooks/usePermissions'
 import { PageHeader } from '@/components/smart/PageBits'
 import { UsersAccessSection, type UsersAccessSectionHandle } from '@/components/settings/UsersAccessSection'
-import { SettingsSidebar, SettingsSectionHeader } from '@/components/settings/SettingsSidebar'
+import { SettingsSidebar, SettingsIconTabs, SettingsSectionHeader } from '@/components/settings/SettingsSidebar'
+import { AppearanceSettingsSection } from '@/components/settings/AppearanceSettingsSection'
 import { AppointmentsSettingsSection } from '@/components/settings/AppointmentsSettingsSection'
 import { RemindersSettingsSection } from '@/components/settings/RemindersSettingsSection'
 import { AutomationsSettingsSection } from '@/components/settings/AutomationsSettingsSection'
@@ -19,6 +20,11 @@ const SECTION_COPY: Record<
   Exclude<SettingsSectionId, 'users'>,
   { overline: string; title: string; subtitle: string }
 > = {
+  appearance: {
+    overline: 'Configuration',
+    title: 'Apparence',
+    subtitle: 'Personnalisez l’affichage de votre Smart CRM.',
+  },
   appointments: {
     overline: 'Rendez-vous',
     title: 'Rendez-vous',
@@ -99,24 +105,11 @@ export function SettingsPage() {
       />
 
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
-        {/* Mobile select */}
-        <div className="lg:hidden">
-          <label className="sr-only" htmlFor="settings-section-mobile">
-            Section paramètres
-          </label>
-          <select
-            id="settings-section-mobile"
-            value={activeSection}
-            onChange={(e) => setSection(e.target.value as SettingsSectionId)}
-            className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm font-medium text-navy"
-          >
-            {visibleSections.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        <SettingsIconTabs
+          sections={visibleSections}
+          active={activeSection}
+          onSelect={setSection}
+        />
 
         <SettingsSidebar
           sections={visibleSections}
@@ -125,7 +118,7 @@ export function SettingsPage() {
           className="hidden w-[270px] shrink-0 lg:block"
         />
 
-        <section className="min-w-0 flex-1 rounded-[20px] border border-border bg-white p-7 sm:p-8">
+        <section className="min-w-0 flex-1 rounded-[20px] border border-border bg-white p-4 sm:p-8">
           {activeSection === 'users' ? (
             <>
               <header className="border-b border-border pb-6">
@@ -158,6 +151,7 @@ export function SettingsPage() {
             <>
               <SettingsSectionHeader {...SECTION_COPY[activeSection]} />
               <div className="pt-6">
+                {activeSection === 'appearance' ? <AppearanceSettingsSection /> : null}
                 {activeSection === 'appointments' ? (
                   <AppointmentsSettingsSection canEdit={canManageSettings} />
                 ) : null}

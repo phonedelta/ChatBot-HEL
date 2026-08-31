@@ -494,6 +494,17 @@ function createSmartCrmRouter(deps) {
     return res.json(payload)
   })
 
+  router.get('/agenda/appointments/:id', (req, res) => {
+    if (!perm(req, res, PERMISSIONS.VIEW_AGENDA)) return undefined
+    const smart = smartOr503(res)
+    if (!smart) return undefined
+    const appointment = smart.getAgendaAppointment?.(req.params.id)
+    if (!appointment) {
+      return res.status(404).json({ ok: false, error: 'Rendez-vous introuvable' })
+    }
+    return res.json({ ok: true, appointment })
+  })
+
   router.post('/agenda/propose', async (req, res) => {
     if (!perm(req, res, PERMISSIONS.PROPOSE_SLOT)) return undefined
     const smart = smartOr503(res)
@@ -1133,6 +1144,16 @@ function createSmartCrmRouter(deps) {
     return res.send(`\uFEFF${csv}`)
   })
 
+  router.get('/history/export.pdf', (req, res) => {
+    if (!perm(req, res, PERMISSIONS.EXPORT_HISTORY)) return undefined
+    const smart = smartOr503(res)
+    if (!smart) return undefined
+    const pdf = smart.exportActivityPdf(historyFiltersFromQuery(req))
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', 'attachment; filename="historique-hel.pdf"')
+    return res.send(pdf)
+  })
+
   router.get('/history', (req, res) => {
     if (!perm(req, res, PERMISSIONS.VIEW_HISTORY)) return undefined
     const smart = smartOr503(res)
@@ -1147,7 +1168,7 @@ function createSmartCrmRouter(deps) {
     if (!perm(req, res, PERMISSIONS.VIEW_HISTORY)) return undefined
     const smart = smartOr503(res)
     if (!smart) return undefined
-    if (req.params.id === 'export.csv') return undefined
+    if (req.params.id === 'export.csv' || req.params.id === 'export.pdf') return undefined
     const item = smart.getActivityEvent(req.params.id)
     if (!item) return res.status(404).json({ ok: false, error: 'Événement introuvable' })
     return res.json({ ok: true, item })

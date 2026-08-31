@@ -13,6 +13,7 @@ import { roleLabel } from '@/lib/permissions'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
 import {
+  DeactivateUserConfirmModal,
   DeleteUserConfirmModal,
   UserAccountModal,
   type DashboardUser,
@@ -98,6 +99,9 @@ export const UsersAccessSection = forwardRef<UsersAccessSectionHandle, Props>(fu
   const [deleteTarget, setDeleteTarget] = useState<DashboardUser | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
+  const [deactivateTarget, setDeactivateTarget] = useState<DashboardUser | null>(null)
+  const [deactivating, setDeactivating] = useState(false)
+  const [deactivateError, setDeactivateError] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -136,15 +140,31 @@ export const UsersAccessSection = forwardRef<UsersAccessSectionHandle, Props>(fu
   }
 
   const toggleActive = async (user: DashboardUser) => {
+    if (user.isActive) {
+      setDeactivateTarget(user)
+      setDeactivateError('')
+      return
+    }
     try {
-      if (user.isActive) {
-        await api(`/dashboard/api/users/${user.id}/disable`, { method: 'POST' })
-      } else {
-        await api(`/dashboard/api/users/${user.id}/enable`, { method: 'POST' })
-      }
+      await api(`/dashboard/api/users/${user.id}/enable`, { method: 'POST' })
       await load()
     } catch {
       /* ignore */
+    }
+  }
+
+  const confirmDeactivate = async () => {
+    if (!deactivateTarget) return
+    setDeactivating(true)
+    setDeactivateError('')
+    try {
+      await api(`/dashboard/api/users/${deactivateTarget.id}/disable`, { method: 'POST' })
+      setDeactivateTarget(null)
+      await load()
+    } catch (err) {
+      setDeactivateError(err instanceof Error ? err.message : 'Désactivation impossible.')
+    } finally {
+      setDeactivating(false)
     }
   }
 
@@ -257,6 +277,17 @@ export const UsersAccessSection = forwardRef<UsersAccessSectionHandle, Props>(fu
           loading={deleting}
           error={deleteError}
         />
+        <DeactivateUserConfirmModal
+          user={deactivateTarget}
+          open={Boolean(deactivateTarget)}
+          onClose={() => {
+            setDeactivateTarget(null)
+            setDeactivateError('')
+          }}
+          onConfirm={confirmDeactivate}
+          loading={deactivating}
+          error={deactivateError}
+        />
       </section>
     )
   }
@@ -287,6 +318,17 @@ export const UsersAccessSection = forwardRef<UsersAccessSectionHandle, Props>(fu
         onConfirm={confirmDelete}
         loading={deleting}
         error={deleteError}
+      />
+      <DeactivateUserConfirmModal
+        user={deactivateTarget}
+        open={Boolean(deactivateTarget)}
+        onClose={() => {
+          setDeactivateTarget(null)
+          setDeactivateError('')
+        }}
+        onConfirm={confirmDeactivate}
+        loading={deactivating}
+        error={deactivateError}
       />
     </>
   )

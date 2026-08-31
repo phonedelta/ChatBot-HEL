@@ -20,9 +20,15 @@ const {
   buildBookingCollectionReplies,
   missingFieldsMessage,
   askConfirmation,
+  slotUnavailableMessage,
   patientConfirmationMessage,
   correctionAck,
 } = require('./messages')
+const {
+  checkSlotAvailability,
+  listAvailableSlotTimes,
+  isSlotUnavailableError,
+} = require('./appointment-slots')
 const {
   detectCorrectionIntent,
   buildCorrectionPatch,
@@ -831,6 +837,46 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
     return finalizeTurn(updated, body, true, null, signals)
   }
 
+  /**
+   * Slot occupied: keep identity/city/motif; clear only date/time; ask for a new slot.
+   * Conceptual stage AWAITING_NEW_SLOT ≡ awaiting_form + bulk (appointment missing).
+   */
+  function rejectSlotUnavailable(conversationId, lead, language, signals, {
+    lateConflict = false,
+  } = {}) {
+    const date = lead.appointment_date
+    const time = lead.appointment_time
+    let alternatives = []
+    try {
+      if (date && repo.db) {
+        alternatives = listAvailableSlotTimes(repo.db, date, { limit: 3 })
+      }
+    } catch { /* optional */ }
+
+    const updated = repo.upsertLead(conversationId, {
+      stage: 'awaiting_form',
+      awaiting_field: 'bulk',
+      booking_intent: 1,
+      appointment_date: null,
+      appointment_time: null,
+      correction_json: null,
+    })
+    const msg = slotUnavailableMessage(
+      { appointment_date: date, appointment_time: time },
+      language,
+      { alternatives, lateConflict },
+    )
+    return finalizeTurn(updated, msg, true, null, signals)
+  }
+
+  function assertLeadSlotFree(lead) {
+    if (!repo.db || !lead?.appointment_date || !lead?.appointment_time) return { available: true }
+    return checkSlotAvailability(repo.db, {
+      date: lead.appointment_date,
+      time: lead.appointment_time,
+    })
+  }
+
   function processAfterData(conversationId, lead, language, signals, extra = {}) {
     const check = checkCustomerData(lead)
     if (!check.ok) {
@@ -867,6 +913,12 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
           : 'La date indiquée n’est pas disponible pour la réservation. Merci de proposer un autre jour et une autre heure dans la période autorisée.'
         return finalizeTurn(updated, msg, true, null, signals)
       }
+    }
+
+    // A. Check slot before showing confirmation summary
+    const slotCheck = assertLeadSlotFree(lead)
+    if (slotCheck.reason === 'occupied') {
+      return rejectSlotUnavailable(conversationId, lead, language, signals)
     }
 
     const ready = repo.upsertLead(conversationId, {
@@ -1644,7 +1696,23 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
           return finalizeTurn(updated, msg, true, null, signals)
         }
       }
-      const booking = repo.saveConfirmedBooking(lead)
+      const preSlot = assertLeadSlotFree(lead)
+      if (preSlot.reason === 'occupied') {
+        return rejectSlotUnavailable(conversationId, lead, language, signals, {
+          lateConflict: true,
+        })
+      }
+      let booking
+      try {
+        booking = repo.saveConfirmedBooking(lead)
+      } catch (error) {
+        if (isSlotUnavailableError(error)) {
+          return rejectSlotUnavailable(conversationId, lead, language, signals, {
+            lateConflict: true,
+          })
+        }
+        throw error
+      }
       const confirmationText = patientConfirmationMessage(lead, language)
       repo.logConversation({
         conversation_id: conversationId,

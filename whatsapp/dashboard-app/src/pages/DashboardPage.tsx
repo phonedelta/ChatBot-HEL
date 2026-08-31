@@ -41,7 +41,10 @@ function lastSevenDays() {
   for (let i = 6; i >= 0; i--) {
     const d = new Date(now)
     d.setDate(now.getDate() - i)
-    days.push(d.toISOString().slice(0, 10))
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    days.push(`${y}-${m}-${day}`)
   }
   return days
 }

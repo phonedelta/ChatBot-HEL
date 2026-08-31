@@ -5,13 +5,17 @@ import {
   ChevronLeft,
   ChevronRight,
   MessageSquare,
+  Plus,
   RefreshCw,
   Sparkles,
   UserRound,
   X,
 } from 'lucide-react'
 import { api } from '@/lib/api'
-import { cn, todayISO } from '@/lib/format'
+import { cn, formatDateFr, formatAppointmentSlot, todayISO } from '@/lib/format'
+import { useIsLgUp } from '@/hooks/useMediaQuery'
+import { usePermissions } from '@/hooks/usePermissions'
+import { PERMISSIONS } from '@/lib/permissions'
 import {
   addDaysISO,
   getAppointmentStatusStyle,
@@ -37,11 +41,14 @@ const VIEW_LABELS: Record<AgendaView, string> = {
 
 export function AgendaPage() {
   const navigate = useNavigate()
+  const { can } = usePermissions()
+  const isLgUp = useIsLgUp()
   const [params, setParams] = useSearchParams()
   const [view, setView] = useState<AgendaView>(() => {
     const v = params.get('view')
     return v === 'day' || v === 'list' || v === 'week' ? v : 'week'
   })
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [anchor, setAnchor] = useState(() => params.get('from') || todayISO())
   const [typeFilter, setTypeFilter] = useState(params.get('type') || '')
   const [statusFilter, setStatusFilter] = useState(params.get('status') || '')
@@ -56,6 +63,9 @@ export function AgendaPage() {
   const [actionBusy, setActionBusy] = useState(false)
   const [toast, setToast] = useState('')
   const [highlightKey, setHighlightKey] = useState<string | null>(null)
+  const [cancelConfirm, setCancelConfirm] = useState<AgendaAppointment | null>(null)
+  const [rescheduleTarget, setRescheduleTarget] = useState<AgendaAppointment | null>(null)
+  const [pendingMoveSlot, setPendingMoveSlot] = useState<AgendaSlot | null>(null)
   const requestRef = useRef(0)
   const highlightHandledRef = useRef('')
 
@@ -63,6 +73,8 @@ export function AgendaPage() {
   const highlightDate = params.get('highlightDate') || ''
   const highlightTime = (params.get('highlightTime') || '').slice(0, 5)
   const highlightAction = params.get('action') || ''
+  const highlightApptId = params.get('highlight') || ''
+  const moveAppointmentId = params.get('action') === 'move' ? Number(params.get('appointmentId') || 0) : 0
 
   const load = useCallback(async () => {
     const requestId = ++requestRef.current
@@ -90,6 +102,12 @@ export function AgendaPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  // Prefer Jour on small screens unless user explicitly chose a view via URL.
+  useEffect(() => {
+    if (params.get('view')) return
+    if (!isLgUp && view === 'week') setView('day')
+  }, [isLgUp]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (params.get('new') === '1') {
@@ -156,6 +174,76 @@ export function AgendaPage() {
   }, [data, highlightDate, highlightTime, highlightAction, params, setParams])
 
   useEffect(() => {
+    if (!highlightApptId) return
+    const token = `highlight:${highlightApptId}`
+    if (highlightHandledRef.current === token) return
+
+    void (async () => {
+      const id = Number(highlightApptId)
+      if (!id) return
+      let appt = (data?.appointments || []).find((a) => a.id === id) || null
+      if (!appt) {
+        try {
+          const payload = await api<{ ok: boolean; appointment: AgendaAppointment }>(
+            `/dashboard/api/agenda/appointments/${id}`,
+          )
+          appt = payload.appointment
+          if (appt?.appointment_date) {
+            setAnchor(appt.appointment_date)
+            if (appt.status === 'cancelled') setStatusFilter('cancelled')
+          }
+        } catch {
+          setToast('Ce rendez-vous n’est plus disponible.')
+          highlightHandledRef.current = token
+          return
+        }
+      }
+      if (!appt) {
+        setToast('Ce rendez-vous n’est plus disponible.')
+      } else {
+        setSelected(appt)
+        setAnchor(appt.appointment_date)
+        setHighlightKey(`${appt.appointment_date}|${appt.appointment_time}`)
+        window.setTimeout(() => setHighlightKey(null), 2200)
+      }
+      highlightHandledRef.current = token
+      const next = new URLSearchParams(params)
+      next.delete('highlight')
+      setParams(next, { replace: true })
+    })()
+  }, [highlightApptId, data, params, setParams])
+
+  useEffect(() => {
+    if (!moveAppointmentId) return
+    const token = `move:${moveAppointmentId}`
+    if (highlightHandledRef.current === token) return
+
+    void (async () => {
+      try {
+        const payload = await api<{ ok: boolean; appointment: AgendaAppointment }>(
+          `/dashboard/api/agenda/appointments/${moveAppointmentId}`,
+        )
+        const appt = payload.appointment
+        if (!appt) throw new Error('missing')
+        setRescheduleTarget(appt)
+        setAnchor(appt.appointment_date)
+        setPendingMoveSlot(null)
+        highlightHandledRef.current = token
+        const next = new URLSearchParams(params)
+        next.delete('action')
+        next.delete('appointmentId')
+        next.delete('from')
+        next.delete('highlightDate')
+        next.delete('highlightTime')
+        setParams(next, { replace: true })
+      } catch {
+        setToast('Ce rendez-vous n’est plus disponible.')
+        highlightHandledRef.current = token
+      }
+    })()
+  }, [moveAppointmentId, params, setParams])
+
+  useEffect(() => {
     function onCreated() {
       void load()
     }
@@ -174,6 +262,35 @@ export function AgendaPage() {
   function shiftDate(delta: number) {
     if (view === 'week') setAnchor(addDaysISO(startOfWeekMonday(anchor), delta * 7))
     else setAnchor(addDaysISO(anchor, delta))
+  }
+
+  async function confirmReschedule() {
+    if (!rescheduleTarget || !pendingMoveSlot) return
+    setActionBusy(true)
+    setError('')
+    try {
+      await api(`/dashboard/api/agenda/appointments/${rescheduleTarget.id}/move`, {
+        method: 'POST',
+        body: {
+          slot_date: pendingMoveSlot.slot_date,
+          slot_time: pendingMoveSlot.slot_time,
+        },
+      })
+      setToast('Rendez-vous déplacé.')
+      setRescheduleTarget(null)
+      setPendingMoveSlot(null)
+      setSelected(null)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Déplacement impossible')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  function handleSlotPickForReschedule(slot: AgendaSlot) {
+    if (!rescheduleTarget) return
+    setPendingMoveSlot(slot)
   }
 
   async function patchAppointment(id: number, body: Record<string, unknown>) {
@@ -258,87 +375,122 @@ export function AgendaPage() {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <h1 className="font-display text-[26px] font-semibold leading-tight text-navy">Agenda</h1>
-          <p className="mt-1 text-[13px] text-muted">
-            {loading && !data ? 'Chargement…' : data?.range.subtitle || '—'}
-          </p>
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="font-display text-[26px] font-semibold leading-tight text-navy">Agenda</h1>
+            <p className="mt-1 text-[13px] text-muted">
+              {loading && !data ? 'Chargement…' : data?.range.subtitle || '—'}
+            </p>
+          </div>
+          {can(PERMISSIONS.CREATE_APPOINTMENT) ? (
+            <Button
+              size="sm"
+              className="shrink-0"
+              icon={<Plus className="h-4 w-4" />}
+              onClick={() => setNewAppt({ open: true })}
+            >
+              Nouveau rendez-vous
+            </Button>
+          ) : null}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-white p-0.5">
-            <button
-              type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-bg hover:text-navy"
-              onClick={() => shiftDate(-1)}
-              aria-label="Période précédente"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              className="h-8 rounded-md px-2 text-xs font-semibold text-navy hover:bg-bg"
-              onClick={() => setAnchor(todayISO())}
-            >
-              Aujourd’hui
-            </button>
-            <button
-              type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-bg hover:text-navy"
-              onClick={() => shiftDate(1)}
-              aria-label="Période suivante"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="inline-flex rounded-lg border border-border bg-white p-0.5">
-            {(['day', 'week', 'list'] as const).map((v) => (
+        <div className="flex flex-col gap-2 sm:flex-wrap sm:flex-row sm:items-center">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-white p-0.5">
               <button
-                key={v}
                 type="button"
-                onClick={() => setView(v)}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-xs font-semibold transition',
-                  view === v ? 'bg-navy text-white' : 'text-muted hover:text-navy',
-                )}
+                className="inline-flex h-11 w-11 items-center justify-center rounded-md text-muted hover:bg-bg hover:text-navy"
+                onClick={() => shiftDate(-1)}
+                aria-label="Période précédente"
               >
-                {VIEW_LABELS[v]}
+                <ChevronLeft className="h-4 w-4" />
               </button>
-            ))}
+              <button
+                type="button"
+                className="h-11 rounded-md px-2 text-xs font-semibold text-navy hover:bg-bg"
+                onClick={() => setAnchor(todayISO())}
+              >
+                Aujourd’hui
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-md text-muted hover:bg-bg hover:text-navy"
+                onClick={() => shiftDate(1)}
+                aria-label="Période suivante"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="inline-flex rounded-lg border border-border bg-white p-0.5">
+              {(['day', 'week', 'list'] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  aria-pressed={view === v}
+                  onClick={() => setView(v)}
+                  className={cn(
+                    'min-h-11 rounded-md px-3 py-1.5 text-xs font-semibold transition',
+                    view === v ? 'bg-navy text-white' : 'text-muted hover:text-navy',
+                  )}
+                >
+                  {VIEW_LABELS[v]}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            className="h-9 rounded-lg border border-border bg-white px-2 text-xs font-medium text-navy outline-none"
-            aria-label="Filtrer par type"
-          >
-            <option value="">Type</option>
-            {(data?.appointment_types || []).map((t) => (
-              <option key={t.id} value={t.name}>{t.name}</option>
-            ))}
-          </select>
+          <div className="hidden flex-wrap items-center gap-2 md:flex">
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="h-11 rounded-lg border border-border bg-white px-2 text-xs font-medium text-navy outline-none"
+              aria-label="Filtrer par type"
+            >
+              <option value="">Type</option>
+              {(data?.appointment_types || []).map((t) => (
+                <option key={t.id} value={t.name}>{t.name}</option>
+              ))}
+            </select>
 
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="h-9 rounded-lg border border-border bg-white px-2 text-xs font-medium text-navy outline-none"
-            aria-label="Filtrer par statut"
-          >
-            <option value="">Statut</option>
-            <option value="confirmed">Confirmé</option>
-            <option value="non_confirme">À confirmer</option>
-            <option value="no_show">Patient absent</option>
-            <option value="cancelled">Annulé</option>
-            <option value="released">Créneau libéré</option>
-            <option value="available">Disponible</option>
-          </select>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="h-11 rounded-lg border border-border bg-white px-2 text-xs font-medium text-navy outline-none"
+              aria-label="Filtrer par statut"
+            >
+              <option value="">Statut</option>
+              <option value="confirmed">Confirmé</option>
+              <option value="non_confirme">À confirmer</option>
+              <option value="no_show">Patient absent</option>
+              <option value="cancelled">Annulé</option>
+              <option value="released">Créneau libéré</option>
+              <option value="available">Disponible</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2 md:hidden">
+            <Button size="sm" variant="secondary" onClick={() => setFiltersOpen(true)}>
+              Filtres
+            </Button>
+            {(typeFilter || statusFilter) ? (
+              <button
+                type="button"
+                className="text-xs font-medium text-primary"
+                onClick={() => {
+                  setTypeFilter('')
+                  setStatusFilter('')
+                }}
+              >
+                Réinitialiser
+              </button>
+            ) : null}
+          </div>
 
           <button
             type="button"
             onClick={() => void load()}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-white text-muted hover:text-navy"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-white text-muted hover:text-navy"
             aria-label="Actualiser"
           >
             <RefreshCw className="h-4 w-4" />
@@ -350,6 +502,40 @@ export function AgendaPage() {
         <div className="rounded-xl border border-primary/30 bg-cyan-tint px-3 py-2 text-sm text-navy">
           {toast}
           <button type="button" className="ml-2 text-xs font-semibold" onClick={() => setToast('')}>OK</button>
+        </div>
+      ) : null}
+
+      {rescheduleTarget ? (
+        <div className="rounded-xl border border-primary/30 bg-cyan-tint/70 px-4 py-3 text-sm text-navy">
+          <p className="font-semibold">
+            Déplacement du rendez-vous de {rescheduleTarget.full_name}
+          </p>
+          <p className="mt-1 text-[var(--color-muted-accessible)]">
+            Créneau actuel : {formatAppointmentSlot(rescheduleTarget.appointment_date, rescheduleTarget.appointment_time)}
+            {pendingMoveSlot
+              ? ` → Nouveau : ${formatAppointmentSlot(pendingMoveSlot.slot_date, pendingMoveSlot.slot_time)}`
+              : ' — choisissez un créneau libre dans l’agenda.'}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              loading={actionBusy}
+              disabled={!pendingMoveSlot}
+              onClick={() => void confirmReschedule()}
+            >
+              Confirmer le déplacement
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setRescheduleTarget(null)
+                setPendingMoveSlot(null)
+              }}
+            >
+              Annuler le déplacement
+            </Button>
+          </div>
         </div>
       ) : null}
 
@@ -387,7 +573,7 @@ export function AgendaPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_280px]">
         {/* Main calendar — carreaux */}
         <section className="min-w-0 overflow-hidden rounded-2xl border border-[#E6EBEF] bg-[#F3F5F7]">
           {loading && !data ? (
@@ -410,11 +596,17 @@ export function AgendaPage() {
               statusFilter={statusFilter}
               highlightKey={highlightKey}
               onSelectAppointment={setSelected}
-              onSelectAvailable={(slot) => setNewAppt({
-                open: true,
-                date: slot.slot_date,
-                time: slot.slot_time,
-              })}
+              onSelectAvailable={(slot) => {
+                if (rescheduleTarget) {
+                  handleSlotPickForReschedule(slot)
+                  return
+                }
+                setNewAppt({
+                  open: true,
+                  date: slot.slot_date,
+                  time: slot.slot_time,
+                })
+              }}
               onSelectReleased={(slot) => setProposeSlot(slot)}
             />
           )}
@@ -441,9 +633,82 @@ export function AgendaPage() {
           busy={actionBusy}
           onClose={() => setSelected(null)}
           onConfirm={() => void patchAppointment(selected.id, { status: 'confirmed' })}
-          onCancel={() => void patchAppointment(selected.id, { status: 'cancelled' })}
+          onCancel={() => setCancelConfirm(selected)}
           onMessage={() => void openPatientChat(selected.customer_id)}
         />
+      ) : null}
+
+      {filtersOpen ? (
+        <Modal onClose={() => setFiltersOpen(false)}>
+          <h2 className="text-lg font-semibold text-navy">Filtres agenda</h2>
+          <div className="mt-4 space-y-3">
+            <label className="block text-sm font-medium text-navy" htmlFor="agenda-filter-type">
+              Type
+            </label>
+            <select
+              id="agenda-filter-type"
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="h-11 w-full rounded-lg border border-border bg-white px-3 text-sm"
+            >
+              <option value="">Tous les types</option>
+              {(data?.appointment_types || []).map((t) => (
+                <option key={t.id} value={t.name}>{t.name}</option>
+              ))}
+            </select>
+            <label className="block text-sm font-medium text-navy" htmlFor="agenda-filter-status">
+              Statut
+            </label>
+            <select
+              id="agenda-filter-status"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="h-11 w-full rounded-lg border border-border bg-white px-3 text-sm"
+            >
+              <option value="">Tous les statuts</option>
+              <option value="confirmed">Confirmé</option>
+              <option value="non_confirme">À confirmer</option>
+              <option value="no_show">Patient absent</option>
+              <option value="cancelled">Annulé</option>
+              <option value="released">Créneau libéré</option>
+              <option value="available">Disponible</option>
+            </select>
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => { setTypeFilter(''); setStatusFilter(''); setFiltersOpen(false) }}>
+              Réinitialiser
+            </Button>
+            <Button onClick={() => setFiltersOpen(false)}>Appliquer</Button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {cancelConfirm ? (
+        <Modal onClose={() => setCancelConfirm(null)}>
+          <h2 className="font-display text-xl text-navy">Annuler ce rendez-vous ?</h2>
+          <p className="mt-2 text-sm text-[var(--color-muted-accessible)]">
+            Le créneau sera libéré et le rendez-vous passera au statut Annulé.
+          </p>
+          <p className="mt-2 text-sm font-medium text-navy">
+            {cancelConfirm.full_name} — {formatAppointmentSlot(cancelConfirm.appointment_date, cancelConfirm.appointment_time)}
+          </p>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setCancelConfirm(null)}>
+              Retour
+            </Button>
+            <Button
+              variant="danger"
+              loading={actionBusy}
+              onClick={() => {
+                const target = cancelConfirm
+                setCancelConfirm(null)
+                void patchAppointment(target.id, { status: 'cancelled' })
+              }}
+            >
+              Annuler le rendez-vous
+            </Button>
+          </div>
+        </Modal>
       ) : null}
 
       {proposeSlot ? (
@@ -527,12 +792,12 @@ function AgendaGrid({
   }
 
   return (
-    <div className="overflow-x-auto p-3 sm:p-4">
+    <div className="overflow-x-auto overscroll-x-contain p-2 sm:p-3 sm:p-4">
       <div
-        className="min-w-[760px] gap-2.5"
+        className="min-w-[560px] gap-1.5 sm:min-w-[760px] sm:gap-2.5"
         style={{
           display: 'grid',
-          gridTemplateColumns: `52px repeat(${days.length}, minmax(0, 1fr))`,
+          gridTemplateColumns: `44px repeat(${days.length}, minmax(0, 1fr))`,
         }}
       >
         {/* Corner spacer */}
@@ -811,7 +1076,7 @@ function AppointmentDrawer({
       </div>
 
       <div className="mt-4 space-y-2 text-[13px]">
-        <Row label="Date" value={appointment.appointment_date} />
+        <Row label="Date" value={formatDateFr(appointment.appointment_date)} />
         <Row label="Heure" value={`${appointment.appointment_time} – ${appointment.end_time || ''}`} />
         <Row label="Durée" value={`${appointment.duration_minutes} min`} />
         <Row label="Type" value={appointment.appointment_type || 'Consultation'} />

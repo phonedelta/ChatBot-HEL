@@ -9,6 +9,7 @@
     "dev": "nodemon src/index.js",
     "build:dashboard": "npm --prefix dashboard-app run build",
     "dev:dashboard": "npm --prefix dashboard-app run dev",
+    "test:ui-zoom": "node scripts/ui-zoom-test.js",
     "smoke": "node scripts/smoke-test.js",
     "smoke:standalone": "node scripts/standalone-smoke-test.js",
     "test:darija-nlu": "node scripts/darija-nlu-test.js",
@@ -102,6 +103,7 @@
     "test:analytics-handoff-rate": "node scripts/analytics-test.js",
     "test:analytics-top-intents": "node scripts/analytics-test.js",
     "test:analytics-recovered-slots": "node scripts/analytics-test.js",
+    "test:qa-regressions": "node scripts/qa-regressions-test.js",
     "test:analytics-period-comparison": "node scripts/analytics-test.js"
   },
   "dependencies": {

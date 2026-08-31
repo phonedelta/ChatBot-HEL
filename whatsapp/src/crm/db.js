@@ -113,6 +113,21 @@ function migrateSchemaColumns(db) {
 
   // Multi-patient per WhatsApp contact (non-destructive)
   migrateLegacyContactPatients(db)
+
+  // One active booking per exact date+time (race-condition safety net).
+  // Overlapping durations are still enforced in appointment-slots.js.
+  try {
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_active_slot
+      ON appointments(appointment_date, appointment_time)
+      WHERE status IN ('non_confirme', 'pending_confirmation', 'confirmed')
+    `)
+  } catch (error) {
+    const msg = String(error?.message || error || '')
+    if (!/already exists/i.test(msg)) {
+      console.warn('[crm] idx_appointments_active_slot skipped:', msg)
+    }
+  }
 }
 
 /**
