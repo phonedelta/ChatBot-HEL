@@ -1,59 +1,11 @@
 <!doctype html>
-<html lang="fr" data-app-zoom="100">
+<html lang="fr">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/dashboard/favicon.png" />
     <link rel="apple-touch-icon" href="/dashboard/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Centre Dentaire HEL | Dashboard</title>
-    <script>
-      /* Set zoom CSS vars before paint to avoid 100→80 flicker. */
-      (function () {
-        var LEVELS = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500]
-        function normalize(raw) {
-          if (raw == null || raw === '') return 100
-          var s = String(raw).trim().toLowerCase()
-          if (s.endsWith('%')) s = s.slice(0, -1).trim()
-          if (s === 'compact' || s === 'small' || s === 'reduced') return 80
-          if (s === 'normal') return 100
-          if (s === 'comfortable' || s === 'large' || s === 'enlarged') return 110
-          var n = Number(s)
-          if (n > 0 && n <= 5 && String(s).indexOf('.') !== -1) n = Math.round(n * 100)
-          n = Math.round(n)
-          return LEVELS.indexOf(n) !== -1 ? n : 100
-        }
-        function apply(percent) {
-          var factor = percent / 100
-          var inverse = 100 / percent
-          var html = document.documentElement
-          html.dataset.appZoom = String(percent)
-          html.style.setProperty('--app-zoom', String(factor))
-          html.style.setProperty('--app-zoom-factor', String(factor))
-          html.style.setProperty('--app-zoom-inverse', String(inverse))
-          html.style.setProperty('--app-virtual-width', '100%')
-          html.style.setProperty('--app-virtual-height', 'calc(100dvh / ' + factor + ')')
-          var root = document.getElementById('root')
-          if (root) {
-            root.style.removeProperty('zoom')
-            root.style.removeProperty('width')
-            root.style.removeProperty('min-height')
-            root.style.removeProperty('transform')
-            root.classList.remove('app-zoom-root')
-            delete root.dataset.appZoom
-          }
-        }
-        try {
-          var raw = localStorage.getItem('hel-app-zoom')
-          if (!raw) raw = localStorage.getItem('hel-ui-size') || localStorage.getItem('hel-ui-zoom')
-          var percent = normalize(raw)
-          if (!localStorage.getItem('hel-app-zoom') && raw) {
-            try { localStorage.setItem('hel-app-zoom', String(percent)) } catch (e) {}
-          }
-          apply(percent)
-          document.addEventListener('DOMContentLoaded', function () { apply(percent) })
-        } catch (e) {}
-      })()
-    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

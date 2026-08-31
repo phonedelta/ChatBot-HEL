@@ -55,8 +55,8 @@ export function AppShell() {
   return (
     <div
       className={cn(
-        'flex w-full',
-        isMessages ? 'h-app overflow-hidden' : 'min-h-app',
+        'flex w-full overflow-x-hidden',
+        isMessages ? 'h-dvh overflow-hidden' : 'min-h-screen',
       )}
     >
       <Sidebar

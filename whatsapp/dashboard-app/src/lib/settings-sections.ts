@@ -2,7 +2,6 @@ import {
   Bell,
   BellRing,
   CalendarDays,
-  Monitor,
   ShieldCheck,
   UsersRound,
   Zap,
@@ -17,7 +16,6 @@ export type SettingsSectionId =
   | 'automations'
   | 'security'
   | 'notifications'
-  | 'appearance'
 
 export type SettingsSection = {
   id: SettingsSectionId
@@ -83,15 +81,6 @@ export const settingsSections: SettingsSection[] = [
     icon: Bell,
     viewPermission: PERMISSIONS.VIEW_SETTINGS,
     managePermission: PERMISSIONS.MANAGE_SETTINGS,
-  },
-  {
-    id: 'appearance',
-    label: 'Apparence',
-    shortLabel: 'Zoom',
-    description: 'Zoom de toute l’interface',
-    icon: Monitor,
-    viewPermission: PERMISSIONS.VIEW_SETTINGS,
-    managePermission: PERMISSIONS.VIEW_SETTINGS,
   },
 ]
 

@@ -54,7 +54,7 @@ export function ModalShell({
     <AnimatePresence>
       {open ? (
         <div
-          className="app-zoom-cover flex items-center justify-center p-5 sm:p-6"
+          className="fixed inset-0 flex items-center justify-center p-5 sm:p-6"
           style={{ zIndex }}
           role="presentation"
         >
@@ -79,7 +79,7 @@ export function ModalShell({
               'relative flex w-[calc(100%-20px)] max-w-full flex-col overflow-hidden sm:w-[calc(100%-32px)]',
               'rounded-[20px] border border-border bg-white',
               'shadow-[0_24px_60px_rgba(18,50,74,0.18)]',
-              'max-h-[calc(100dvh/var(--app-zoom)-20px)] sm:max-h-[calc(100dvh/var(--app-zoom)-64px)]',
+              'max-h-[calc(100dvh-20px)] sm:max-h-[calc(100dvh-64px)]',
               className,
             )}
             style={{ maxWidth: `${maxWidth}px` }}

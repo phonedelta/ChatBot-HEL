@@ -5,7 +5,6 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { PageHeader } from '@/components/smart/PageBits'
 import { UsersAccessSection, type UsersAccessSectionHandle } from '@/components/settings/UsersAccessSection'
 import { SettingsSidebar, SettingsIconTabs, SettingsSectionHeader } from '@/components/settings/SettingsSidebar'
-import { AppearanceSettingsSection } from '@/components/settings/AppearanceSettingsSection'
 import { AppointmentsSettingsSection } from '@/components/settings/AppointmentsSettingsSection'
 import { RemindersSettingsSection } from '@/components/settings/RemindersSettingsSection'
 import { AutomationsSettingsSection } from '@/components/settings/AutomationsSettingsSection'
@@ -20,11 +19,6 @@ const SECTION_COPY: Record<
   Exclude<SettingsSectionId, 'users'>,
   { overline: string; title: string; subtitle: string }
 > = {
-  appearance: {
-    overline: 'Configuration',
-    title: 'Apparence',
-    subtitle: 'Personnalisez l’affichage de votre Smart CRM.',
-  },
   appointments: {
     overline: 'Rendez-vous',
     title: 'Rendez-vous',
@@ -151,7 +145,6 @@ export function SettingsPage() {
             <>
               <SettingsSectionHeader {...SECTION_COPY[activeSection]} />
               <div className="pt-6">
-                {activeSection === 'appearance' ? <AppearanceSettingsSection /> : null}
                 {activeSection === 'appointments' ? (
                   <AppointmentsSettingsSection canEdit={canManageSettings} />
                 ) : null}
