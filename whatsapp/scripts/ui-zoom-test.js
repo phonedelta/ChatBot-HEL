@@ -76,8 +76,12 @@ function run() {
   assert.ok(css.includes('.app-zoom-viewport'), 'viewport wrapper')
   assert.ok(css.includes('.app-zoom-canvas'), 'zoom canvas')
   assert.ok(css.includes('zoom: var(--app-zoom)'), 'canvas uses CSS zoom var')
-  assert.ok(/\.app-zoom-canvas\s*\{[^}]*width:\s*calc\(100%\s*\/\s*var\(--app-zoom\)\)/s.test(css), 'canvas width compensated for zoom')
-  assert.ok(/\.app-zoom-cover\s*\{[^}]*width:\s*calc\(100vw\s*\/\s*var\(--app-zoom\)\)/s.test(css), 'cover width compensated for zoom')
+  // Width must be 100% — Chrome expands under zoom; calc(100%/zoom) double-compensates
+  assert.ok(/\.app-zoom-canvas\s*\{[^}]*\bwidth:\s*100%;/s.test(css), 'canvas width 100% (no double width comp)')
+  assert.ok(
+    !/\.app-zoom-canvas\s*\{[^}]*width:\s*calc\(100%\s*\/\s*var\(--app-zoom\)\)/s.test(css),
+    'canvas must not use width calc(100%/zoom)',
+  )
   assert.ok(css.includes('min-height: calc(100dvh / var(--app-zoom))'), 'height compensation')
   assert.ok(css.includes('.h-app'), 'h-app utility')
   assert.ok(css.includes('.app-zoom-cover'), 'cover utility')

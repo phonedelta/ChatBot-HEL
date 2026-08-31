@@ -1,6 +1,8 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, useAuth } from '@/context/AuthContext'
+import { AppZoomProvider } from '@/context/AppZoomContext'
 import { NotificationProvider } from '@/context/NotificationContext'
+import { AppZoomRoot } from '@/components/layout/AppZoomRoot'
 import { PermissionRoute } from '@/components/auth/PermissionRoute'
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginPage } from '@/pages/LoginPage'
@@ -24,7 +26,7 @@ function ProtectedRoutes() {
 
   if (!ready) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-8">
+      <div className="flex min-h-app items-center justify-center p-8">
         <div className="w-full max-w-md space-y-3">
           <Skeleton className="h-12" />
           <Skeleton className="h-40" />
@@ -64,7 +66,11 @@ function ProtectedRoutes() {
 export default function App() {
   return (
     <AuthProvider>
-      <ProtectedRoutes />
+      <AppZoomProvider>
+        <AppZoomRoot>
+          <ProtectedRoutes />
+        </AppZoomRoot>
+      </AppZoomProvider>
     </AuthProvider>
   )
 }

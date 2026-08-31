@@ -108,7 +108,7 @@ export function TodayPage() {
   const kpis = data?.kpis
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 w-full max-w-full space-y-6">
       <PageHeader
         title={`Bonjour, ${user?.displayName || 'équipe'}`}
         subtitle="Voici ce qui nécessite votre attention aujourd’hui."
@@ -123,7 +123,7 @@ export function TodayPage() {
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--color-muted-accessible)]">
           À traiter maintenant
         </h2>
-        <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <AttentionCard
             icon={MessageSquareWarning}
             title="Patients attendant une réponse"

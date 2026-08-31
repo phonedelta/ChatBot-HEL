@@ -34,12 +34,89 @@
   box-sizing: border-box;
 }
 
+:root {
+  --app-zoom: 1;
+  --app-zoom-factor: 1;
+  --app-zoom-inverse: 1;
+  /* Width: Chrome already expands used width under CSS zoom — do NOT / zoom here. */
+  --app-virtual-width: 100%;
+  /* Height: must be compensated (100dvh alone collapses under zoom). */
+  --app-virtual-height: calc(100dvh / var(--app-zoom));
+}
+
 html,
-body,
-#root {
+body {
+  width: 100%;
   min-height: 100%;
   max-width: 100%;
+  margin: 0;
   overflow-x: hidden;
+  background: var(--color-bg);
+}
+
+#root {
+  width: 100%;
+  min-height: 100dvh;
+  background: var(--color-bg);
+}
+
+/*
+ * App zoom architecture:
+ * - viewport = physical fill
+ * - canvas = CSS zoom; width 100% (Chrome layout-expands under zoom);
+ *   height compensated so shell still fills the screen
+ * Never transform:scale. Never double-compensate width with calc(100%/zoom).
+ */
+.app-zoom-viewport {
+  position: relative;
+  width: 100%;
+  min-height: 100dvh;
+  background: var(--color-bg);
+  overflow-x: hidden;
+}
+
+.app-zoom-canvas {
+  position: relative;
+  box-sizing: border-box;
+  zoom: var(--app-zoom);
+  width: 100%;
+  min-height: calc(100dvh / var(--app-zoom));
+  transform: none !important;
+  background: var(--color-bg);
+}
+
+/* Structural heights inside the zoomed canvas (not raw 100dvh) */
+.min-h-app {
+  min-height: calc(100dvh / var(--app-zoom));
+}
+
+.h-app {
+  height: calc(100dvh / var(--app-zoom));
+}
+
+.max-h-app {
+  max-height: calc(100dvh / var(--app-zoom));
+}
+
+/*
+ * Fixed overlays inside the zoomed canvas.
+ * Width follows the same rule as the canvas (100vw — Chrome expands under zoom).
+ * Height stays compensated.
+ */
+.app-zoom-cover {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: calc(100dvh / var(--app-zoom));
+}
+
+@supports (height: 100dvh) {
+  html.messages-lock,
+  html.messages-lock body,
+  html.messages-lock #root {
+    height: 100dvh;
+  }
 }
 
 html.messages-lock,
@@ -49,6 +126,19 @@ html.messages-lock #root {
   overflow: hidden;
 }
 
+html.messages-lock .app-zoom-viewport {
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+}
+
+html.messages-lock .app-zoom-canvas {
+  height: calc(100dvh / var(--app-zoom));
+  min-height: calc(100dvh / var(--app-zoom));
+  overflow: hidden;
+}
+
+/* Local horizontal chip scroll without body overflow */
 .chips-scroll {
   display: flex;
   flex-wrap: nowrap;

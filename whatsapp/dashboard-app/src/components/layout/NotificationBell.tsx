@@ -48,21 +48,37 @@ function formatSlotLabel(date?: string | null, time?: string | null) {
   }
 }
 
+function getAppZoomFactor(): number {
+  const raw = document.documentElement.style.getPropertyValue('--app-zoom')
+    || document.documentElement.style.getPropertyValue('--app-zoom-factor')
+  const n = Number(raw)
+  if (Number.isFinite(n) && n > 0) return n
+  const canvas = document.querySelector('.app-zoom-canvas')
+  if (canvas) {
+    const z = Number.parseFloat(getComputedStyle(canvas).zoom)
+    if (Number.isFinite(z) && z > 0) return z
+  }
+  return 1
+}
+
 type PanelPos = { top: number; left: number; width: number }
 
 function computePanelPos(btn: HTMLElement): PanelPos {
   const rect = btn.getBoundingClientRect()
+  const z = getAppZoomFactor()
   const gap = 8
-  const width = Math.min(400, window.innerWidth - 16)
-  let left = rect.right - width
-  if (left < 8) left = 8
-  if (left + width > window.innerWidth - 8) {
-    left = Math.max(8, window.innerWidth - width - 8)
+  const widthVisual = Math.min(400, window.innerWidth - 16)
+  let leftVisual = rect.right - widthVisual
+  if (leftVisual < 8) leftVisual = 8
+  if (leftVisual + widthVisual > window.innerWidth - 8) {
+    leftVisual = Math.max(8, window.innerWidth - widthVisual - 8)
   }
+  const topVisual = rect.bottom + gap
+  // Portal mounts inside zoomed canvas: convert visual px → zoom-local px.
   return {
-    top: rect.bottom + gap,
-    left,
-    width,
+    top: topVisual / z,
+    left: leftVisual / z,
+    width: widthVisual / z,
   }
 }
 

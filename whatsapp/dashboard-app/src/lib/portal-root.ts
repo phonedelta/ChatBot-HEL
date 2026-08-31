@@ -1,4 +1,8 @@
-/** Portal mount target for dropdowns and overlays. */
+/** Portal mount inside the zoomed #root (falls back safely). */
 export function getAppPortalRoot(): HTMLElement {
-  return document.body
+  return (
+    document.getElementById('app-portal-root')
+    || document.getElementById('root')
+    || document.body
+  )
 }

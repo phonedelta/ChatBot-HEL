@@ -2,6 +2,7 @@ import { createPortal } from 'react-dom'
 import { useEffect, type ReactNode } from 'react'
 import { Card } from '@/components/ui/Card'
 import { cn } from '@/lib/format'
+import { getAppPortalRoot } from '@/lib/portal-root'
 import { lockBodyScroll } from '@/lib/scroll-lock'
 
 type Props = {
@@ -25,7 +26,7 @@ export function Modal({ children, onClose, className }: Props) {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-text/30 p-4 backdrop-blur-sm"
+      className="app-zoom-cover z-[60] flex items-center justify-center bg-text/30 p-4 backdrop-blur-sm"
       onClick={onClose}
       role="presentation"
     >
@@ -35,11 +36,11 @@ export function Modal({ children, onClose, className }: Props) {
         role="dialog"
         aria-modal="true"
       >
-        <Card className="max-h-[90vh] overflow-y-auto" hover={false}>
+        <Card className="max-h-[min(calc(90dvh/var(--app-zoom)),calc(90vh/var(--app-zoom)))] overflow-y-auto" hover={false}>
           {children}
         </Card>
       </div>
     </div>,
-    document.body,
+    getAppPortalRoot(),
   )
 }

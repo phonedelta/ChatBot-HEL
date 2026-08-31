@@ -88,7 +88,7 @@ export function LoginPage() {
   })
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#F7FCFD]">
+    <div className="relative h-app max-h-app overflow-hidden bg-[#F7FCFD]">
       <div
         className="pointer-events-none absolute inset-0 opacity-30"
         style={{

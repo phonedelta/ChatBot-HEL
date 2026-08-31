@@ -253,7 +253,7 @@ function ModalPanel({ item, onClose }: { item: HistoryDetailItem; onClose: () =>
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+      className="app-zoom-cover z-50 flex items-center justify-center p-4 sm:p-6"
       role="presentation"
     >
       <motion.button
@@ -277,7 +277,7 @@ function ModalPanel({ item, onClose }: { item: HistoryDetailItem; onClose: () =>
           'relative flex w-full max-w-[720px] flex-col overflow-hidden',
           'rounded-[20px] border border-border bg-white',
           'shadow-[0_24px_60px_rgba(18,50,74,0.18)]',
-          'max-h-[min(760px,calc(100dvh-64px))] sm:max-h-[calc(100dvh-64px)]',
+          'max-h-[min(760px,calc(100dvh/var(--app-zoom)-64px))] sm:max-h-[calc(100dvh/var(--app-zoom)-64px)]',
         )}
         initial={{ opacity: 0, scale: 0.96, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}

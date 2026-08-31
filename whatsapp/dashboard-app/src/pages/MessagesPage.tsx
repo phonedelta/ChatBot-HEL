@@ -963,7 +963,7 @@ export function MessagesPage() {
 
       {lightboxUrl ? (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          className="app-zoom-cover z-50 flex items-center justify-center bg-black/70 p-4"
           onClick={() => setLightboxUrl(null)}
           role="dialog"
           aria-modal="true"
