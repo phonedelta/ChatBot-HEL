@@ -23,25 +23,29 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
-ENV NODE_ENV=production
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV HOST=0.0.0.0
 
 WORKDIR /app
 
-# Backend dependencies
+# --- Dashboard build (needs devDependencies: tsc, vite) ---
+COPY whatsapp/dashboard-app/package.json whatsapp/dashboard-app/package-lock.json ./dashboard-app/
+RUN npm ci --prefix dashboard-app --include=dev
+
+COPY whatsapp/dashboard-app/ ./dashboard-app/
+RUN npm run build --prefix dashboard-app
+
+# Drop dashboard dev deps after build (smaller image)
+RUN npm prune --prefix dashboard-app --omit=dev
+
+# --- Backend runtime deps ---
 COPY whatsapp/package.json whatsapp/package-lock.json ./
 RUN npm ci --omit=dev
 
-# Dashboard build toolchain (dev deps needed for vite/tsc)
-COPY whatsapp/dashboard-app/package.json whatsapp/dashboard-app/package-lock.json ./dashboard-app/
-RUN npm ci --prefix dashboard-app
-
-# Application source
 COPY whatsapp/ ./
 
-RUN npm run build:dashboard
+ENV NODE_ENV=production
 
 EXPOSE 8081
 
