@@ -5144,6 +5144,10 @@ app.get('/health', (_req, res) => {
   })
 })
 
+app.get('/', (_req, res) => {
+  res.redirect(302, '/dashboard')
+})
+
 const dashboardDistDir = path.join(dashboardDir, 'dist')
 const dashboardSpaIndex = path.join(dashboardDistDir, 'index.html')
 
