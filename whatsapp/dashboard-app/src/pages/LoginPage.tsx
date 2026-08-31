@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/Input'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import { api } from '@/lib/api'
 import helLogo from '@/assets/HEL-scaled.webp'
+import loginClinicPhoto from '@/assets/login-clinic.jpg'
 
 type FormValues = { password: string; remember: boolean }
 
@@ -96,46 +97,61 @@ export function LoginPage() {
         }}
       />
 
-      <div className="relative mx-auto flex h-full max-w-7xl flex-col lg:flex-row">
+      <div className="relative flex h-full min-h-0 flex-col lg:flex-row">
+        {/* Left hero — full half-screen photo (like red-frame mockup) */}
         <motion.section
           initial={{ opacity: 0, x: -16 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.35 }}
-          className="relative hidden h-full min-h-0 flex-1 flex-col justify-between overflow-hidden px-10 py-8 lg:flex xl:px-14 xl:py-10"
+          className="relative hidden h-full min-h-0 shrink-0 overflow-hidden lg:flex lg:w-1/2"
         >
-          {/* Single cover photo — avoid CSS multi-layer background tiling under zoom */}
           <img
-            src="https://images.unsplash.com/photo-1629909613654-28e377c37b09?auto=format&fit=crop&w=1600&q=80"
+            src={loginClinicPhoto}
             alt=""
             aria-hidden
             className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center"
           />
+          {/* High-key white wash on text area — soft fade, no box/card */}
           <div
             className="pointer-events-none absolute inset-0"
             style={{
-              background:
-                'linear-gradient(105deg, rgba(247,252,253,0.94) 0%, rgba(247,252,253,0.78) 45%, rgba(247,252,253,0.42) 100%)',
+              background: [
+                'linear-gradient(180deg, rgba(255,255,255,0.94) 0%, rgba(255,255,255,0.88) 14%, rgba(255,255,255,0.72) 32%, rgba(255,255,255,0.38) 52%, rgba(255,255,255,0.1) 68%, transparent 82%)',
+                'linear-gradient(105deg, rgba(255,255,255,0.82) 0%, rgba(255,255,255,0.45) 38%, transparent 72%)',
+                'linear-gradient(0deg, rgba(255,255,255,0.62) 0%, rgba(255,255,255,0.2) 20%, transparent 42%)',
+              ].join(', '),
             }}
           />
-          <div className="relative z-10 shrink-0">
-            <img src={helLogo} alt="Centre Dentaire HEL" className="h-12 w-auto max-w-[180px] object-contain drop-shadow-sm" />
-            <h1 className="mt-6 max-w-lg font-display text-3xl leading-snug text-text xl:text-4xl">
-              Votre solution <span className="text-primary">intelligente</span> pour une gestion simplifiée
-            </h1>
-            <p className="mt-3 max-w-md text-sm leading-relaxed text-muted">
-              Gérez vos rendez-vous, patients et communications en toute simplicité et efficacité.
-            </p>
-          </div>
-          <div className="relative z-10 mt-8 grid shrink-0 grid-cols-3 gap-2.5">
-            {features.map((feature) => (
-              <div key={feature.title} className="rounded-[18px] border border-white/70 bg-white/90 p-3 shadow-[0_8px_24px_rgba(16,42,67,0.07)] backdrop-blur">
-                <div className="mb-2 flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                  <feature.icon className="h-4 w-4" />
+
+          <div className="relative z-10 flex h-full w-full flex-col justify-between px-10 py-8 xl:px-14 xl:py-10">
+            <div className="max-w-xl">
+              <img
+                src={helLogo}
+                alt="Centre Dentaire HEL"
+                className="h-12 w-auto max-w-[180px] object-contain"
+              />
+              <h1 className="mt-6 font-display text-3xl leading-snug text-[#102A43] xl:text-4xl">
+                Votre solution <span className="text-primary">intelligente</span> pour une gestion simplifiée
+              </h1>
+              <p className="mt-3 max-w-md text-sm leading-relaxed text-[#475569]">
+                Gérez vos rendez-vous, patients et communications en toute simplicité et efficacité.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2.5">
+              {features.map((feature) => (
+                <div
+                  key={feature.title}
+                  className="rounded-[18px] border border-white/70 bg-white p-3 shadow-[0_10px_28px_rgba(16,42,67,0.1)]"
+                >
+                  <div className="mb-2 flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <feature.icon className="h-4 w-4" />
+                  </div>
+                  <p className="text-xs font-semibold text-text">{feature.title}</p>
+                  <p className="mt-0.5 text-[11px] leading-snug text-muted">{feature.desc}</p>
                 </div>
-                <p className="text-xs font-semibold text-text">{feature.title}</p>
-                <p className="mt-0.5 text-[11px] leading-snug text-muted">{feature.desc}</p>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </motion.section>
 
@@ -143,7 +159,7 @@ export function LoginPage() {
           initial={{ opacity: 0, x: 16 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.35, delay: 0.05 }}
-          className="relative z-10 flex h-full flex-1 items-center justify-center px-4 py-4 sm:px-6 lg:px-8"
+          className="relative z-10 flex h-full min-h-0 flex-1 items-center justify-center px-4 py-4 sm:px-6 lg:w-1/2 lg:px-10 xl:px-14"
         >
           <div className="flex w-full max-w-[430px] flex-col overflow-hidden rounded-[26px] border border-border bg-white shadow-[0_20px_50px_rgba(16,42,67,0.1)]">
             <div className="px-7 py-6 sm:px-8 sm:py-7">
