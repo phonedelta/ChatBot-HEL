@@ -134,7 +134,7 @@ export function ConfigPage() {
     try {
       const started = await api<QrPayload>('/dashboard/api/instances/main/qr', {
         method: 'POST',
-        body: { force: true, wait_ms: 45000 },
+        body: { force: true, wait_ms: 60000 },
       })
 
       if (started.instance) {
@@ -158,7 +158,7 @@ export function ConfigPage() {
         return
       }
 
-      const deadline = Date.now() + 45000
+      const deadline = Date.now() + 120000
       while (Date.now() < deadline) {
         await new Promise((resolve) => window.setTimeout(resolve, 1500))
         const payload = await api<QrPayload>('/dashboard/api/instances/main/qr')
@@ -186,7 +186,7 @@ export function ConfigPage() {
           setError('Session Chrome bloquée. Nouvelle tentative…')
           await api<QrPayload>('/dashboard/api/instances/main/qr', {
             method: 'POST',
-            body: { force: true, wait_ms: 5000 },
+            body: { force: true, wait_ms: 60000 },
           })
         }
       }

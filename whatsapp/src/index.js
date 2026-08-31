@@ -122,7 +122,7 @@ const crmDbPath = process.env.CRM_DB_PATH || path.join(process.cwd(), 'storage',
 const crmStaffNotifyChatId = String(process.env.CRM_STAFF_NOTIFY_CHAT_ID || '').trim()
 const waAutoStart = parseBoolean(process.env.WA_AUTO_START, true)
 const waSessionPath = process.env.WA_SESSION_PATH || path.join(process.cwd(), 'storage', 'wa-auth')
-const qrWaitMs = Number(process.env.WA_QR_WAIT_MS || 45000)
+const qrWaitMs = Number(process.env.WA_QR_WAIT_MS || 60000)
 const mediaTmpDir = process.env.WA_MEDIA_TMP_DIR || path.join(os.tmpdir(), 'iadis-wa-media')
 const mediaMaxBytes = Number(process.env.WA_MEDIA_MAX_BYTES || 15 * 1024 * 1024)
 const outboundMediaMaxBytes = Number(process.env.WA_OUTBOUND_MEDIA_MAX_BYTES || Math.max(mediaMaxBytes, 64 * 1024 * 1024))
@@ -3422,48 +3422,56 @@ async function waitForInstanceReady(record, waitMs = Math.max(instancePingTimeou
   throw error
 }
 
+function isLikelyWindowsBrowserPath(browserPath) {
+  const normalized = String(browserPath || '').trim()
+  if (!normalized) {
+    return false
+  }
+
+  return /^[a-zA-Z]:[\\/]/.test(normalized) || normalized.includes('\\')
+}
+
 function resolvePuppeteerExecutablePath() {
   const configuredPath = String(process.env.PUPPETEER_EXECUTABLE_PATH || '').trim()
-  if (configuredPath) {
-    const resolvedConfiguredPath = path.isAbsolute(configuredPath)
-      ? configuredPath
-      : path.resolve(configuredPath)
+  const candidates = []
 
-    if (fs.existsSync(resolvedConfiguredPath)) {
-      return resolvedConfiguredPath
-    }
-
-    console.warn('[iadis-wa] configured PUPPETEER_EXECUTABLE_PATH was not found, trying local browser fallbacks', {
-      configured_path: resolvedConfiguredPath,
-      platform: process.platform,
+  if (configuredPath && !(process.platform !== 'win32' && isLikelyWindowsBrowserPath(configuredPath))) {
+    candidates.push(
+      path.isAbsolute(configuredPath) ? configuredPath : path.resolve(configuredPath),
+    )
+  } else if (configuredPath && process.platform !== 'win32') {
+    console.warn('[iadis-wa] ignoring Windows PUPPETEER_EXECUTABLE_PATH on Linux container', {
+      configured_path: configuredPath,
     })
   }
 
-  const platformCandidates = process.platform === 'win32'
-    ? [
+  if (process.platform === 'win32') {
+    candidates.push(
       'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
       'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    ]
-    : process.platform === 'linux'
-      ? [
-        '/usr/bin/chromium',
-        '/usr/bin/chromium-browser',
-        '/usr/bin/google-chrome-stable',
-        '/usr/bin/google-chrome',
-      ]
-      : process.platform === 'darwin'
-        ? [
-          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-          '/Applications/Chromium.app/Contents/MacOS/Chromium',
-        ]
-        : []
+    )
+  } else {
+    candidates.push(
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+    )
+  }
 
-  for (const candidate of platformCandidates) {
-    if (fs.existsSync(candidate)) {
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
       return candidate
     }
+  }
+
+  if (configuredPath) {
+    console.warn('[iadis-wa] no browser executable found', {
+      configured_path: configuredPath,
+      platform: process.platform,
+    })
   }
 
   return ''
@@ -3480,8 +3488,11 @@ function buildClient(instanceId) {
   const executablePath = resolvePuppeteerExecutablePath()
   if (executablePath) {
     puppeteer.executablePath = executablePath
-  } else if (process.platform === 'linux') {
-    console.error('[iadis-wa] no Chromium executable found — set PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium on Linux hosts')
+  } else {
+    console.warn('[iadis-wa] puppeteer executable not found; QR generation may fail', {
+      instance_id: instanceId,
+      platform: process.platform,
+    })
   }
 
   return new WaClient({
@@ -6521,7 +6532,13 @@ app.post('/incoming', verifyWebhookSecret, async (req, res) => {
 
 const host = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0'
 app.listen(port, host, () => {
+  const puppeteerExecutablePath = resolvePuppeteerExecutablePath()
   console.log(`[iadis-wa] service listening on http://${host}:${port} (provider=${provider})`)
+  console.log('[iadis-wa] puppeteer runtime', {
+    executable_path: puppeteerExecutablePath || null,
+    platform: process.platform,
+    qr_wait_ms: qrWaitMs,
+  })
 
   if (!waAutoStart) {
     console.log('[iadis-wa] automatic WhatsApp instance bootstrap is disabled')

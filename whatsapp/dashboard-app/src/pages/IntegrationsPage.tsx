@@ -73,8 +73,8 @@ export function IntegrationsPage() {
   const [qrOpen, setQrOpen] = useState(false)
   const [disconnectOpen, setDisconnectOpen] = useState(false)
   const [qr, setQr] = useState<string | null>(null)
+  const [qrLastError, setQrLastError] = useState<string | null>(null)
   const [qrLoading, setQrLoading] = useState(false)
-  const [qrLastError, setQrLastError] = useState('')
   const [busy, setBusy] = useState(false)
 
   const showToast = useCallback((message: string) => {
@@ -128,20 +128,22 @@ export function IntegrationsPage() {
   async function fetchQr() {
     setQrLoading(true)
     setError('')
-    setQrLastError('')
     setQr(null)
+    setQrLastError(null)
     try {
       const started = await api<QrPayload>('/dashboard/api/instances/main/qr', {
         method: 'POST',
-        body: { force: true, wait_ms: 45000 },
+        body: { force: true, wait_ms: 60000 },
       })
+      if (started.lastError) {
+        setQrLastError(started.lastError)
+      }
       if (started.instance) {
         setInstances((prev) => {
           const others = prev.filter((item) => item.instance_id !== started.instance?.instance_id)
           return [started.instance as WaInstance, ...others]
         })
       }
-      if (started.lastError) setQrLastError(started.lastError)
       if (started.qr) {
         setQr(started.qr)
         await load(true)
@@ -153,17 +155,19 @@ export function IntegrationsPage() {
         return
       }
 
-      const deadline = Date.now() + 60000
+      const deadline = Date.now() + 120000
       while (Date.now() < deadline) {
         await new Promise((resolve) => window.setTimeout(resolve, 1500))
         const payload = await api<QrPayload>('/dashboard/api/instances/main/qr')
+        if (payload.lastError) {
+          setQrLastError(payload.lastError)
+        }
         if (payload.instance) {
           setInstances((prev) => {
             const others = prev.filter((item) => item.instance_id !== payload.instance?.instance_id)
             return [payload.instance as WaInstance, ...others]
           })
         }
-        if (payload.lastError) setQrLastError(payload.lastError)
         if (payload.qr) {
           setQr(payload.qr)
           return
@@ -436,14 +440,13 @@ export function IntegrationsPage() {
                   <p className="mt-3 text-xs text-muted">En attente de connexion…</p>
                 </>
               ) : (
-                <div className="max-w-xs text-center">
+                <div className="space-y-2 text-center">
                   <p className="text-sm text-muted">Impossible d’afficher le QR pour le moment.</p>
-                  {error ? <p className="mt-2 text-xs text-danger">{error}</p> : null}
-                  {qrLastError ? (
-                    <p className="mt-2 text-xs text-danger">{qrLastError}</p>
-                  ) : (
-                    <p className="mt-2 text-xs text-muted">Le démarrage de Chromium peut prendre jusqu’à 45 s sur Railway.</p>
-                  )}
+                  {qrLastError || main?.lastError ? (
+                    <p className="rounded-xl border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">
+                      {qrLastError || main?.lastError}
+                    </p>
+                  ) : null}
                 </div>
               )}
             </div>
