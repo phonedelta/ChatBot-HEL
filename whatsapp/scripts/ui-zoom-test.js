@@ -85,6 +85,10 @@ function run() {
   assert.ok(css.includes('min-height: calc(100dvh / var(--app-zoom))'), 'height compensation')
   assert.ok(css.includes('.h-app'), 'h-app utility')
   assert.ok(css.includes('.app-zoom-cover'), 'cover utility')
+  assert.ok(
+    /\.app-zoom-cover\s*\{[^}]*width:\s*calc\(100vw\s*\/\s*var\(--app-zoom\)\)/s.test(css),
+    'cover width compensated for zoom',
+  )
   assert.ok(!css.includes('transform: scale'), 'no transform scale zoom')
 
   assert.ok(zoomRoot.includes('app-zoom-viewport'))

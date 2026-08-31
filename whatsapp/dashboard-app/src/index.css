@@ -100,15 +100,17 @@ body {
 
 /*
  * Fixed overlays inside the zoomed canvas.
- * Width follows the same rule as the canvas (100vw — Chrome expands under zoom).
- * Height stays compensated.
+ * Pre-expand by 1/zoom so the dimmed backdrop still covers the full viewport at 80–90%.
  */
 .app-zoom-cover {
   position: fixed;
   top: 0;
   left: 0;
-  width: 100vw;
+  z-index: 50;
+  width: calc(100vw / var(--app-zoom));
   height: calc(100dvh / var(--app-zoom));
+  min-width: calc(100vw / var(--app-zoom));
+  min-height: calc(100dvh / var(--app-zoom));
 }
 
 @supports (height: 100dvh) {
