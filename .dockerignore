@@ -1,0 +1,17 @@
+.git
+.github
+**/.git
+**/node_modules
+**/.wwebjs_cache
+whatsapp/storage
+whatsapp/.env
+whatsapp/.env.*
+!whatsapp/.env.example
+**/*.log
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
+prompt.md
+**/.cursor
+**/terminals
+**/.tmp

@@ -1,0 +1,10 @@
+# Railway deploy config — app source is in whatsapp/ (see Dockerfile at repo root)
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
