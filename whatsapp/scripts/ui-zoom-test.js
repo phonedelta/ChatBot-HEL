@@ -89,8 +89,8 @@ function run() {
 
   assert.ok(zoomRoot.includes('app-zoom-viewport'))
   assert.ok(zoomRoot.includes('app-zoom-canvas'))
-  assert.ok(shell.includes('min-h-app') || shell.includes('h-app'))
-  assert.ok(sidebar.includes('lg:static'))
+  assert.ok(shell.includes('lg:pl-[72px]') || shell.includes('lg:pl-[248px]'))
+  assert.ok(sidebar.includes('fixed left-0 top-0'))
   assert.ok(src.includes('--app-zoom-inverse'))
 
   console.log('app-zoom-test: PASS')

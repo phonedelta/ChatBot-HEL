@@ -53,12 +53,7 @@ export function AppShell() {
   }, [isMessages])
 
   return (
-    <div
-      className={cn(
-        'flex w-full min-w-0 overflow-x-hidden',
-        isMessages ? 'h-app overflow-hidden' : 'min-h-app',
-      )}
-    >
+    <div className="flex h-app w-full min-w-0 overflow-hidden">
       <Sidebar
         open={open}
         onClose={() => setOpen(false)}
@@ -67,16 +62,16 @@ export function AppShell() {
       />
       <div
         className={cn(
-          'flex min-w-0 flex-1 flex-col',
-          isMessages ? 'h-full min-h-0 overflow-hidden' : 'min-h-full',
+          'flex min-h-0 min-w-0 flex-1 flex-col transition-[padding] duration-200',
+          collapsed ? 'lg:pl-[72px]' : 'lg:pl-[248px]',
         )}
       >
         <div
           className={cn(
-            'flex min-w-0 flex-1 flex-col px-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-5 lg:px-6 lg:pt-4',
+            'flex min-h-0 flex-1 flex-col px-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-5 lg:px-6 lg:pt-4',
             isMessages
-              ? 'min-h-0 overflow-hidden pb-[max(0.5rem,env(safe-area-inset-bottom))]'
-              : 'pb-[max(1.5rem,env(safe-area-inset-bottom))]',
+              ? 'overflow-hidden pb-[max(0.5rem,env(safe-area-inset-bottom))]'
+              : 'overflow-y-auto scrollbar-thin pb-[max(1.5rem,env(safe-area-inset-bottom))]',
           )}
         >
           <div className="mb-2 flex shrink-0 items-center gap-2 lg:hidden">

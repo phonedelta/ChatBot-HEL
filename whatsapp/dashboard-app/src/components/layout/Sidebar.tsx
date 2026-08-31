@@ -157,10 +157,8 @@ export function Sidebar({
       <aside
         id="app-sidebar"
         className={cn(
-          'z-50 flex shrink-0 flex-col border-r border-border bg-white transition-all duration-200',
+          'fixed left-0 top-0 z-50 flex h-app shrink-0 flex-col border-r border-border bg-white transition-all duration-200',
           'pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]',
-          // Mobile = fixed drawer with virtual height; desktop = in-flow flex column (fills shell).
-          'fixed left-0 top-0 h-app lg:static lg:h-auto lg:min-h-full lg:self-stretch lg:translate-x-0',
           effectiveCollapsed ? 'w-[72px] px-2' : 'w-[248px] max-w-[calc(100%-3rem)] px-3 lg:max-w-none',
           open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
         )}
