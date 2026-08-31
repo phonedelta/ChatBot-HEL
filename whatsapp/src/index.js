@@ -122,7 +122,19 @@ const crmDbPath = process.env.CRM_DB_PATH || path.join(process.cwd(), 'storage',
 const crmStaffNotifyChatId = String(process.env.CRM_STAFF_NOTIFY_CHAT_ID || '').trim()
 const waAutoStart = parseBoolean(process.env.WA_AUTO_START, true)
 const waSessionPath = process.env.WA_SESSION_PATH || path.join(process.cwd(), 'storage', 'wa-auth')
-const qrWaitMs = Number(process.env.WA_QR_WAIT_MS || 60000)
+function isCloudDeployment() {
+  return Boolean(
+    process.env.RAILWAY_ENVIRONMENT
+    || process.env.RAILWAY_SERVICE_ID
+    || process.env.RAILWAY_PROJECT_ID
+    || process.env.FLY_APP_NAME
+    || process.env.RENDER
+  )
+}
+
+const defaultQrWaitMs = isCloudDeployment() ? 60000 : 7000
+const qrWaitMs = Number(process.env.WA_QR_WAIT_MS || defaultQrWaitMs)
+const defaultDashboardQrWaitMs = isCloudDeployment() ? 60000 : 20000
 const mediaTmpDir = process.env.WA_MEDIA_TMP_DIR || path.join(os.tmpdir(), 'iadis-wa-media')
 const mediaMaxBytes = Number(process.env.WA_MEDIA_MAX_BYTES || 15 * 1024 * 1024)
 const outboundMediaMaxBytes = Number(process.env.WA_OUTBOUND_MEDIA_MAX_BYTES || Math.max(mediaMaxBytes, 64 * 1024 * 1024))
@@ -154,7 +166,10 @@ const automationHistoryLimit = Number(process.env.WA_AUTOMATION_HISTORY_LIMIT ||
 const automationHistoryLookbackHours = Number(process.env.WA_AUTOMATION_HISTORY_LOOKBACK_HOURS || 96)
 const automationRetryCooldownMs = Number(process.env.WA_AUTOMATION_RETRY_COOLDOWN_MS || 3600000)
 const automationRetryMaxAttempts = Number(process.env.WA_AUTOMATION_RETRY_MAX_ATTEMPTS || 6)
-const puppeteerArgs = (process.env.WA_PUPPETEER_ARGS || '--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu')
+const defaultPuppeteerArgs = isCloudDeployment()
+  ? '--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu,--headless=new,--no-zygote,--disable-extensions'
+  : '--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu'
+const puppeteerArgs = (process.env.WA_PUPPETEER_ARGS || defaultPuppeteerArgs)
   .split(',')
   .map((item) => item.trim())
   .filter(Boolean)
@@ -3422,56 +3437,52 @@ async function waitForInstanceReady(record, waitMs = Math.max(instancePingTimeou
   throw error
 }
 
-function isLikelyWindowsBrowserPath(browserPath) {
-  const normalized = String(browserPath || '').trim()
-  if (!normalized) {
-    return false
-  }
-
-  return /^[a-zA-Z]:[\\/]/.test(normalized) || normalized.includes('\\')
-}
-
 function resolvePuppeteerExecutablePath() {
-  const configuredPath = String(process.env.PUPPETEER_EXECUTABLE_PATH || '').trim()
-  const candidates = []
+  const configuredPath = String(
+    process.env.PUPPETEER_EXECUTABLE_PATH
+    || process.env.CHROME_BIN
+    || '',
+  ).trim()
+  if (configuredPath) {
+    const resolvedConfiguredPath = path.isAbsolute(configuredPath)
+      ? configuredPath
+      : path.resolve(configuredPath)
 
-  if (configuredPath && !(process.platform !== 'win32' && isLikelyWindowsBrowserPath(configuredPath))) {
-    candidates.push(
-      path.isAbsolute(configuredPath) ? configuredPath : path.resolve(configuredPath),
-    )
-  } else if (configuredPath && process.platform !== 'win32') {
-    console.warn('[iadis-wa] ignoring Windows PUPPETEER_EXECUTABLE_PATH on Linux container', {
-      configured_path: configuredPath,
+    if (fs.existsSync(resolvedConfiguredPath)) {
+      return resolvedConfiguredPath
+    }
+
+    console.warn('[iadis-wa] configured PUPPETEER_EXECUTABLE_PATH was not found, trying local browser fallbacks', {
+      configured_path: resolvedConfiguredPath,
     })
   }
 
   if (process.platform === 'win32') {
-    candidates.push(
+    const candidates = [
       'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
       'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    )
+    ]
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate
+      }
+    }
   } else {
-    candidates.push(
+    const candidates = [
       '/usr/bin/chromium',
       '/usr/bin/chromium-browser',
       '/usr/bin/google-chrome',
       '/usr/bin/google-chrome-stable',
-    )
-  }
+    ]
 
-  for (const candidate of candidates) {
-    if (candidate && fs.existsSync(candidate)) {
-      return candidate
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate
+      }
     }
-  }
-
-  if (configuredPath) {
-    console.warn('[iadis-wa] no browser executable found', {
-      configured_path: configuredPath,
-      platform: process.platform,
-    })
   }
 
   return ''
@@ -3488,10 +3499,9 @@ function buildClient(instanceId) {
   const executablePath = resolvePuppeteerExecutablePath()
   if (executablePath) {
     puppeteer.executablePath = executablePath
-  } else {
-    console.warn('[iadis-wa] puppeteer executable not found; QR generation may fail', {
+  } else if (process.platform === 'linux') {
+    console.warn('[iadis-wa] no chromium executable found; puppeteer will use its bundled browser', {
       instance_id: instanceId,
-      platform: process.platform,
     })
   }
 
@@ -3534,6 +3544,10 @@ function initializeRecord(record) {
       }
 
       updateState(record, 'disconnected', { lastError: message })
+      console.error('[iadis-wa] instance initialization failed', {
+        instance_id: record.instanceId,
+        reason: message,
+      })
       scheduleReconnect(record, message)
     })
     .finally(() => {
@@ -5155,10 +5169,17 @@ function mapOutboundMediaErrorToStatus(error) {
 }
 
 app.get('/health', (_req, res) => {
+  const mainRecord = getInstance('main')
   res.json({
     status: 'ok',
     service: 'iadis-whatsapp-service',
     provider,
+    whatsapp: {
+      can_connect: Boolean(WaClient && LocalAuth && QRCode),
+      puppeteer_executable: resolvePuppeteerExecutablePath() || null,
+      main_state: mainRecord?.state || 'missing',
+      main_last_error: mainRecord?.lastError || null,
+    },
     chatbot: {
       mode: chatbotMode,
       configured: backendEnabled ? Boolean(serviceToken) : Boolean(openAiApiKey),
@@ -5847,7 +5868,7 @@ app.post('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, asyn
   const instanceId = normalizeInstanceId(req.params.instanceId)
   const force = parseBoolean(req.body?.force, true)
   const rawWait = Number(req.body?.wait_ms)
-  const waitMs = Number.isFinite(rawWait) ? Math.max(0, rawWait) : qrWaitMs
+  const waitMs = Number.isFinite(rawWait) ? Math.max(0, rawWait) : defaultDashboardQrWaitMs
 
   try {
     let record = getInstance(instanceId)
@@ -6532,13 +6553,16 @@ app.post('/incoming', verifyWebhookSecret, async (req, res) => {
 
 const host = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0'
 app.listen(port, host, () => {
-  const puppeteerExecutablePath = resolvePuppeteerExecutablePath()
   console.log(`[iadis-wa] service listening on http://${host}:${port} (provider=${provider})`)
-  console.log('[iadis-wa] puppeteer runtime', {
-    executable_path: puppeteerExecutablePath || null,
-    platform: process.platform,
-    qr_wait_ms: qrWaitMs,
-  })
+
+  if (WaClient) {
+    console.log('[iadis-wa] whatsapp-web.js ready', {
+      puppeteer_executable: resolvePuppeteerExecutablePath() || '(bundled)',
+      cloud_deployment: isCloudDeployment(),
+      qr_wait_ms: qrWaitMs,
+      session_path: waSessionPath,
+    })
+  }
 
   if (!waAutoStart) {
     console.log('[iadis-wa] automatic WhatsApp instance bootstrap is disabled')

@@ -73,8 +73,8 @@ export function IntegrationsPage() {
   const [qrOpen, setQrOpen] = useState(false)
   const [disconnectOpen, setDisconnectOpen] = useState(false)
   const [qr, setQr] = useState<string | null>(null)
-  const [qrLastError, setQrLastError] = useState<string | null>(null)
   const [qrLoading, setQrLoading] = useState(false)
+  const [qrError, setQrError] = useState('')
   const [busy, setBusy] = useState(false)
 
   const showToast = useCallback((message: string) => {
@@ -128,16 +128,13 @@ export function IntegrationsPage() {
   async function fetchQr() {
     setQrLoading(true)
     setError('')
+    setQrError('')
     setQr(null)
-    setQrLastError(null)
     try {
       const started = await api<QrPayload>('/dashboard/api/instances/main/qr', {
         method: 'POST',
         body: { force: true, wait_ms: 60000 },
       })
-      if (started.lastError) {
-        setQrLastError(started.lastError)
-      }
       if (started.instance) {
         setInstances((prev) => {
           const others = prev.filter((item) => item.instance_id !== started.instance?.instance_id)
@@ -149,19 +146,19 @@ export function IntegrationsPage() {
         await load(true)
         return
       }
+      if (started.lastError) {
+        setQrError(started.lastError)
+      }
       if (isConnected(started.state)) {
         showToast('WhatsApp connecté.')
         await load(true)
         return
       }
 
-      const deadline = Date.now() + 120000
+      const deadline = Date.now() + 90000
       while (Date.now() < deadline) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1500))
+        await new Promise((resolve) => window.setTimeout(resolve, 2000))
         const payload = await api<QrPayload>('/dashboard/api/instances/main/qr')
-        if (payload.lastError) {
-          setQrLastError(payload.lastError)
-        }
         if (payload.instance) {
           setInstances((prev) => {
             const others = prev.filter((item) => item.instance_id !== payload.instance?.instance_id)
@@ -172,14 +169,19 @@ export function IntegrationsPage() {
           setQr(payload.qr)
           return
         }
+        if (payload.lastError) {
+          setQrError(payload.lastError)
+        }
         if (isConnected(payload.state)) {
           showToast('WhatsApp connecté.')
           return
         }
       }
-      setError('QR non généré à temps. Réessayez.')
+      setQrError((prev) => prev || 'QR non généré à temps. Sur Railway, le premier lancement peut prendre 1 à 2 minutes — réessayez.')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Impossible de générer le QR')
+      const message = err instanceof Error ? err.message : 'Impossible de générer le QR'
+      setQrError(message)
+      setError(message)
     } finally {
       setQrLoading(false)
     }
@@ -442,10 +444,8 @@ export function IntegrationsPage() {
               ) : (
                 <div className="space-y-2 text-center">
                   <p className="text-sm text-muted">Impossible d’afficher le QR pour le moment.</p>
-                  {qrLastError || main?.lastError ? (
-                    <p className="rounded-xl border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">
-                      {qrLastError || main?.lastError}
-                    </p>
+                  {qrError ? (
+                    <p className="rounded-xl bg-danger/10 px-3 py-2 text-xs text-danger">{qrError}</p>
                   ) : null}
                 </div>
               )}

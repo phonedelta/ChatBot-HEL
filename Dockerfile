@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     chromium \
     ca-certificates \
     fonts-liberation \
+    fonts-noto-color-emoji \
     libasound2 \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
@@ -19,15 +20,18 @@ RUN apt-get update && apt-get install -y \
     libxcomposite1 \
     libxdamage1 \
     libxrandr2 \
+    libxshmfence1 \
+    libxss1 \
     xdg-utils \
     --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV WA_QR_WAIT_MS=60000
-ENV WA_PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu
+ENV CHROME_BIN=/usr/bin/chromium
 ENV HOST=0.0.0.0
+ENV WA_PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu,--headless=new,--no-zygote,--disable-extensions
+ENV WA_QR_WAIT_MS=60000
 
 WORKDIR /app
 
@@ -46,6 +50,8 @@ COPY whatsapp/package.json whatsapp/package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY whatsapp/ ./
+
+RUN mkdir -p storage/wa-auth storage/media storage/sessions
 
 ENV NODE_ENV=production
 
