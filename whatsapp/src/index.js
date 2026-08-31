@@ -6552,8 +6552,33 @@ app.post('/incoming', verifyWebhookSecret, async (req, res) => {
 })
 
 const host = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0'
+
+function listNetworkAddresses() {
+  const addresses = new Set()
+  const nets = os.networkInterfaces()
+
+  for (const entries of Object.values(nets)) {
+    for (const entry of entries || []) {
+      if (!entry || entry.internal || entry.family !== 'IPv4') continue
+      addresses.add(entry.address)
+    }
+  }
+
+  return Array.from(addresses)
+}
+
 app.listen(port, host, () => {
+  const localUrl = `http://127.0.0.1:${port}`
+  const dashboardUrl = `${localUrl}/dashboard`
   console.log(`[iadis-wa] service listening on http://${host}:${port} (provider=${provider})`)
+  console.log(`[iadis-wa] local dashboard: ${dashboardUrl}`)
+
+  const networkHosts = listNetworkAddresses()
+  if (host === '0.0.0.0' && networkHosts.length) {
+    for (const address of networkHosts) {
+      console.log(`[iadis-wa] network dashboard: http://${address}:${port}/dashboard`)
+    }
+  }
 
   if (WaClient) {
     console.log('[iadis-wa] whatsapp-web.js ready', {

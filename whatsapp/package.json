@@ -6,6 +6,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "network:info": "node scripts/network-info.js",
     "build": "npm run build:dashboard",
     "dev": "nodemon src/index.js",
     "build:dashboard": "npm --prefix dashboard-app run build",
