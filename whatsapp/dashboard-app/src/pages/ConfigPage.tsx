@@ -134,7 +134,7 @@ export function ConfigPage() {
     try {
       const started = await api<QrPayload>('/dashboard/api/instances/main/qr', {
         method: 'POST',
-        body: { force: true, wait_ms: 8000 },
+        body: { force: true, wait_ms: 45000 },
       })
 
       if (started.instance) {

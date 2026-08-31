@@ -62,7 +62,7 @@ body {
 /*
  * App zoom architecture:
  * - viewport = physical fill
- * - canvas = CSS zoom; width 100% (Chrome layout-expands under zoom);
+ * - canvas = CSS zoom; width pre-compensated (100%/zoom) so shell fills viewport at 80–90%;
  *   height compensated so shell still fills the screen
  * Never transform:scale. Never double-compensate width.
  */
@@ -78,7 +78,8 @@ body {
   position: relative;
   box-sizing: border-box;
   zoom: var(--app-zoom);
-  width: 100%;
+  /* Pre-zoom width so content still fills the viewport below 100% zoom */
+  width: calc(100% / var(--app-zoom));
   min-height: calc(100dvh / var(--app-zoom));
   transform: none !important;
   background: var(--color-bg);
@@ -106,7 +107,7 @@ body {
   position: fixed;
   top: 0;
   left: 0;
-  width: 100vw;
+  width: calc(100vw / var(--app-zoom));
   height: calc(100dvh / var(--app-zoom));
 }
 

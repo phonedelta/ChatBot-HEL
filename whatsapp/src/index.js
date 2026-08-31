@@ -122,7 +122,7 @@ const crmDbPath = process.env.CRM_DB_PATH || path.join(process.cwd(), 'storage',
 const crmStaffNotifyChatId = String(process.env.CRM_STAFF_NOTIFY_CHAT_ID || '').trim()
 const waAutoStart = parseBoolean(process.env.WA_AUTO_START, true)
 const waSessionPath = process.env.WA_SESSION_PATH || path.join(process.cwd(), 'storage', 'wa-auth')
-const qrWaitMs = Number(process.env.WA_QR_WAIT_MS || 7000)
+const qrWaitMs = Number(process.env.WA_QR_WAIT_MS || 45000)
 const mediaTmpDir = process.env.WA_MEDIA_TMP_DIR || path.join(os.tmpdir(), 'iadis-wa-media')
 const mediaMaxBytes = Number(process.env.WA_MEDIA_MAX_BYTES || 15 * 1024 * 1024)
 const outboundMediaMaxBytes = Number(process.env.WA_OUTBOUND_MEDIA_MAX_BYTES || Math.max(mediaMaxBytes, 64 * 1024 * 1024))
@@ -3435,21 +3435,34 @@ function resolvePuppeteerExecutablePath() {
 
     console.warn('[iadis-wa] configured PUPPETEER_EXECUTABLE_PATH was not found, trying local browser fallbacks', {
       configured_path: resolvedConfiguredPath,
+      platform: process.platform,
     })
   }
 
-  if (process.platform === 'win32') {
-    const candidates = [
+  const platformCandidates = process.platform === 'win32'
+    ? [
       'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
       'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
     ]
+    : process.platform === 'linux'
+      ? [
+        '/usr/bin/chromium',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/google-chrome',
+      ]
+      : process.platform === 'darwin'
+        ? [
+          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        ]
+        : []
 
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        return candidate
-      }
+  for (const candidate of platformCandidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate
     }
   }
 
@@ -3467,6 +3480,8 @@ function buildClient(instanceId) {
   const executablePath = resolvePuppeteerExecutablePath()
   if (executablePath) {
     puppeteer.executablePath = executablePath
+  } else if (process.platform === 'linux') {
+    console.error('[iadis-wa] no Chromium executable found — set PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium on Linux hosts')
   }
 
   return new WaClient({
@@ -5821,7 +5836,7 @@ app.post('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, asyn
   const instanceId = normalizeInstanceId(req.params.instanceId)
   const force = parseBoolean(req.body?.force, true)
   const rawWait = Number(req.body?.wait_ms)
-  const waitMs = Number.isFinite(rawWait) ? Math.max(0, rawWait) : 20000
+  const waitMs = Number.isFinite(rawWait) ? Math.max(0, rawWait) : qrWaitMs
 
   try {
     let record = getInstance(instanceId)

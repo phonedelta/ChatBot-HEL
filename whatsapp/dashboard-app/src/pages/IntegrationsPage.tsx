@@ -74,6 +74,7 @@ export function IntegrationsPage() {
   const [disconnectOpen, setDisconnectOpen] = useState(false)
   const [qr, setQr] = useState<string | null>(null)
   const [qrLoading, setQrLoading] = useState(false)
+  const [qrLastError, setQrLastError] = useState('')
   const [busy, setBusy] = useState(false)
 
   const showToast = useCallback((message: string) => {
@@ -127,11 +128,12 @@ export function IntegrationsPage() {
   async function fetchQr() {
     setQrLoading(true)
     setError('')
+    setQrLastError('')
     setQr(null)
     try {
       const started = await api<QrPayload>('/dashboard/api/instances/main/qr', {
         method: 'POST',
-        body: { force: true, wait_ms: 8000 },
+        body: { force: true, wait_ms: 45000 },
       })
       if (started.instance) {
         setInstances((prev) => {
@@ -139,6 +141,7 @@ export function IntegrationsPage() {
           return [started.instance as WaInstance, ...others]
         })
       }
+      if (started.lastError) setQrLastError(started.lastError)
       if (started.qr) {
         setQr(started.qr)
         await load(true)
@@ -150,7 +153,7 @@ export function IntegrationsPage() {
         return
       }
 
-      const deadline = Date.now() + 45000
+      const deadline = Date.now() + 60000
       while (Date.now() < deadline) {
         await new Promise((resolve) => window.setTimeout(resolve, 1500))
         const payload = await api<QrPayload>('/dashboard/api/instances/main/qr')
@@ -160,6 +163,7 @@ export function IntegrationsPage() {
             return [payload.instance as WaInstance, ...others]
           })
         }
+        if (payload.lastError) setQrLastError(payload.lastError)
         if (payload.qr) {
           setQr(payload.qr)
           return
@@ -432,7 +436,15 @@ export function IntegrationsPage() {
                   <p className="mt-3 text-xs text-muted">En attente de connexion…</p>
                 </>
               ) : (
-                <p className="text-sm text-muted">Impossible d’afficher le QR pour le moment.</p>
+                <div className="max-w-xs text-center">
+                  <p className="text-sm text-muted">Impossible d’afficher le QR pour le moment.</p>
+                  {error ? <p className="mt-2 text-xs text-danger">{error}</p> : null}
+                  {qrLastError ? (
+                    <p className="mt-2 text-xs text-danger">{qrLastError}</p>
+                  ) : (
+                    <p className="mt-2 text-xs text-muted">Le démarrage de Chromium peut prendre jusqu’à 45 s sur Railway.</p>
+                  )}
+                </div>
               )}
             </div>
             <div className="mt-4 flex justify-end gap-2">
