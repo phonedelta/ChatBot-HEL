@@ -186,6 +186,7 @@ if (!backendEnabled && !openAiApiKey) {
 fs.mkdirSync(waSessionPath, { recursive: true })
 fs.mkdirSync(mediaTmpDir, { recursive: true })
 fs.mkdirSync(crmMediaDir, { recursive: true })
+fs.mkdirSync(path.join(process.cwd(), 'storage', 'tmp-uploads'), { recursive: true })
 fs.mkdirSync(path.dirname(automationStatePath), { recursive: true })
 fs.mkdirSync(path.dirname(aiHistoryPath), { recursive: true })
 if (aiVoiceNluEnabled) {
@@ -2694,7 +2695,8 @@ function buildOutboundMessageMedia(mediaSource) {
 
   const messageMedia = MessageMedia.fromFilePath(mediaSource.filePath)
   messageMedia.filename = mediaSource.filename || messageMedia.filename || 'attachment'
-  messageMedia.mimetype = String(messageMedia.mimetype || mediaSource.mimeType || 'application/octet-stream')
+  const mimeType = String(mediaSource.mimeType || messageMedia.mimetype || 'application/octet-stream').toLowerCase()
+  messageMedia.mimetype = mimeType
   messageMedia.filesize = Number(mediaSource.size || messageMedia.filesize || 0) || null
   return messageMedia
 }
@@ -4991,59 +4993,60 @@ async function sendDocumentThroughInstance(record, options = {}) {
   const messageMedia = buildOutboundMessageMedia(mediaSource)
   const mediaSize = Number(mediaSource?.size || messageMedia?.filesize || 0) || 0
   const useWaitUntilSent = mediaSize > 0 && mediaSize <= 16 * 1024 * 1024
-  let targetChatId = preferredChatId
 
-  if (!(targetChatId && targetChatId.includes('@'))) {
-    targetChatId = await resolveChatIdForSend(record, options.toPhone)
-  }
-
-  // Warm up the target chat before sending large documents. This reduces
-  // detached-frame / target-closed failures that can happen when the web
-  // session is idle and a heavy upload starts immediately.
-  await runWithRetries(
+  const sendDocument = (chatId) => runWithRetries(
     () => Promise.race([
-      record.client.getChatById(targetChatId),
-      timeoutAfter(instancePingTimeoutMs, `getChatById ${targetChatId}`),
-    ]),
-    `getChatById ${targetChatId}`,
-  )
-
-  const sendDocument = () => runWithRetries(
-    () => Promise.race([
-      record.client.sendMessage(targetChatId, messageMedia, {
+      record.client.sendMessage(chatId, messageMedia, {
         caption: caption || undefined,
         sendMediaAsDocument: true,
         waitUntilMsgSent: useWaitUntilSent,
       }),
-      timeoutAfter(protocolTimeoutMs, `sendMessage ${targetChatId}`),
+      timeoutAfter(protocolTimeoutMs, `sendMessage ${chatId}`),
     ]),
-    `sendMessage ${targetChatId}`,
+    `sendMessage ${chatId}`,
   )
 
-  let sent = null
-  try {
-    sent = await sendDocument()
-  } catch (error) {
-    if (!isProtocolTimeoutError(error)) {
-      throw error
+  const sendWithRecovery = async (chatId) => {
+    try {
+      return await sendDocument(chatId)
+    } catch (error) {
+      if (!isProtocolTimeoutError(error)) {
+        throw error
+      }
+
+      console.warn('[iadis-wa] recovering instance after outbound document send failure', {
+        instance_id: record.instanceId,
+        chat_id: chatId,
+        reason: error.message || String(error),
+      })
+
+      await recoverInstance(record, error.message || `Failed to send document to ${chatId}`)
+      await waitForInstanceReady(record)
+      return sendDocument(chatId)
     }
-
-    console.warn('[iadis-wa] recovering instance after outbound document send failure', {
-      instance_id: record.instanceId,
-      chat_id: targetChatId,
-      reason: error.message || String(error),
-    })
-
-    await recoverInstance(record, error.message || `Failed to send document to ${targetChatId}`)
-    await waitForInstanceReady(record)
-    sent = await sendDocument()
   }
 
+  if (preferredChatId && preferredChatId.includes('@')) {
+    try {
+      const sent = await sendWithRecovery(preferredChatId)
+      updateState(record, 'ready', { lastError: null })
+      return {
+        messageId: resolveMessageId(sent),
+        chatId: preferredChatId,
+        filename: messageMedia.filename || mediaSource.filename || null,
+      }
+    } catch (directError) {
+      console.warn('[iadis-wa] direct chat_id document send failed, fallback to phone lookup', directError.message || directError)
+    }
+  }
+
+  const phoneChatId = await resolveChatIdForSend(record, options.toPhone)
+  const sent = await sendWithRecovery(phoneChatId)
   updateState(record, 'ready', { lastError: null })
 
   return {
     messageId: resolveMessageId(sent),
-    chatId: targetChatId,
+    chatId: phoneChatId,
     filename: messageMedia.filename || mediaSource.filename || null,
   }
 }
@@ -5053,53 +5056,73 @@ async function sendImageThroughInstance(record, options = {}) {
   const caption = String(options.caption || '').trim()
   const mediaSource = options.mediaSource
   const messageMedia = buildOutboundMessageMedia(mediaSource)
-  let targetChatId = preferredChatId
+  const mediaSize = Number(mediaSource?.size || messageMedia?.filesize || 0) || 0
+  const useWaitUntilSent = mediaSize > 0 && mediaSize <= 16 * 1024 * 1024
+  const mimeType = String(messageMedia.mimetype || mediaSource?.mimeType || '').toLowerCase()
+  const preferDocument = mimeType === 'image/webp' || mediaSize > 5 * 1024 * 1024
 
-  if (!(targetChatId && targetChatId.includes('@'))) {
-    targetChatId = await resolveChatIdForSend(record, options.toPhone)
+  const sendImage = (chatId, sendMediaAsDocument = preferDocument) => runWithRetries(
+    () => Promise.race([
+      record.client.sendMessage(chatId, messageMedia, {
+        caption: caption || undefined,
+        sendMediaAsDocument,
+        waitUntilMsgSent: useWaitUntilSent,
+      }),
+      timeoutAfter(protocolTimeoutMs, `sendImage ${chatId}`),
+    ]),
+    `sendImage ${chatId}`,
+  )
+
+  const sendWithRecovery = async (chatId, sendMediaAsDocument = preferDocument) => {
+    try {
+      return await sendImage(chatId, sendMediaAsDocument)
+    } catch (error) {
+      if (!isProtocolTimeoutError(error)) {
+        throw error
+      }
+      console.warn('[iadis-wa] recovering instance after outbound image send failure', {
+        instance_id: record.instanceId,
+        chat_id: chatId,
+        reason: error.message || String(error),
+      })
+      await recoverInstance(record, error.message || `Failed to send image to ${chatId}`)
+      await waitForInstanceReady(record)
+      return sendImage(chatId, sendMediaAsDocument)
+    }
   }
 
-  await runWithRetries(
-    () => Promise.race([
-      record.client.getChatById(targetChatId),
-      timeoutAfter(instancePingTimeoutMs, `getChatById ${targetChatId}`),
-    ]),
-    `getChatById ${targetChatId}`,
-  )
-
-  const sendImage = () => runWithRetries(
-    () => Promise.race([
-      record.client.sendMessage(targetChatId, messageMedia, {
-        caption: caption || undefined,
-        sendMediaAsDocument: false,
-      }),
-      timeoutAfter(protocolTimeoutMs, `sendImage ${targetChatId}`),
-    ]),
-    `sendImage ${targetChatId}`,
-  )
-
-  let sent = null
-  try {
-    sent = await sendImage()
-  } catch (error) {
-    if (!isProtocolTimeoutError(error)) {
+  const sendWithDocumentFallback = async (chatId) => {
+    try {
+      return await sendWithRecovery(chatId, preferDocument)
+    } catch (error) {
+      if (!preferDocument) {
+        return sendWithRecovery(chatId, true)
+      }
       throw error
     }
-    console.warn('[iadis-wa] recovering instance after outbound image send failure', {
-      instance_id: record.instanceId,
-      chat_id: targetChatId,
-      reason: error.message || String(error),
-    })
-    await recoverInstance(record, error.message || `Failed to send image to ${targetChatId}`)
-    await waitForInstanceReady(record)
-    sent = await sendImage()
   }
 
+  if (preferredChatId && preferredChatId.includes('@')) {
+    try {
+      const sent = await sendWithDocumentFallback(preferredChatId)
+      updateState(record, 'ready', { lastError: null })
+      return {
+        messageId: resolveMessageId(sent),
+        chatId: preferredChatId,
+        filename: messageMedia.filename || mediaSource.filename || null,
+      }
+    } catch (directError) {
+      console.warn('[iadis-wa] direct chat_id image send failed, fallback to phone lookup', directError.message || directError)
+    }
+  }
+
+  const phoneChatId = await resolveChatIdForSend(record, options.toPhone)
+  const sent = await sendWithDocumentFallback(phoneChatId)
   updateState(record, 'ready', { lastError: null })
 
   return {
     messageId: resolveMessageId(sent),
-    chatId: targetChatId,
+    chatId: phoneChatId,
     filename: messageMedia.filename || mediaSource.filename || null,
   }
 }
@@ -5371,7 +5394,13 @@ app.use(
         throw error
       }
       const mime = String(mimeType || '').toLowerCase()
-      if (!allowedDashboardImageMimes.has(mime) && !mime.startsWith('image/')) {
+      const ext = path.extname(String(filename || filePath || '')).toLowerCase()
+      const extOk = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext)
+      if (
+        !allowedDashboardImageMimes.has(mime)
+        && !mime.startsWith('image/')
+        && !((!mime || mime === 'application/octet-stream') && extOk)
+      ) {
         const error = new Error('Ce type de fichier n’est pas pris en charge.')
         error.code = 'MEDIA_TYPE'
         throw error
@@ -5386,7 +5415,7 @@ app.use(
       const preferredChatId = rawChat.includes('@') ? rawChat : ''
       return sendImageThroughInstance(record, {
         chatId: preferredChatId || null,
-        toPhone: phone || preferredChatId,
+        toPhone: phone || null,
         caption,
         mediaSource: {
           filePath,
@@ -5952,6 +5981,29 @@ function sendDashboardSpa(_req, res) {
 app.get('/dashboard', sendDashboardSpa)
 app.get('/dashboard/', sendDashboardSpa)
 app.get(/^\/dashboard\/(?!api\/).*/, sendDashboardSpa)
+
+app.post('/instance/reset-crm', ensureInternalToken, (req, res) => {
+  try {
+    const { resetOperationalCrmData } = require('./crm/reset-operational-data')
+    const clearMedia = Boolean(req.body?.clear_media || req.query?.clear_media)
+    const result = resetOperationalCrmData({
+      rootDir: process.cwd(),
+      clearMedia,
+    })
+    console.log('[iadis-wa] operational CRM reset completed', {
+      db_path: result.dbPath,
+      cleared_tables: result.clearedTables?.length || 0,
+      extras: result.extras || [],
+    })
+    return res.json({ ok: true, ...result })
+  } catch (error) {
+    console.error('[iadis-wa] operational CRM reset failed', error.message || error)
+    return res.status(500).json({
+      ok: false,
+      error: error.message || 'Unable to reset CRM data',
+    })
+  }
+})
 
 app.post('/instance/init', ensureInternalToken, (req, res) => {
   const instanceId = normalizeInstanceId(req.body?.instance_id)
