@@ -190,3 +190,23 @@ export function isSafePhone(value?: string | null) {
   const digits = raw.replace(/\D/g, '')
   return digits.length >= 9 && digits.length <= 15
 }
+
+/** Keep digits only while typing (Moroccan numbers). */
+export function sanitizePhoneInput(value: string) {
+  return String(value || '').replace(/\D/g, '').slice(0, 12)
+}
+
+/** Moroccan mobile — mirrors backend `isValidPhone`. */
+export function isValidMoroccanPhone(value?: string | null) {
+  const digits = sanitizePhoneInput(String(value || ''))
+  if (!digits) return false
+
+  let normalized = digits
+  if (normalized.startsWith('0') && normalized.length === 10) {
+    normalized = `212${normalized.slice(1)}`
+  } else if (normalized.length === 9 && /^[5-7]/.test(normalized)) {
+    normalized = `212${normalized}`
+  }
+
+  return /^212[5-7]\d{8}$/.test(normalized)
+}

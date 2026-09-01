@@ -822,36 +822,61 @@ function createSlotProposalEngine(db, helpers = {}) {
         const oldDate = appt.appointment_date
         const oldTime = String(appt.appointment_time).slice(0, 5)
         releasedOld = { date: oldDate, time: oldTime, appointmentId: fresh.appointment_id }
+        const confirmedAt = nowIso()
 
         db.prepare(`
           UPDATE appointments
           SET appointment_date = ?,
               appointment_time = ?,
               practitioner_id = COALESCE(?, practitioner_id),
-              status = 'non_confirme',
-              confirmed_at = NULL,
-              confirmation_source = NULL
+              status = 'confirmed',
+              confirmed_at = ?,
+              confirmation_source = 'slot_proposal_accept'
           WHERE id = ?
         `).run(
           fresh.slot_date,
           String(fresh.slot_time).slice(0, 5),
           fresh.practitioner_id || null,
+          confirmedAt,
           fresh.appointment_id,
         )
 
         try {
-          db.prepare(`
-            UPDATE appointment_confirmation_requests
-            SET status = 'pending',
-                initial_sent_at = NULL,
-                followup_sent_at = NULL,
-                staff_task_id = NULL,
-                confirmed_at = NULL,
-                cancelled_at = NULL,
-                confirmation_source = NULL,
-                updated_at = ?
-            WHERE appointment_id = ?
-          `).run(nowIso(), fresh.appointment_id)
+          const acr = db.prepare(`
+            SELECT id FROM appointment_confirmation_requests WHERE appointment_id = ?
+          `).get(fresh.appointment_id)
+          if (acr) {
+            db.prepare(`
+              UPDATE appointment_confirmation_requests
+              SET status = 'confirmed',
+                  confirmed_at = ?,
+                  confirmation_source = 'slot_proposal_accept',
+                  chat_key = COALESCE(?, chat_key),
+                  updated_at = ?
+              WHERE appointment_id = ?
+            `).run(
+              confirmedAt,
+              fresh.chat_key || null,
+              confirmedAt,
+              fresh.appointment_id,
+            )
+          } else {
+            db.prepare(`
+              INSERT INTO appointment_confirmation_requests (
+                appointment_id, customer_id, conversation_id, chat_key, language,
+                status, confirmed_at, confirmation_source, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, 'confirmed', ?, 'slot_proposal_accept', ?, ?)
+            `).run(
+              fresh.appointment_id,
+              fresh.customer_id,
+              fresh.conversation_id,
+              fresh.chat_key,
+              fresh.language || 'fr',
+              confirmedAt,
+              confirmedAt,
+              confirmedAt,
+            )
+          }
         } catch { /* optional */ }
 
         db.prepare(`
@@ -884,15 +909,6 @@ function createSlotProposalEngine(db, helpers = {}) {
 
     const accepted = getProposal(proposalId)
     const appt = loadAppointmentBundle(accepted.appointment_id)
-
-    if (typeof registerBookingCreated === 'function') {
-      try {
-        registerBookingCreated(accepted.appointment_id, {
-          chatKey: accepted.chat_key,
-          language: accepted.language,
-        })
-      } catch { /* optional */ }
-    }
 
     if (addTimelineEvent) {
       try {

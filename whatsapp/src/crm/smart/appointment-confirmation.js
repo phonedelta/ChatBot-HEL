@@ -134,6 +134,32 @@ function cancellationAckMessage(appointment, language = 'fr') {
   return `Votre rendez-vous du ${date} à ${time} a été annulé. Si vous souhaitez un nouveau créneau, écrivez-nous.`
 }
 
+function confirmedDayReminderMessage(appointment, customer, language = 'darija') {
+  const name = customer?.full_name || 'Patient'
+  const date = formatDateDisplay(appointment.appointment_date)
+  const time = String(appointment.appointment_time || '').slice(0, 5)
+  if (isDarija(language)) {
+    return [
+      `مرحبا ${name}،`,
+      '',
+      'كنذكروك بموعدك فـ مركز HEL لطب الأسنان :',
+      '',
+      `📅 ${date}`,
+      `🕐 ${time}`,
+      '',
+      'نتمنى نشوفوك فالوقت.',
+    ].join('\n')
+  }
+  return [
+    `Bonjour ${name},`,
+    '',
+    'Rappel de votre rendez-vous au Centre Dentaire HEL :',
+    '',
+    `📅 ${date}`,
+    `🕐 ${time}`,
+  ].join('\n')
+}
+
 /**
  * @param {import('node:sqlite').DatabaseSync} db
  * @param {object} helpers
@@ -376,6 +402,159 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
       nowIso(),
     )
     return getRequestByAppointment(appointmentId)
+  }
+
+  /**
+   * Register a dashboard manual appointment already confirmed at creation.
+   * Enters the same reminder pipeline (day-of) without faking non_confirme.
+   */
+  function registerManualConfirmedAppointment(appointmentId, {
+    chatKey = null,
+    conversationId = null,
+    language = 'darija',
+    initialSentAt = null,
+  } = {}) {
+    const ts = nowIso()
+    const appt = loadAppointmentBundle(appointmentId)
+    if (!appt) return null
+
+    const existing = getRequestByAppointment(appointmentId)
+    const resolvedChat = chatKey || appt.whatsapp_chat_id || appt.conversation_id || null
+    const resolvedLang = language || resolveLanguage(appt, resolvedChat)
+
+    if (existing) {
+      db.prepare(`
+        UPDATE appointment_confirmation_requests
+        SET status = 'confirmed',
+            chat_key = COALESCE(?, chat_key),
+            conversation_id = COALESCE(?, conversation_id),
+            language = COALESCE(?, language),
+            initial_sent_at = COALESCE(?, initial_sent_at),
+            confirmed_at = COALESCE(confirmed_at, ?),
+            confirmation_source = COALESCE(confirmation_source, 'dashboard_manual'),
+            updated_at = ?
+        WHERE appointment_id = ?
+      `).run(
+        resolvedChat,
+        conversationId,
+        resolvedLang,
+        initialSentAt,
+        ts,
+        ts,
+        Number(appointmentId),
+      )
+    } else {
+      db.prepare(`
+        INSERT INTO appointment_confirmation_requests (
+          appointment_id, customer_id, conversation_id, chat_key, language,
+          status, initial_sent_at, confirmed_at, confirmation_source, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, 'dashboard_manual', ?, ?)
+      `).run(
+        Number(appointmentId),
+        appt.customer_id,
+        conversationId,
+        resolvedChat,
+        resolvedLang,
+        initialSentAt,
+        ts,
+        ts,
+        ts,
+      )
+    }
+
+    if (addTimelineEvent) {
+      try {
+        addTimelineEvent({
+          customer_id: appt.customer_id,
+          appointment_id: appointmentId,
+          conversation_id: conversationId,
+          event_type: 'APPOINTMENT_MANUAL_CONFIRMED',
+          title: 'Rendez-vous confirmé (dashboard)',
+          detail: 'Création manuelle — rappel programmé selon les paramètres',
+          actor_type: 'staff',
+        })
+      } catch { /* optional */ }
+    }
+
+    return getRequestByAppointment(appointmentId)
+  }
+
+  async function sendConfirmedDayReminder(appointmentId) {
+    const reminders = remindersConfig()
+    if (!reminders.dayOfReminderEnabled) {
+      return { ok: false, reason: 'day_reminder_disabled' }
+    }
+    if (!sendWindowOk()) {
+      return { ok: false, reason: 'outside_send_window' }
+    }
+
+    const claim = claimAutomationRun(
+      'confirm_24h_before',
+      `confirmed_day_reminder:${appointmentId}`,
+      { appointment_id: appointmentId },
+    )
+    if (!claim.claimed) return { ok: false, reason: claim.reason }
+
+    const appt = loadAppointmentBundle(appointmentId)
+    const req = getRequestByAppointment(appointmentId)
+    if (!appt || appt.status !== 'confirmed' || req?.status !== 'confirmed' || req.followup_sent_at) {
+      return { ok: false, reason: 'not_eligible' }
+    }
+    const until = minutesUntil(appt.appointment_date, appt.appointment_time)
+    if (until == null || until <= 0 || until > reminders.dayOfReminderHoursBefore * 60) {
+      db.prepare(`
+        DELETE FROM automation_runs WHERE automation_id = ? AND unique_key = ?
+      `).run(claim.automation_id, `confirmed_day_reminder:${appointmentId}`)
+      return { ok: false, reason: 'outside_window' }
+    }
+
+    const chatKey = req.chat_key || appt.whatsapp_chat_id
+    if (!conversationAllowsAutomation(chatKey)) {
+      db.prepare(`
+        DELETE FROM automation_runs WHERE automation_id = ? AND unique_key = ?
+      `).run(claim.automation_id, `confirmed_day_reminder:${appointmentId}`)
+      return { ok: false, reason: 'human_handoff' }
+    }
+
+    const language = resolveLanguage(appt, chatKey)
+    const text = confirmedDayReminderMessage(appt, appt, language)
+    try {
+      await sendOutbound({
+        chatKey,
+        phone: appt.phone_number,
+        text,
+        appointmentId,
+        customerId: appt.customer_id,
+        conversationId: req.conversation_id,
+        kind: 'followup',
+      })
+    } catch (error) {
+      db.prepare(`
+        DELETE FROM automation_runs WHERE automation_id = ? AND unique_key = ?
+      `).run(claim.automation_id, `confirmed_day_reminder:${appointmentId}`)
+      throw error
+    }
+
+    db.prepare(`
+      UPDATE appointment_confirmation_requests
+      SET followup_sent_at = ?, updated_at = ?
+      WHERE appointment_id = ?
+    `).run(nowIso(), nowIso(), Number(appointmentId))
+
+    if (addTimelineEvent) {
+      try {
+        addTimelineEvent({
+          customer_id: appt.customer_id,
+          appointment_id: appointmentId,
+          event_type: 'APPOINTMENT_DAY_REMINDER_SENT',
+          title: 'Rappel jour J',
+          detail: 'Rappel WhatsApp avant rendez-vous confirmé',
+          actor_type: 'ai',
+        })
+      } catch { /* optional */ }
+    }
+
+    return { ok: true, text }
   }
 
   /**
@@ -1112,11 +1291,50 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
       }
     }
 
+    // Confirmed appointments (e.g. dashboard manual) — day-of reminder only
+    const confirmedRows = db.prepare(`
+      SELECT a.id, a.appointment_date, a.appointment_time, a.status,
+             c.whatsapp_chat_id, c.phone_number, c.preferred_language,
+             r.id AS request_id, r.initial_sent_at, r.followup_sent_at, r.status AS req_status
+      FROM appointments a
+      JOIN customers c ON c.id = a.customer_id
+      JOIN appointment_confirmation_requests r ON r.appointment_id = a.id
+      WHERE a.status = 'confirmed'
+        AND r.status = 'confirmed'
+        AND a.appointment_date >= date('now', 'localtime')
+        AND r.followup_sent_at IS NULL
+      ORDER BY a.appointment_date ASC, a.appointment_time ASC
+      LIMIT 80
+    `).all()
+
+    for (const row of confirmedRows) {
+      const until = minutesUntil(row.appointment_date, row.appointment_time)
+      if (until == null || until <= 0) continue
+      try {
+        if (
+          reminders.dayOfReminderEnabled
+          && row.initial_sent_at
+          && until <= reminders.dayOfReminderHoursBefore * 60
+          && until > 0
+        ) {
+          const out = await sendConfirmedDayReminder(row.id)
+          if (out.ok) summary.followup += 1
+        }
+      } catch (error) {
+        summary.errors.push({
+          appointment_id: row.id,
+          error: error.message || String(error),
+        })
+      }
+    }
+
     return summary
   }
 
   return {
     ensureTables,
+    registerManualConfirmedAppointment,
+    sendConfirmedDayReminder,
     registerBookingCreated,
     ensureRequestForAppointment,
     sendInitialConfirmation,

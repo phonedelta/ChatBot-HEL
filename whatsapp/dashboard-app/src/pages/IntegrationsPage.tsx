@@ -429,6 +429,11 @@ export function IntegrationsPage() {
                 <div className="flex flex-col items-center gap-3 text-muted">
                   <Loader2 className="h-9 w-9 animate-spin text-cyan" />
                   <p className="text-sm">Génération du QR…</p>
+                  {qrError ? (
+                    <p className="max-w-xs rounded-xl bg-danger/10 px-3 py-2 text-center text-xs text-danger">
+                      {qrError}
+                    </p>
+                  ) : null}
                 </div>
               ) : connected ? (
                 <p className="text-sm font-medium text-success">WhatsApp connecté avec succès.</p>

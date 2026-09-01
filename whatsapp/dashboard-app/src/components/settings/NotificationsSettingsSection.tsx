@@ -1,5 +1,4 @@
 import {
-  AlertTriangle,
   BellRing,
   CalendarX,
   MessageCircle,
@@ -53,22 +52,10 @@ const NOTIFICATION_ITEMS: {
     description: 'Notifier lorsqu’une annulation rend un créneau disponible.',
   },
   {
-    key: 'handoff',
-    icon: MessageCircle,
-    title: 'Conversation transférée à l’équipe',
-    description: 'Notifier lorsqu’une intervention humaine est nécessaire.',
-  },
-  {
     key: 'whatsappError',
     icon: PlugZap,
     title: 'Erreur WhatsApp',
     description: 'Notifier en cas de problème d’envoi ou de connexion WhatsApp.',
-  },
-  {
-    key: 'automationFailure',
-    icon: AlertTriangle,
-    title: 'Automatisation échouée',
-    description: 'Notifier lorsqu’une tâche automatique importante échoue.',
   },
 ]
 

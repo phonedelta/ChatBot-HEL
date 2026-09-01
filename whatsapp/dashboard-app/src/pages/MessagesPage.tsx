@@ -8,7 +8,7 @@ import {
 } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ChevronLeft, Hand, ImagePlus, Info, RefreshCw, Send, X } from 'lucide-react'
-import { api, getStoredToken } from '@/lib/api'
+import { api, ApiError, getStoredToken } from '@/lib/api'
 import { cn, initials } from '@/lib/format'
 import { conversationStatusLabel, safePersonLabel } from '@/lib/labels'
 import type { ConversationContextPayload } from '@/lib/conversation-context'
@@ -403,10 +403,20 @@ export function MessagesPage() {
         const form = new FormData()
         if (text) form.append('body', text)
         form.append('image', pendingImage)
-        await api(`/dashboard/api/conversations/${selectedId}/messages`, {
+        const postImage = () => api(`/dashboard/api/conversations/${selectedId}/messages`, {
           method: 'POST',
           body: form,
         })
+        try {
+          await postImage()
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409) {
+            await handoff('HUMAN')
+            await postImage()
+          } else {
+            throw err
+          }
+        }
         setToast('Image envoyée.')
         clearPendingImage()
       } else {
@@ -442,7 +452,8 @@ export function MessagesPage() {
   function onPickImage(file: File | null) {
     if (!file) return
     const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
-    if (!allowed.includes(file.type)) {
+    const extOk = /\.(jpe?g|png|webp)$/i.test(file.name)
+    if (!allowed.includes(file.type) && !extOk) {
       setError('Ce type de fichier n’est pas pris en charge.')
       return
     }

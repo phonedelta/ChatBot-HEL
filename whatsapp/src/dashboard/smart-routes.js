@@ -6,7 +6,6 @@
 const express = require('express')
 const fs = require('fs')
 const path = require('path')
-const os = require('os')
 const multer = require('multer')
 const { PERMISSIONS } = require('./permissions')
 const { getAuthenticatedActor } = require('../crm/smart/activity-actors')
@@ -41,7 +40,7 @@ function createSmartCrmRouter(deps) {
   const upload = multer({
     storage: multer.diskStorage({
       destination: (_req, _file, cb) => {
-        const dir = path.join(os.tmpdir(), 'hel-dashboard-uploads')
+        const dir = path.join(process.cwd(), 'storage', 'tmp-uploads')
         fs.mkdirSync(dir, { recursive: true })
         cb(null, dir)
       },
@@ -53,12 +52,18 @@ function createSmartCrmRouter(deps) {
     limits: { fileSize: maxImageBytes, files: 1 },
     fileFilter: (_req, file, cb) => {
       const mime = String(file.mimetype || '').toLowerCase()
-      if (!allowedMimes.has(mime)) {
-        const err = new Error('Ce type de fichier n’est pas pris en charge.')
-        err.code = 'MEDIA_TYPE'
-        return cb(err)
+      const ext = path.extname(String(file.originalname || '')).toLowerCase()
+      const extOk = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext)
+      if (
+        allowedMimes.has(mime)
+        || mime.startsWith('image/')
+        || ((mime === '' || mime === 'application/octet-stream') && extOk)
+      ) {
+        return cb(null, true)
       }
-      return cb(null, true)
+      const err = new Error('Ce type de fichier n’est pas pris en charge.')
+      err.code = 'MEDIA_TYPE'
+      return cb(err)
     },
   })
 
@@ -75,6 +80,13 @@ function createSmartCrmRouter(deps) {
     if (file?.path && fs.existsSync(file.path)) {
       try { fs.unlinkSync(file.path) } catch { /* ignore */ }
     }
+  }
+
+  function conversationOutboundPhone(conversation) {
+    return conversation?.phone_e164
+      || conversation?.patient_phone
+      || conversation?.phone_display
+      || null
   }
 
   function perm(req, res, key) {
@@ -195,24 +207,25 @@ function createSmartCrmRouter(deps) {
           return res.status(409).json({
             ok: false,
             error: 'Prenez la main avant d’envoyer un message manuel',
+            code: 'HANDOFF_REQUIRED',
           })
         }
 
         const body = String(req.body?.body || req.body?.caption || '').trim()
         const hasImage = Boolean(uploaded)
         if (!body && !hasImage) {
+          cleanupUpload(uploaded)
           return res.status(400).json({ ok: false, error: 'Message vide' })
         }
 
         const authorName = actorDisplayName(req)
-        const phone = conversation.phone_e164
-          || conversation.patient_phone
-          || conversation.phone_display
-          || null
+        const phone = conversationOutboundPhone(conversation)
 
         if (hasImage) {
           const mime = String(uploaded.mimetype || '').toLowerCase()
-          if (!allowedMimes.has(mime)) {
+          const ext = path.extname(String(uploaded.originalname || '')).toLowerCase()
+          const extOk = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext)
+          if (!allowedMimes.has(mime) && !mime.startsWith('image/') && !((!mime || mime === 'application/octet-stream') && extOk)) {
             cleanupUpload(uploaded)
             return res.status(400).json({ ok: false, error: 'Ce type de fichier n’est pas pris en charge.' })
           }

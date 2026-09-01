@@ -24,24 +24,6 @@ export function SecuritySettingsSection({ canEdit }: { canEdit: boolean }) {
     <>
       <SettingsToast message={s.toast} />
       <div className="space-y-5">
-        <SettingsCard title="Session">
-          <SettingsSelect
-            label="Durée d’une session"
-            description="Durée maximale pendant laquelle une connexion reste valide."
-            value={d.sessionDurationHours}
-            onChange={(v) => s.patch({ sessionDurationHours: Number(v) })}
-            disabled={!canEdit}
-            options={[
-              { value: 8, label: '8 heures' },
-              { value: 12, label: '12 heures' },
-              { value: 24, label: '24 heures' },
-              { value: 72, label: '3 jours' },
-              { value: 168, label: '7 jours' },
-              { value: 336, label: '14 jours' },
-              { value: 720, label: '30 jours' },
-            ]}
-          />
-        </SettingsCard>
         <SettingsCard title="Inactivité">
           <SettingsSwitch
             label="Déconnexion automatique après inactivité"

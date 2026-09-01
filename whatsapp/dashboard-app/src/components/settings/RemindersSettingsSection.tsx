@@ -84,28 +84,6 @@ export function RemindersSettingsSection({ canEdit }: { canEdit: boolean }) {
             options={[1, 2, 3, 4].map((h) => ({ value: h, label: `${h} heure${h > 1 ? 's' : ''}` }))}
           />
         </SettingsCard>
-
-        <SettingsCard title="Plage horaire d’envoi">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <SettingsSelect
-              label="Début"
-              value={d.sendWindowStart}
-              onChange={(v) => s.patch({ sendWindowStart: String(v) })}
-              disabled={!canEdit}
-              options={['07:00', '08:00', '09:00'].map((t) => ({ value: t, label: t }))}
-            />
-            <SettingsSelect
-              label="Fin"
-              value={d.sendWindowEnd}
-              onChange={(v) => s.patch({ sendWindowEnd: String(v) })}
-              disabled={!canEdit}
-              options={['18:00', '20:00', '21:00'].map((t) => ({ value: t, label: t }))}
-            />
-          </div>
-          <p className="text-xs text-muted">
-            Les rappels non urgents sont envoyés uniquement pendant cette plage.
-          </p>
-        </SettingsCard>
       </div>
       <SettingsPanelFooter dirty={s.dirty} saving={s.saving} onSave={s.onSave} onCancel={s.onCancel} canEdit={canEdit} />
     </>

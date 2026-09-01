@@ -43,7 +43,7 @@ const SECTION_COPY: Record<
   security: {
     overline: 'Sécurité & sessions',
     title: 'Sécurité & sessions',
-    subtitle: 'Définissez la durée des connexions au Smart CRM.',
+    subtitle: 'Gérez la déconnexion automatique après inactivité.',
   },
   notifications: {
     overline: 'Notifications internes',

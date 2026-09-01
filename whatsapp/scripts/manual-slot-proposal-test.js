@@ -322,7 +322,50 @@ async function run() {
   appt = crm.db.prepare('SELECT * FROM appointments WHERE id = ?').get(appointmentId)
   assert.strictEqual(appt.appointment_date, free.date)
   assert.strictEqual(String(appt.appointment_time).slice(0, 5), free.time)
-  assert.strictEqual(appt.status, 'non_confirme')
+  assert.strictEqual(appt.status, 'confirmed')
+  assert.strictEqual(sent.length, 1, 'acceptance must not trigger a new confirmation WhatsApp')
+
+  // Confirmed manual RDV — patient OUI on move keeps confirmed, no 24h re-ask
+  const tmpConfirmed = path.join(os.tmpdir(), `hel-slot-conf-${Date.now()}.sqlite`)
+  const crmC = createCrmService({ dbPath: tmpConfirmed })
+  const sentC = []
+  crmC.smart.setAppointmentConfirmationSender(async ({ text }) => {
+    sentC.push(String(text || ''))
+    return { messageId: 'c1', chatId: '212644444444@c.us' }
+  })
+  const curC = weekdayFuture(5, '11:00')
+  const freeC = weekdayFuture(2, '10:30')
+  const aC = seedAppointment(crmC, {
+    slot: curC,
+    phone: '+212644444444',
+    chat: '212644444444@c.us',
+    status: 'confirmed',
+  })
+  crmC.db.prepare(`
+    INSERT INTO appointment_confirmation_requests (
+      appointment_id, customer_id, status, confirmation_source,
+      initial_sent_at, confirmed_at, created_at, updated_at
+    ) VALUES (?, ?, 'confirmed', 'dashboard_manual', datetime('now'), datetime('now'), datetime('now'), datetime('now'))
+  `).run(aC.appointmentId, aC.customerId)
+  await crmC.smart.createSlotProposal({
+    customerId: aC.customerId,
+    appointmentId: aC.appointmentId,
+    slotDate: freeC.date,
+    slotTime: freeC.time,
+    chatKey: aC.chat,
+  })
+  const acceptC = await crmC.smart.handleInboundSlotProposalReply({
+    chatKey: aC.chat,
+    text: 'OUI',
+  })
+  assert.ok(acceptC?.ok || acceptC?.handled)
+  const apptC = crmC.db.prepare('SELECT * FROM appointments WHERE id = ?').get(aC.appointmentId)
+  assert.strictEqual(apptC.status, 'confirmed')
+  assert.strictEqual(apptC.appointment_date, freeC.date)
+  assert.strictEqual(sentC.length, 1, 'only slot proposal message, no confirmation re-ask')
+  assert.ok(!/Merci de confirmer/i.test(sentC.join('\n')))
+  await crmC.smart.runConfirmationTick()
+  assert.strictEqual(sentC.length, 1, 'confirmation tick must not re-ask after slot accept')
 
   // Direct move
   const tmp3 = path.join(os.tmpdir(), `hel-slot-move-${Date.now()}.sqlite`)

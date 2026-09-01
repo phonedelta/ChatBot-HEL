@@ -33,6 +33,7 @@ const { createSmartCrmRouter } = require('./dashboard/smart-routes')
 const { createCrmService } = require('./crm')
 const { openCrmDatabase } = require('./crm/db')
 const { getAuthenticatedActor } = require('./crm/smart/activity-actors')
+const { formatKnowledgeItemsForPrompt } = require('./crm/smart/knowledge-prompt')
 
 const port = Number(process.env.PORT || 8081)
 const provider = (process.env.WHATSAPP_PROVIDER || 'custom').toLowerCase()
@@ -236,7 +237,6 @@ function isActiveCrmDeterministicWorkflow(lead) {
 }
 const aiConversationQueues = new Map()
 const aiKnowledgeBase = loadAiKnowledgeBase()
-const openAiInstructions = buildOpenAiInstructions()
 const openAiClient = openAiApiKey
   ? new OpenAI({
       apiKey: openAiApiKey,
@@ -252,6 +252,21 @@ const crm = crmEnabled ? createCrmService({
     ? { openAiClient, openAiModel }
     : null,
 }) : null
+
+function getLiveKnowledgeForPrompt() {
+  try {
+    if (crm?.smart?.listKnowledge) {
+      const items = crm.smart.listKnowledge()
+      const formatted = formatKnowledgeItemsForPrompt(items)
+      if (formatted) return formatted
+    }
+  } catch (error) {
+    console.warn('[iadis-wa] unable to load live knowledge from CRM', {
+      reason: error.message || String(error),
+    })
+  }
+  return aiKnowledgeBase || ''
+}
 
 const dashboardDb = crm?.db || openCrmDatabase(crmDbPath)
 const dashboardUsers = createDashboardUsers(dashboardDb, dashboardAuthPath)
@@ -476,8 +491,9 @@ function buildOpenAiInstructions() {
     sections.push(`Additional style guidance:\n${openAiSystemPrompt}`)
   }
 
-  if (aiKnowledgeBase) {
-    sections.push(`Centre Dentaire HEL business knowledge:\n${aiKnowledgeBase}`)
+  const knowledge = getLiveKnowledgeForPrompt()
+  if (knowledge) {
+    sections.push(`Centre Dentaire HEL business knowledge:\n${knowledge}`)
   }
 
   return sections.join('\n\n')
@@ -1303,7 +1319,7 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
     ]
     const requestBody = {
       model: openAiModel,
-      instructions: openAiInstructions,
+      instructions: buildOpenAiInstructions(),
       input,
       max_output_tokens: openAiMaxOutputTokens,
       store: false,
@@ -3235,11 +3251,16 @@ function hasStoredSession(instanceId) {
 
 function clearSessionLockFiles(instanceId) {
   const sessionDir = getInstanceSessionDir(instanceId)
-  for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'lockfile']) {
-    try {
-      fs.rmSync(path.join(sessionDir, name), { force: true })
-    } catch {
-      // ignore best-effort lock cleanup
+  const lockNames = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'lockfile']
+  const dirs = [sessionDir, path.join(sessionDir, 'Default')]
+
+  for (const dir of dirs) {
+    for (const name of lockNames) {
+      try {
+        fs.rmSync(path.join(dir, name), { force: true })
+      } catch {
+        // ignore best-effort lock cleanup
+      }
     }
   }
 }
@@ -3286,7 +3307,6 @@ async function killSessionBrowsers(instanceId) {
 
 async function resetInstanceForQr(instanceId, reason = 'Dashboard QR refresh') {
   const normalizedInstanceId = normalizeInstanceId(instanceId)
-  await killSessionBrowsers(normalizedInstanceId)
 
   let record = getInstance(normalizedInstanceId)
   if (record) {
@@ -3294,9 +3314,13 @@ async function resetInstanceForQr(instanceId, reason = 'Dashboard QR refresh') {
     record.initPromise = null
     record.recoverPromise = null
     record.healthCheckPromise = null
-
     await destroyClient(record)
+  }
 
+  await killSessionBrowsers(normalizedInstanceId)
+
+  record = getInstance(normalizedInstanceId)
+  if (record) {
     const client = buildClient(normalizedInstanceId)
     record.client = client
     record.qr = null
@@ -3535,14 +3559,30 @@ function initializeRecord(record) {
       return record.client.initialize()
     })
     .catch(async (error) => {
-      const message = error.message || 'Initialization failed'
-      const browserLocked = /browser is already running/i.test(message)
+      let message = error.message || 'Initialization failed'
+      const recoverable = /browser is already running|failed to launch the browser process/i.test(message)
 
-      if (browserLocked) {
-        console.warn('[iadis-wa] browser lock detected, forcing cleanup', {
+      if (recoverable) {
+        console.warn('[iadis-wa] browser init conflict, forcing cleanup', {
           instance_id: record.instanceId,
+          reason: message,
         })
+        await destroyClient(record)
         await killSessionBrowsers(record.instanceId)
+
+        const client = buildClient(record.instanceId)
+        record.client = client
+        record.qr = null
+        record.qrCreatedAt = null
+        attachClientListeners(record)
+        updateState(record, 'initializing', { lastError: null })
+
+        try {
+          await client.initialize()
+          return
+        } catch (retryError) {
+          message = retryError.message || message
+        }
       }
 
       updateState(record, 'disconnected', { lastError: message })
@@ -4020,6 +4060,14 @@ async function waitForQr(record, waitMs = qrWaitMs) {
 
     const state = String(record.state || '').toLowerCase()
     if (state === 'ready' || state === 'auth_failure') {
+      return null
+    }
+
+    if (
+      state === 'disconnected'
+      && record.lastError
+      && /browser is already running|failed to launch the browser process/i.test(String(record.lastError))
+    ) {
       return null
     }
 
@@ -5595,7 +5643,7 @@ app.get('/dashboard/api/crm/appointments', ensureDashboardSession, (req, res) =>
   })
 })
 
-app.post('/dashboard/api/crm/appointments', ensureDashboardSession, (req, res) => {
+app.post('/dashboard/api/crm/appointments', ensureDashboardSession, async (req, res) => {
   if (!assertPermission(req, res, PERMISSIONS.CREATE_APPOINTMENT)) return undefined
   if (!crm) {
     return res.status(503).json({ ok: false, error: 'CRM désactivé' })
@@ -5607,6 +5655,17 @@ app.post('/dashboard/api/crm/appointments', ensureDashboardSession, (req, res) =
     const patientId = Number(result.customer_id || result.customer?.id || 0) || null
     const patientName = result.full_name || result.customer?.full_name || null
     const actor = getAuthenticatedActor(req.dashboardUser)
+
+    let sideEffects = { whatsapp: { attempted: false, sent: false }, followup: { scheduled: false } }
+    if (appointmentId && typeof crm.smart?.completeManualAppointmentCreation === 'function') {
+      sideEffects = await crm.smart.completeManualAppointmentCreation(result, {
+        actorDisplayName: actor?.displayName
+          || req.dashboardUser?.displayName
+          || req.dashboardUser?.username
+          || 'Assistante',
+      })
+    }
+
     if (appointmentId) {
       const date = String(req.body?.appointment_date || result.appointment?.appointment_date || '')
       const time = String(req.body?.appointment_time || result.appointment?.appointment_time || '').slice(0, 5)
@@ -5645,6 +5704,7 @@ app.post('/dashboard/api/crm/appointments', ensureDashboardSession, (req, res) =
             || null,
           actor_role: actor?.role || req.dashboardUser?.role || null,
           account_username: req.dashboardUser?.username || null,
+          whatsapp_sent: sideEffects.whatsapp?.sent || false,
         },
         source_event_id: `appointment:created:${appointmentId}`,
       })
@@ -5652,12 +5712,14 @@ app.post('/dashboard/api/crm/appointments', ensureDashboardSession, (req, res) =
     return res.status(201).json({
       ok: true,
       ...result,
+      whatsapp: sideEffects.whatsapp,
+      followup: sideEffects.followup,
     })
   } catch (error) {
     if (error.code === 'SLOT_CONFLICT') {
       return res.status(409).json({
         ok: false,
-        error: error.message || 'Ce créneau n\'est plus disponible.',
+        error: error.message || 'Ce créneau est déjà réservé.',
         code: 'SLOT_CONFLICT',
       })
     }

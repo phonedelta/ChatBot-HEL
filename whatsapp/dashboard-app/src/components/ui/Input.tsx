@@ -73,6 +73,10 @@ export function Field({
         'aria-required': required || undefined,
         'aria-invalid': error ? true : (firstControl.props as { 'aria-invalid'?: boolean })['aria-invalid'],
         'aria-describedby': describedBy || (firstControl.props as { 'aria-describedby'?: string })['aria-describedby'],
+        className: cn(
+          (firstControl.props as { className?: string }).className,
+          error && 'border-danger focus:border-danger focus:ring-danger/10',
+        ),
       } as Record<string, unknown>)
     : children
 

@@ -3,7 +3,7 @@ import { AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/format'
 import { Button } from '@/components/ui/Button'
-import { Field, Input, Select, Textarea } from '@/components/ui/Input'
+import { Field, Textarea } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/smart/PageBits'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -22,24 +22,10 @@ type AssistantPayload = {
     name: string
     tone: string
     active: boolean
-    languages: { fr: boolean; darija: boolean }
   }
   knowledge: KnowledgeItem[]
   knowledge_stats?: { filled: number; total: number }
 }
-
-type Draft = {
-  name: string
-  tone: string
-  languages: { fr: boolean; darija: boolean }
-}
-
-const TONE_OPTIONS = [
-  'Professionnel et chaleureux',
-  'Professionnel et concis',
-  'Chaleureux',
-  'Formel',
-]
 
 const KNOWLEDGE_GROUPS: Array<{
   id: string
@@ -116,10 +102,9 @@ function Toggle({
 
 export function AssistantPage() {
   const [data, setData] = useState<AssistantPayload | null>(null)
-  const [draft, setDraft] = useState<Draft | null>(null)
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [toggling, setToggling] = useState(false)
+  const [savingKnowledge, setSavingKnowledge] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
   const [pauseModal, setPauseModal] = useState(false)
@@ -138,14 +123,6 @@ export function AssistantPage() {
     try {
       const payload = await api<AssistantPayload & { ok: boolean }>('/dashboard/api/assistant')
       setData(payload)
-      setDraft({
-        name: payload.assistant.name || 'Assistant du cabinet',
-        tone: payload.assistant.tone || 'Professionnel et chaleureux',
-        languages: {
-          fr: payload.assistant.languages?.fr !== false,
-          darija: payload.assistant.languages?.darija !== false,
-        },
-      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Impossible de charger la configuration de l’assistant.')
       setData(null)
@@ -172,42 +149,6 @@ export function AssistantPage() {
     })
   }, [data])
 
-  async function patchAssistant(patch: Record<string, unknown>, toastMessage = 'Configuration enregistrée.') {
-    setSaving(true)
-    setError('')
-    try {
-      await api('/dashboard/api/assistant', { method: 'PATCH', body: patch })
-      showToast(toastMessage)
-      await load()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Enregistrement impossible')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  function saveName() {
-    if (!draft || !data) return
-    const next = draft.name.trim() || 'Assistant du cabinet'
-    if (next === (data.assistant.name || '')) return
-    void patchAssistant({ name: next })
-  }
-
-  function saveTone(tone: string) {
-    if (!data) return
-    setDraft((d) => (d ? { ...d, tone } : d))
-    if (tone === (data.assistant.tone || '')) return
-    void patchAssistant({ tone })
-  }
-
-  function saveLanguage(key: 'fr' | 'darija', next: boolean) {
-    if (!draft || !data) return
-    const languages = { ...draft.languages, [key]: next }
-    setDraft((d) => (d ? { ...d, languages } : d))
-    if (Boolean(data.assistant.languages?.[key]) === next) return
-    void patchAssistant({ languages })
-  }
-
   async function setActive(next: boolean) {
     setToggling(true)
     setError('')
@@ -233,18 +174,26 @@ export function AssistantPage() {
 
   async function saveKnowledge() {
     if (!editing) return
-    await api('/dashboard/api/knowledge', {
-      method: 'PUT',
-      body: {
-        category: editing.category,
-        key: editing.key,
-        label: editing.label,
-        value: knowledgeValue,
-      },
-    })
-    showToast('Information mise à jour.')
-    setEditing(null)
-    await load()
+    setSavingKnowledge(true)
+    setError('')
+    try {
+      await api('/dashboard/api/knowledge', {
+        method: 'PUT',
+        body: {
+          category: editing.category,
+          key: editing.key,
+          label: editing.label,
+          value: knowledgeValue,
+        },
+      })
+      showToast('Information mise à jour — l’assistant utilisera la nouvelle valeur.')
+      setEditing(null)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Enregistrement impossible')
+    } finally {
+      setSavingKnowledge(false)
+    }
   }
 
   if (loading && !data) {
@@ -252,10 +201,6 @@ export function AssistantPage() {
       <div className="mx-auto max-w-5xl space-y-4">
         <Skeleton className="h-16 w-full" />
         <Skeleton className="h-28 w-full" />
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Skeleton className="h-48" />
-          <Skeleton className="h-48" />
-        </div>
         <Skeleton className="h-56" />
       </div>
     )
@@ -275,7 +220,7 @@ export function AssistantPage() {
     )
   }
 
-  if (!data || !draft) return null
+  if (!data) return null
 
   const active = data.assistant.active
 
@@ -285,7 +230,7 @@ export function AssistantPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-navy">Assistant IA</h1>
           <p className="mt-1 text-sm text-muted">
-            Personnalité, langues et connaissances du cabinet.
+            Statut de l’assistant et base de connaissances du cabinet.
           </p>
         </div>
         <Button
@@ -306,7 +251,6 @@ export function AssistantPage() {
       ) : null}
       {error ? <p className="text-sm text-danger">{error}</p> : null}
 
-      {/* Status */}
       <section className="flex flex-col gap-4 rounded-2xl border border-border bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start gap-3">
           <span
@@ -323,9 +267,9 @@ export function AssistantPage() {
                 : 'Les nouveaux messages restent visibles mais aucune réponse automatique n’est envoyée.'}
             </p>
             <p className="mt-2 text-sm text-navy">
-              {draft.name}
+              {data.assistant.name || 'Assistant du cabinet'}
               <span className="text-muted"> · </span>
-              <span className="text-muted">{draft.tone}</span>
+              <span className="text-muted">{data.assistant.tone || 'Professionnel et chaleureux'}</span>
             </p>
           </div>
         </div>
@@ -340,79 +284,12 @@ export function AssistantPage() {
         </div>
       </section>
 
-      {/* Personality + Languages */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="rounded-2xl border border-border bg-white p-5">
-          <h2 className="text-base font-semibold text-navy">Personnalité</h2>
-          <p className="mt-0.5 text-sm text-muted">Comment l’assistant se présente aux patients.</p>
-          <div className="mt-4 space-y-3">
-            <Field label="Nom de l’assistant">
-              <Input
-                value={draft.name}
-                placeholder="Assistant du cabinet"
-                disabled={saving}
-                onChange={(e) => setDraft((d) => (d ? { ...d, name: e.target.value } : d))}
-                onBlur={() => saveName()}
-              />
-            </Field>
-            <Field label="Ton">
-              <Select
-                value={TONE_OPTIONS.includes(draft.tone) ? draft.tone : TONE_OPTIONS[0]}
-                disabled={saving}
-                onChange={(e) => saveTone(e.target.value)}
-              >
-                {!TONE_OPTIONS.includes(draft.tone) ? (
-                  <option value={draft.tone}>{draft.tone}</option>
-                ) : null}
-                {TONE_OPTIONS.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-border bg-white p-5">
-          <h2 className="text-base font-semibold text-navy">Langues</h2>
-          <p className="mt-0.5 text-sm text-muted">Langues utilisées pour répondre aux patients.</p>
-          <ul className="mt-4 space-y-2">
-            <li className="flex items-center justify-between gap-3 rounded-[10px] bg-[#F5FAFC] px-3.5 py-3">
-              <div>
-                <p className="text-sm font-medium text-navy">Français</p>
-                <p className="text-xs text-muted">Langue active</p>
-              </div>
-              <Toggle
-                checked={draft.languages.fr}
-                onChange={(next) => saveLanguage('fr', next)}
-                label="Français"
-                disabled={saving}
-              />
-            </li>
-            <li className="flex items-center justify-between gap-3 rounded-[10px] bg-[#F5FAFC] px-3.5 py-3">
-              <div>
-                <p className="text-sm font-medium text-navy">Darija</p>
-                <p className="text-xs text-muted">Réponses en alphabet arabe</p>
-              </div>
-              <Toggle
-                checked={draft.languages.darija}
-                onChange={(next) => saveLanguage('darija', next)}
-                label="Darija"
-                disabled={saving}
-              />
-            </li>
-          </ul>
-        </section>
-      </div>
-
-      {/* Knowledge */}
       <section className="rounded-2xl border border-border bg-white p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-navy">Base de connaissances</h2>
             <p className="mt-0.5 text-sm text-muted">
-              Informations utilisées par l’assistant pour répondre aux patients.
+              Informations utilisées par l’assistant pour répondre aux patients. Toute modification est appliquée immédiatement.
             </p>
           </div>
           <Button variant="secondary" size="sm" onClick={() => setKnowledgeOpen(true)}>
@@ -470,22 +347,22 @@ export function AssistantPage() {
           <div className="p-5">
             <h3 className="text-lg font-semibold text-navy">Gérer les informations</h3>
             <p className="mt-1 text-sm text-muted">
-              Ces contenus sont utilisés par l’assistant pour répondre aux patients.
+              Ces contenus alimentent directement les réponses de l’assistant sur WhatsApp.
             </p>
             {editing ? (
               <div className="mt-4">
-                <p className="text-sm font-medium text-navy">{editing.label}</p>
-                <Textarea
-                  className="mt-2"
-                  value={knowledgeValue}
-                  onChange={(e) => setKnowledgeValue(e.target.value)}
-                  rows={5}
-                />
+                <Field label={editing.label}>
+                  <Textarea
+                    value={knowledgeValue}
+                    onChange={(e) => setKnowledgeValue(e.target.value)}
+                    rows={5}
+                  />
+                </Field>
                 <div className="mt-4 flex justify-end gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => setEditing(null)}>
+                  <Button variant="secondary" size="sm" onClick={() => setEditing(null)} disabled={savingKnowledge}>
                     Retour
                   </Button>
-                  <Button size="sm" onClick={() => void saveKnowledge()}>
+                  <Button size="sm" loading={savingKnowledge} onClick={() => void saveKnowledge()}>
                     Enregistrer
                   </Button>
                 </div>

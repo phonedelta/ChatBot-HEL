@@ -746,8 +746,8 @@ export function PatientsPage() {
         initialName={apptPrefill.name}
         initialPhone={apptPrefill.phone}
         initialCity={apptPrefill.city}
-        onCreated={() => {
-          setToast('Rendez-vous créé.')
+        onCreated={(message) => {
+          setToast(message || 'Rendez-vous créé.')
           void load()
           if (selectedId) void loadContext(selectedId)
         }}

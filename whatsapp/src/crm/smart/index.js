@@ -35,6 +35,7 @@ const { createCabinetSettingsService } = require('./cabinet-settings')
 const { createConversationContextBuilder } = require('./conversation-context')
 const { createAgendaBoard } = require('./agenda-board')
 const { createAppointmentConfirmationEngine } = require('./appointment-confirmation')
+const { createManualAppointmentFlow } = require('./manual-appointment-flow')
 const { createSlotProposalEngine } = require('./slot-proposals')
 const {
   resolveConversationRoutingState,
@@ -2504,6 +2505,13 @@ function createSmartCrm(db, crmRepo = null) {
     ),
   })
 
+  const manualAppointmentFlow = createManualAppointmentFlow(db, {
+    appointmentConfirmation,
+    trackWhatsAppTurn,
+    logAiAction,
+    getSendWhatsAppText: () => helpersSendRef.fn,
+  })
+
   function setAppointmentConfirmationSender(fn) {
     helpersSendRef.fn = typeof fn === 'function' ? fn : null
   }
@@ -2529,6 +2537,12 @@ function createSmartCrm(db, crmRepo = null) {
     setAppointmentConfirmationSender,
     setSlotProposalSender,
     registerBookingCreated: (...args) => appointmentConfirmation.registerBookingCreated(...args),
+    registerManualConfirmedAppointment: (...args) => (
+      appointmentConfirmation.registerManualConfirmedAppointment(...args)
+    ),
+    completeManualAppointmentCreation: (...args) => (
+      manualAppointmentFlow.completeManualAppointmentCreation(...args)
+    ),
     handleInboundConfirmationReply: (...args) => appointmentConfirmation.handleInboundConfirmationReply(...args),
     runConfirmationTick: (...args) => appointmentConfirmation.runConfirmationTick(...args),
     confirmAppointmentViaEngine: (...args) => appointmentConfirmation.confirmAppointment(...args),

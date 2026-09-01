@@ -107,6 +107,8 @@
     "test:analytics-top-intents": "node scripts/analytics-test.js",
     "test:analytics-recovered-slots": "node scripts/analytics-test.js",
     "test:qa-regressions": "node scripts/qa-regressions-test.js",
+    "test:manual-appointment-whatsapp": "node scripts/manual-appointment-whatsapp-confirmation-test.js",
+    "test:knowledge-prompt": "node scripts/knowledge-prompt-test.js",
     "test:analytics-period-comparison": "node scripts/analytics-test.js"
   },
   "dependencies": {

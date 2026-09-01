@@ -726,7 +726,10 @@ export function AgendaPage() {
         initialDate={newAppt.date}
         initialTime={newAppt.time}
         onClose={() => setNewAppt({ open: false })}
-        onCreated={() => void load()}
+        onCreated={(message) => {
+          if (message) setToast(message)
+          void load()
+        }}
       />
     </div>
   )

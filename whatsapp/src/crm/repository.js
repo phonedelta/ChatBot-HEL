@@ -385,7 +385,8 @@ function createCrmRepository(db) {
    */
   function createManualAppointment(payload = {}) {
     const fullName = validateFullName(String(payload.full_name || '').trim())
-    const phone = toE164(payload.phone_number)
+    const phoneRaw = String(payload.phone_number || '').trim()
+    const phone = toE164(phoneRaw)
     const city = String(payload.city || '').trim() || null
     const date = normalizeBusinessDate(payload.appointment_date)
     const time = String(payload.appointment_time || '').trim().slice(0, 5)
@@ -393,8 +394,18 @@ function createCrmRepository(db) {
     const problemClient = problemAi
     const status = 'confirmed'
 
-    if (!fullName || !phone || !date || !time) {
+    if (!fullName || !phoneRaw || !date || !time) {
       const err = new Error('Nom, téléphone, date et heure sont obligatoires')
+      err.code = 'VALIDATION'
+      throw err
+    }
+    if (!isValidPhone(phoneRaw)) {
+      const err = new Error('Numéro de téléphone invalide.')
+      err.code = 'VALIDATION'
+      throw err
+    }
+    if (!phone) {
+      const err = new Error('Numéro de téléphone invalide.')
       err.code = 'VALIDATION'
       throw err
     }

@@ -70,7 +70,7 @@ export const settingsSections: SettingsSection[] = [
     id: 'security',
     label: 'Sécurité & sessions',
     shortLabel: 'Sécurité',
-    description: 'Durée et inactivité',
+    description: 'Inactivité',
     icon: ShieldCheck,
     viewPermission: PERMISSIONS.VIEW_SETTINGS,
     managePermission: PERMISSIONS.MANAGE_SETTINGS,
