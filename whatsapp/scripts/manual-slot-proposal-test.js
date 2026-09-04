@@ -81,16 +81,18 @@ async function run() {
   const bugCustomerId = bugCust.lastInsertRowid
   crmBug.smart.applyInboundLanguage({ chatId: bugChat, text: 'بغيت نبدل الموعد' })
   assert.strictEqual(crmBug.smart.getActiveConversationLanguage(bugChat), 'darija')
+  const bugCurrent = weekdayFuture(5, '11:00')
+  const bugPropose = weekdayFuture(8, '11:00')
   const bugAppt = crmBug.db.prepare(`
     INSERT INTO appointments (
       customer_id, appointment_date, appointment_time, status, conversation_id, duration_minutes, created_at
-    ) VALUES (?, '2026-09-01', '11:00', 'non_confirme', ?, 30, datetime('now'))
-  `).run(bugCustomerId, bugChat)
+    ) VALUES (?, ?, ?, 'non_confirme', ?, 30, datetime('now'))
+  `).run(bugCustomerId, bugCurrent.date, bugCurrent.time, bugChat)
   await crmBug.smart.createSlotProposal({
     customerId: bugCustomerId,
     appointmentId: bugAppt.lastInsertRowid,
-    slotDate: '2026-08-31',
-    slotTime: '11:00',
+    slotDate: bugPropose.date,
+    slotTime: bugPropose.time,
     createdBy: 'Admin Dashboard',
     chatKey: bugChat,
   })
@@ -120,16 +122,19 @@ async function run() {
   crmArabizi.smart.applyInboundLanguage({ chatId: arabiziChat, text: 'bghit n annuler' })
   crmArabizi.smart.applyInboundLanguage({ chatId: arabiziChat, text: 'la bghit n9a f rendez vous' })
   assert.strictEqual(crmArabizi.smart.getActiveConversationLanguage(arabiziChat), 'darija')
+  const arabiziCurrent = weekdayFuture(6, '11:00')
+  const arabiziPropose = weekdayFuture(9, '11:00')
+  const arabiziPropose2 = weekdayFuture(11, '11:00')
   const arabiziAppt = crmArabizi.db.prepare(`
     INSERT INTO appointments (
       customer_id, appointment_date, appointment_time, status, conversation_id, duration_minutes, created_at
-    ) VALUES (?, '2026-09-01', '11:00', 'non_confirme', ?, 30, datetime('now'))
-  `).run(arabiziCustomerId, arabiziChat)
+    ) VALUES (?, ?, ?, 'non_confirme', ?, 30, datetime('now'))
+  `).run(arabiziCustomerId, arabiziCurrent.date, arabiziCurrent.time, arabiziChat)
   await crmArabizi.smart.createSlotProposal({
     customerId: arabiziCustomerId,
     appointmentId: arabiziAppt.lastInsertRowid,
-    slotDate: '2026-08-31',
-    slotTime: '11:00',
+    slotDate: arabiziPropose.date,
+    slotTime: arabiziPropose.time,
     chatKey: arabiziChat,
   })
   assert.match(arabiziSent[0], /[\u0600-\u06FF]/)
@@ -147,8 +152,8 @@ async function run() {
   await crmArabizi.smart.createSlotProposal({
     customerId: arabiziCustomerId,
     appointmentId: arabiziAppt.lastInsertRowid,
-    slotDate: '2026-09-03',
-    slotTime: '11:00',
+    slotDate: arabiziPropose2.date,
+    slotTime: arabiziPropose2.time,
     chatKey: arabiziChat,
   })
   assert.match(arabiziSent[0], /[\u0600-\u06FF]/)
@@ -173,22 +178,26 @@ async function run() {
   `).run(sharedChat)
   crmShared.smart.applyInboundLanguage({ chatId: sharedChat, text: 'bghit rendez vous' })
   crmShared.db.prepare('UPDATE customers SET preferred_language = ? WHERE id = ?').run('fr', think.lastInsertRowid)
+  const salimCurrent = weekdayFuture(5, '11:00')
+  const thinkCurrent = weekdayFuture(6, '11:30')
+  const sharedProposeA = weekdayFuture(8, '11:00')
+  const sharedProposeB = weekdayFuture(10, '12:00')
   const salimAppt = crmShared.db.prepare(`
     INSERT INTO appointments (
       customer_id, appointment_date, appointment_time, status, conversation_id, duration_minutes, created_at
-    ) VALUES (?, '2026-09-01', '11:00', 'non_confirme', ?, 30, datetime('now'))
-  `).run(salim.lastInsertRowid, sharedChat)
+    ) VALUES (?, ?, ?, 'non_confirme', ?, 30, datetime('now'))
+  `).run(salim.lastInsertRowid, salimCurrent.date, salimCurrent.time, sharedChat)
   const thinkAppt = crmShared.db.prepare(`
     INSERT INTO appointments (
       customer_id, appointment_date, appointment_time, status, conversation_id, duration_minutes, created_at
-    ) VALUES (?, '2026-09-02', '11:00', 'non_confirme', ?, 30, datetime('now'))
-  `).run(think.lastInsertRowid, sharedChat)
+    ) VALUES (?, ?, ?, 'non_confirme', ?, 30, datetime('now'))
+  `).run(think.lastInsertRowid, thinkCurrent.date, thinkCurrent.time, sharedChat)
   sharedSent.length = 0
   await crmShared.smart.createSlotProposal({
     customerId: salim.lastInsertRowid,
     appointmentId: salimAppt.lastInsertRowid,
-    slotDate: '2026-08-31',
-    slotTime: '11:00',
+    slotDate: sharedProposeA.date,
+    slotTime: sharedProposeA.time,
     chatKey: sharedChat,
   })
   assert.match(sharedSent[0], /[\u0600-\u06FF]/)
@@ -196,8 +205,8 @@ async function run() {
   await crmShared.smart.createSlotProposal({
     customerId: think.lastInsertRowid,
     appointmentId: thinkAppt.lastInsertRowid,
-    slotDate: '2026-08-31',
-    slotTime: '12:00',
+    slotDate: sharedProposeB.date,
+    slotTime: sharedProposeB.time,
     chatKey: sharedChat,
   })
   assert.match(sharedSent[0], /Bonjour/)
@@ -212,11 +221,13 @@ async function run() {
     VALUES ('Salim Zouhair', '+212612345682', 'Casablanca', 'fr', ?, datetime('now'))
   `).run(restartChat)
   crmRestart1.smart.applyInboundLanguage({ chatId: restartChat, text: 'بغيت نبدل الموعد' })
+  const restartCurrent = weekdayFuture(5, '11:00')
+  const restartPropose = weekdayFuture(9, '11:00')
   const restartAppt = crmRestart1.db.prepare(`
     INSERT INTO appointments (
       customer_id, appointment_date, appointment_time, status, conversation_id, duration_minutes, created_at
-    ) VALUES (?, '2026-09-01', '11:00', 'non_confirme', ?, 30, datetime('now'))
-  `).run(restartCust.lastInsertRowid, restartChat)
+    ) VALUES (?, ?, ?, 'non_confirme', ?, 30, datetime('now'))
+  `).run(restartCust.lastInsertRowid, restartCurrent.date, restartCurrent.time, restartChat)
   const restartApptId = restartAppt.lastInsertRowid
   const crmRestart2 = createCrmService({ dbPath: tmpRestart })
   const restartSent = []
@@ -227,8 +238,8 @@ async function run() {
   await crmRestart2.smart.createSlotProposal({
     customerId: restartCust.lastInsertRowid,
     appointmentId: restartApptId,
-    slotDate: '2026-08-31',
-    slotTime: '11:00',
+    slotDate: restartPropose.date,
+    slotTime: restartPropose.time,
     chatKey: restartChat,
   })
   assert.match(restartSent[0], /[\u0600-\u06FF]/)

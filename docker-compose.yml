@@ -1,0 +1,32 @@
+# ChatBot HEL — Hetzner / VPS (Docker)
+# Persist storage/ so WhatsApp sessions + SQLite survive restarts.
+
+services:
+  chatbot-hel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: chatbot-hel:latest
+    container_name: chatbot-hel
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8081}:8081"
+    env_file:
+      - .env
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8081"
+      NODE_ENV: production
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+      WA_PUPPETEER_ARGS: "--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu,--headless=new,--no-zygote,--disable-extensions"
+      WA_QR_WAIT_MS: "60000"
+      CRM_DB_PATH: ./storage/crm.sqlite
+      WA_SESSION_PATH: ./storage/sessions
+    volumes:
+      - ./data/storage:/app/storage
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s

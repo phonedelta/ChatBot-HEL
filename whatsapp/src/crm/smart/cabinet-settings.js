@@ -484,6 +484,7 @@ function createCabinetSettingsService(db, deps = {}) {
 
 module.exports = {
   createCabinetSettingsService,
+  validateBookingDateTime,
   DEFAULT_APPOINTMENTS,
   DEFAULT_REMINDERS,
   DEFAULT_AUTOMATIONS,

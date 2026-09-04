@@ -5,6 +5,7 @@ node_modules/
 .env
 .env.*
 !.env.example
+scripts/deploy.config.ps1
 
 # Runtime / session data
 storage/

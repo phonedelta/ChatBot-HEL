@@ -35,8 +35,13 @@ function allText(turn) {
   return [turn?.forceReply, ...(turn?.forceReplies || [])].filter(Boolean).join('\n')
 }
 
+let _slotSeq = 0
 async function reachConfirmation(crm, conv, chat, overrides = {}) {
-  const slot = overrides.slot || futureSlotLine()
+  _slotSeq += 1
+  // Unique day per call so confirmed bookings from earlier tests never collide.
+  const daysAhead = overrides.daysAhead != null ? overrides.daysAhead : (5 + _slotSeq)
+  const time = overrides.time || '11:00'
+  const slot = overrides.slot || futureSlotLine(daysAhead, time)
   await crm.processCrmTurn({
     conversationId: conv,
     chatId: chat,
@@ -55,7 +60,7 @@ async function reachConfirmation(crm, conv, chat, overrides = {}) {
     ].join('\n'),
     languageHint: 'fr',
   })
-  assert.strictEqual(turn.lead.stage, 'confirmation', `expected confirmation got ${turn.lead.stage}`)
+  assert.strictEqual(turn.lead.stage, 'confirmation', `expected confirmation got ${turn.lead.stage}\n${allText(turn)}`)
   assert.match(allText(turn), /\*OUI\*/)
   assert.match(allText(turn), /\*NON\*/)
   return turn
@@ -303,19 +308,25 @@ async function main() {
   assert.strictEqual(turn.lead.full_name, 'Salim Zouhairi')
   assert.match(allText(turn), /\*OUI\*/)
 
-  console.log('--- TEST 12-14: unclear reply ---')
+  console.log('--- TEST 12-14: unclear reply does NOT auto-cancel ---')
   turn = await crm.processCrmTurn({
     conversationId: conv5, chatId: chat5, userText: 'ok je vais voir', languageHint: 'fr',
   })
-  assert.strictEqual(turn.lead.awaiting_field, 'unclear_cancel_confirm')
-  assert.match(allText(turn), /pas compris|annuler/i)
-  turn = await crm.processCrmTurn({
-    conversationId: conv5, chatId: chat5, userText: 'non', languageHint: 'fr',
-  })
   assert.strictEqual(turn.lead.awaiting_field, 'confirmation')
+  assert.ok(!/annuler cette demande/i.test(allText(turn)), allText(turn))
+  assert.match(allText(turn), /modifier|corriger|OUI/i)
+  assert.strictEqual(turn.lead.full_name, 'Salim Zouhairi')
   turn = await crm.processCrmTurn({
     conversationId: conv5, chatId: chat5, userText: 'je vais réfléchir', languageHint: 'fr',
   })
+  assert.strictEqual(turn.lead.awaiting_field, 'confirmation')
+  assert.ok(!turn.conversationReset)
+  assert.ok(crm.repo.getLead(conv5))
+  // Explicit cancel still works
+  turn = await crm.processCrmTurn({
+    conversationId: conv5, chatId: chat5, userText: 'annuler', languageHint: 'fr',
+  })
+  assert.strictEqual(turn.lead.awaiting_field, 'draft_cancel_confirm')
   turn = await crm.processCrmTurn({
     conversationId: conv5, chatId: chat5, userText: 'oui', languageHint: 'fr',
   })
@@ -343,9 +354,14 @@ async function main() {
   })
   assert.ok(!turn.booking)
   assert.strictEqual(crm.repo.getCrmStats().appointments, apptOk)
-  assert.strictEqual(turn.lead.awaiting_field, 'unclear_cancel_confirm')
+  assert.strictEqual(turn.lead.awaiting_field, 'confirmation')
+  assert.ok(!/annuler cette demande/i.test(allText(turn)))
 
-  console.log('--- TEST 21: after reset booking restarts ---')
+  console.log('--- TEST 21: after explicit cancel booking restarts ---')
+  turn = await crm.processCrmTurn({
+    conversationId: conv6, chatId: chat6, userText: 'annuler', languageHint: 'fr',
+  })
+  assert.strictEqual(turn.lead.awaiting_field, 'draft_cancel_confirm')
   turn = await crm.processCrmTurn({
     conversationId: conv6, chatId: chat6, userText: 'oui', languageHint: 'fr',
   })

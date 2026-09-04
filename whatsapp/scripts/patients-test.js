@@ -60,13 +60,14 @@ async function run() {
     conversation_id: chat,
     whatsapp_chat_id: chat,
   })
+  const adamSlot = weekdayFuture(10, '10:30')
   const d = crm.repo.saveConfirmedBooking({
     full_name: 'Adam Shared',
     phone_number: phone,
     city: 'Casablanca',
     problem: 'blanchiment',
-    appointment_date: weekdayFuture(10, '10:00').date,
-    appointment_time: weekdayFuture(10, '10:00').time,
+    appointment_date: adamSlot.date,
+    appointment_time: adamSlot.time,
     conversation_id: chat,
     whatsapp_chat_id: chat,
   })

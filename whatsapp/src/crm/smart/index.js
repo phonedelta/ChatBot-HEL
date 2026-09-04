@@ -44,6 +44,7 @@ const {
   logContextRouter,
 } = require('./conversation-routing')
 const { createWhatsappCancelEngine } = require('./whatsapp-cancel')
+const { createAvailabilityFlow } = require('./availability-flow')
 const { createFollowupsBoard } = require('./followups-board')
 const { createPatientsBoard } = require('./patients-board')
 const { createAnalyticsBoard } = require('./analytics-board')
@@ -1223,6 +1224,7 @@ function createSmartCrm(db, crmRepo = null) {
     listPractitioners,
     listAppointmentTypes,
     getSlotDurationMinutes: () => cabinetSettings.getAppointmentsSettings().slotDurationMinutes,
+    getAppointmentsSettings: () => cabinetSettings.getAppointmentsSettings(),
   })
 
   function getAgendaBoard(options = {}) {
@@ -2505,6 +2507,20 @@ function createSmartCrm(db, crmRepo = null) {
     ),
   })
 
+  const availabilityFlow = createAvailabilityFlow(db, {
+    getAppointmentsSettings: () => cabinetSettings.getAppointmentsSettings(),
+    getLead: (id) => crmRepo?.getLead?.(id) || null,
+    upsertLead: (id, patch) => crmRepo?.upsertLead?.(id, patch),
+    resolveLeadConversationId: (chatKey) => {
+      const key = String(chatKey || '').trim()
+      const bare = key.replace(/^[^:]+:/, '')
+      if (crmRepo?.getLead?.(key)) return key
+      if (crmRepo?.getLead?.(`main:${bare}`)) return `main:${bare}`
+      if (crmRepo?.getLead?.(bare)) return bare
+      return key.startsWith('main:') ? key : `main:${bare}`
+    },
+  })
+
   const manualAppointmentFlow = createManualAppointmentFlow(db, {
     appointmentConfirmation,
     trackWhatsAppTurn,
@@ -2554,10 +2570,14 @@ function createSmartCrm(db, crmRepo = null) {
     handleInboundSlotProposalReply: (...args) => slotProposals.handleInboundProposalReply(...args),
     whatsappCancel,
     handleInboundCancel: (...args) => whatsappCancel.handleInboundCancel(...args),
+    availabilityFlow,
+    handleInboundAvailability: (...args) => availabilityFlow.handleInboundAvailability(...args),
+    getBookableSlotsForDate: (...args) => availabilityFlow.getBookableSlotsForDate(...args),
     cancelAppointment: (...args) => whatsappCancel.executeCancel(...args),
     resolveConversationRouting: (chatKey) => {
       const lead = crmRepo?.getLead?.(chatKey) || null
-      return resolveConversationRoutingState(db, chatKey, lead)
+      const availabilityState = availabilityFlow.getState?.(chatKey) || null
+      return resolveConversationRoutingState(db, chatKey, lead, { availabilityState })
     },
     contextualClarificationMessage,
     hasPriorityOverBooking,

@@ -1,615 +1,473 @@
 # ChatBot HEL — Project Prompt / Context
 
-> Use this file as the source of truth when asking an AI (or a new developer) to work on this project.
+> Colle ce fichier dans ChatGPT (ou un autre LLM) pour expliquer **ce que fait le projet**, ses règles métier, et son architecture.
 > Repo: https://github.com/phonedelta/ChatBot-HEL
 
-**Last updated:** 30 August 2026 — History audit (Exécuté par = dashboard user | Assistant IA) + RBAC + cabinet settings
+**Dernière mise à jour :** 3 septembre 2026  
+**Inclut :** confirmation multi-RDV, consultation des disponibilités WhatsApp, identité WhatsApp (LID/Android), moteur de créneaux partagé Agenda ↔ chatbot.
 
 ---
 
-## 1. What this project is
+## 1. Qu’est-ce que ce projet ?
 
-**ChatBot HEL / Smart CRM IA** is an autonomous WhatsApp AI assistant + operational dashboard for **Centre Dentaire HEL** (dental clinic in El Oulfa, Casablanca, Morocco).
+**ChatBot HEL / Smart CRM IA** est un **assistant WhatsApp autonome** + un **tableau de bord opérationnel (Smart CRM)** pour le **Centre Dentaire HEL** (cabinet dentaire à El Oulfa, Casablanca, Maroc).
 
-It:
+### Ce que le système fait concrètement
 
-1. Connects to WhatsApp via **WhatsApp Web** (QR scan session).
-2. Answers patients in **French** or **Moroccan Darija** (Arabic script for Darija replies).
-3. Understands **text** and **voice notes** (Whisper transcription + Darija NLU).
-4. Books **dental appointments** through a CRM workflow (single-message form → summary → confirmation).
-5. Runs a **Smart CRM dashboard** with RBAC (admin / secretary), messages, agenda, patients, relances, analyses, **historique (audit)**, assistant config, WhatsApp integration, and cabinet settings.
+1. Se connecte à WhatsApp via **WhatsApp Web** (session QR + Puppeteer).
+2. Répond aux patients en **français** ou **darija marocaine** (réponses darija = **écriture arabe uniquement**).
+3. Comprend le **texte** et les **messages vocaux** (Whisper + NLU Darija).
+4. Gère la **prise de rendez-vous** (formulaire CRM → résumé → confirmation patient).
+5. Affiche les **disponibilités réelles** du cabinet (mêmes créneaux que l’Agenda).
+6. Demande la **confirmation 24h** avant le RDV, gère multi-patients / multi-RDV sur un même numéro.
+7. Permet l’**annulation** par le patient (avec confirmation OUI/NON).
+8. Propose des **créneaux** envoyés par le staff depuis le dashboard.
+9. Expose un **dashboard React** : Aujourd’hui, Messages, Agenda, Patients, Relances, Assistant IA, Analyses, Historique, Intégrations, Paramètres (RBAC admin / secrétaire).
 
-Clinic knowledge (hours, services, address, phone) lives in:
+### Ce que le système ne fait PAS
 
-- `whatsapp/src/knowledge/centre-dentaire-hel.md` (LLM knowledge file)
-- `knowledge_items` table (dashboard-editable base de connaissances)
-
----
-
-## 2. Business rules (important)
-
-### Languages
-
-| Patient speaks | Bot replies |
-|----------------|-------------|
-| French | French only |
-| Darija (Latin keyboard or Arabic script) | Arabic script only (never Latin Darija in replies) |
-
-### Appointment booking
-
-1. Patient asks for a rendez-vous (explicit intent: RDV, `bghit nreserve`, `بغيت موعد`, etc.).
-2. Bot sends a **one-message form** (all fields at once — never field-by-field).
-3. Required fields:
-   - Full name (**prénom + nom** — single first name is rejected)
-   - Dental problem / motif
-   - Phone number
-   - City
-   - Preferred day and time
-4. Bot shows a summary and asks for `*OUI*` / `نعم`.
-5. Only after confirmation is the appointment saved in CRM with status **`non_confirme`** (UI: **À confirmer** / En attente).
-6. Confirmation flow: WhatsApp 24h before → patient OUI/NON → status **Confirmé** or cancelled.
-
-**Audit:** WhatsApp auto-booking, confirmation, cancel, and slot accept/decline are executed by **Assistant IA** (origin: WhatsApp patient). Manual dashboard create/edit/cancel is executed by the **authenticated dashboard user**.
-
-### Working hours (hard rule)
-
-| Day | Hours |
-|-----|--------|
-| Mon–Fri | 10:30 → 19:00 |
-| Saturday | 09:30 → 13:00 (no booking from 13:00) |
-| Sunday | Closed |
-
-Out-of-hours slots are rejected with an explanation + form again.
-
-### Voice notes
-
-- Transcribed with Whisper (French / Darija).
-- Used for **conversation** (understand the dental problem).
-- **Never** collect CRM identity fields from voice.
-- Booking form opens only on **explicit** appointment request in the transcript.
-- If already in form mode and patient sends voice → short reminder to reply in **one text message**.
-
-### CRM status labels
-
-| Internal value | UI label |
-|----------------|----------|
-| `non_confirme` | À confirmer |
-| `confirmed` | Confirmé |
-| `cancelled` | Annulé |
-
-### Multi-patient / shared WhatsApp contact
-
-- **Phone = contact channel**, not unique patient identity.
-- One WhatsApp number can be linked to **multiple patients** (family, shared phone).
-- Always show the **correct patient name** on appointments, relances, and messages.
-- Never invent a phone from a WhatsApp `@lid`.
-
-### Human handoff
-
-- Staff can take over a conversation (**Prendre la main** in Messages).
-- When `HUMAN_CONTROLLED`: bot does **not** auto-reply (including cancel/confirmation flows).
-- Handoff actor = authenticated dashboard user (never « Équipe »).
-- Returning the conversation to AI is still a **dashboard user** action.
-
-### WhatsApp patient self-cancel
-
-- Intent `CANCEL_APPOINTMENT` → list active RDV → patient selects → **OUI/NON confirmation**.
-- Never cancel immediately without confirmation.
-- On cancel: status `cancelled`, reminders cleared, **bell notification + sound** (slot released).
-- **No auto WhatsApp slot proposal** after cancellation.
-- History: **Exécuté par = Assistant IA**, origin = WhatsApp patient.
-
-### Notifications (bell)
-
-- Bell notifications **only on appointment cancellation** (`sourceEvent === 'appointment_cancelled'`).
-- Do **not** notify on slot proposals or routine events.
-- Sound: `NotificationContext` polls (~4s), plays `Notification_HEL.mp3` on **new notification IDs** (not unread count). Initial load = no sound. Toggle in Paramètres → Notifications.
-- Clicking a notification is **not** the actor; the subsequent dashboard action is.
-
-### Assistant guardrails (backend — not exposed in UI)
-
-Even though the Assistant IA page no longer shows guardrails, these rules remain active:
-
-- No diagnosis / no unauthorized clinical recommendation / no treatment change without staff.
-- Transfer to human when needed.
-- Never invent hours, prices, or availability.
+- Pas de diagnostic médical, pas de prescription.
+- **N’invente jamais** les horaires, les prix, ni les créneaux disponibles.
+- Ne crée pas de RDV tant que le patient n’a pas confirmé le résumé (sauf flux dashboard manuel).
+- Ne traite pas le numéro WhatsApp comme l’identité unique d’un patient (famille / téléphone partagé).
 
 ---
 
-## 3. Architecture (high level)
+## 2. Parcours patient typiques (WhatsApp)
+
+### A. Prise de rendez-vous classique
+
+1. Patient : « Bghit nakhud rendez-vous » / « Je veux un rendez-vous ».
+2. Bot envoie un **formulaire en un seul message** (tous les champs d’un coup).
+3. Champs : **prénom + nom**, motif dentaire, téléphone, ville, jour + heure.
+4. Résumé → patient répond **نعم / OUI**.
+5. RDV créé en statut **`non_confirme`** (UI : **À confirmer**).
+6. Plus tard : rappel WhatsApp de confirmation → OUI = **Confirmé**, NON = **Annulé**.
+
+### B. Consultation des disponibilités (nouvelle fonctionnalité)
+
+1. Patient : « Chno les rendez-vous disponibles ? » / « Quels créneaux sont disponibles ? »
+2. Bot demande **jour + mois** (ex. `05/09`) s’ils ne sont pas déjà dans le message.
+3. Bot récupère **tous les créneaux libres** de ce jour via le **même moteur que l’Agenda**.
+4. Affiche une liste numérotée (matin / après-midi).
+5. Patient choisit par **numéro** (`3`) ou par **heure** (`11:00`).
+6. Le bot **mémorise date + heure** dans le brouillon de réservation, **sans créer le RDV**.
+7. Il continue le formulaire pour les infos encore manquantes (nom, téléphone, etc.) — **sans effacer** ce qui était déjà collecté.
+
+Intent : `CHECK_APPOINTMENT_AVAILABILITY`  
+États : `awaiting_availability_date` → `awaiting_available_slot_selection`
+
+**Ne pas confondre** avec « Chno les rendez-vous **dyali** ? » (= mes propres RDV, pas les créneaux du cabinet).
+
+### C. Confirmation 24h — un seul RDV
+
+Rappel automatique → patient OUI/NON → confirmé ou annulé.
+
+### D. Confirmation 24h — plusieurs RDV / plusieurs patients (corrigé)
+
+Exemple : même WhatsApp pour **Salim** (11:00) et **Hasnae** (11:30).
+
+1. Patient dit OUI → bot affiche une **liste numérotée stable**.
+2. Patient répond `1`, `2`, ou le **nom** → sélection du bon RDV.
+3. `1 2` / « بجوج » = les deux → confirmation groupée.
+4. OUI final confirme **uniquement** le(s) RDV sélectionné(s).
+5. **Jamais** mélanger Salim et Hasnae ; l’index affiché n’est **jamais** l’ID base de données.
+
+États : `awaiting_selection` → `awaiting_confirmation` / `awaiting_multi_confirmation`  
+Parser déterministe (pas le LLM) pour `1`, `2`, noms.
+
+### E. Annulation patient
+
+Intent annulation → liste des RDV à venir → choix → **OUI pour confirmer l’annulation**.  
+Libère le créneau + notification cloche dashboard. Pas de proposition auto WhatsApp.
+
+### F. Proposition de créneau (staff → patient)
+
+Depuis l’Agenda, un utilisateur dashboard propose un nouveau créneau.  
+Patient OUI/NON. Actor Historique = **utilisateur dashboard** (pas le patient).
+
+### G. RDV manuel dashboard
+
+Création Agenda / Patients → peut envoyer une confirmation WhatsApp en darija si session connectée. Entre dans le même pipeline rappels / Relances.
+
+---
+
+## 3. Règles métier importantes
+
+### Langues
+
+| Patient parle | Bot répond |
+|---------------|------------|
+| Français | Français uniquement |
+| Darija (clavier latin ou arabe) | **Arabe script** uniquement (jamais de darija latin dans les réponses) |
+
+### Horaires cabinet (règle dure)
+
+| Jour | Horaires |
+|------|----------|
+| Lun–Ven | 10:30 → 19:00 |
+| Samedi | 09:30 → 13:00 |
+| Dimanche | Fermé |
+
+### Paramètres rendez-vous (dashboard → Paramètres)
+
+Le chatbot **respecte automatiquement** :
+
+- Durée standard d’un créneau (15–90 min)
+- Délai minimum avant RDV (lead time)
+- Réservation max à l’avance (horizon)
+- Autoriser ou non le **jour même**
+- Délais d’annulation / report
+- Rappels de confirmation (24h, 4h, etc.)
+
+### Multi-patient (fondamental)
+
+```
+Contact WhatsApp (+212…)
+    ├── Patient Salim Zouhairi
+    ├── Patient Hasnae Zouhairi
+    └── Patient Yassine …
+```
+
+- Le **téléphone = canal de contact**, pas l’identité patient.
+- `contactId ≠ patientId`.
+- Après sélection d’un RDV : la vérité = `appointment.patientId` / `customer_id`.
+- Ne jamais convertir un JID technique `@lid` en « numéro de téléphone ».
+
+### Identité WhatsApp (Android / iOS)
+
+- Session multi-appareils Android peut exposer un **LID** (`…@lid`) au lieu d’un MSISDN.
+- Module `whatsapp-identity.js` : résolution du vrai numéro, routage, envoi.
+- Intégrations : « connecté » seulement quand session **ready** ; ne jamais afficher un ID technique comme téléphone.
+- Bibliothèque : **whatsapp-web.js** (pas Baileys).
+
+### Handoff humain
+
+- Staff : **Prendre la main** dans Messages.
+- En `HUMAN_CONTROLLED` : le bot ne répond plus automatiquement.
+- Actor = utilisateur dashboard authentifié.
+
+### Garde-fous assistant
+
+- Pas de diagnostic / pas de conseil clinique non autorisé.
+- Transfert humain si besoin.
+- Jamais inventer disponibilités, prix, horaires.
+
+---
+
+## 4. Architecture (vue d’ensemble)
 
 ```
 Patient (WhatsApp)
         │
         ▼
-┌───────────────────────────────────────────┐
-│  Node.js Express service                    │
-│  whatsapp/src/index.js                    │
-│  Port :8081                               │
-│                                           │
-│  • whatsapp-web.js + Puppeteer            │
-│  • OpenAI chat + Whisper                  │
-│  • Intent Router                          │
-│  • CRM workflow + Smart CRM layer         │
-│  • Dashboard API + RBAC + React SPA      │
-└───────────┬───────────────────────────────┘
-            │
-    ┌───────┴────────────────────┐
-    ▼                            ▼
-SQLite CRM                  Admin Dashboard
-storage/crm.sqlite          http://localhost:8081/dashboard
-(conversations, messages,
- appointments, tasks,
- activity_history,
- dashboard_users,
- ai_actions, knowledge…)
+┌────────────────────────────────────────────────┐
+│  Service Node.js (Express)                     │
+│  whatsapp/src/index.js  — port :8081           │
+│                                                │
+│  • whatsapp-web.js + Puppeteer                 │
+│  • OpenAI (chat) + Whisper (voix)              │
+│  • Intent Router + Voice NLU                   │
+│  • Handlers déterministes (cancel, confirm,    │
+│    disponibilités, propositions de créneau)    │
+│  • CRM workflow (booking)                      │
+│  • Smart CRM + API dashboard + RBAC            │
+└──────────────┬─────────────────────────────────┘
+               │
+     ┌─────────┴──────────┐
+     ▼                    ▼
+ SQLite CRM          Dashboard React
+ storage/crm.sqlite  http://127.0.0.1:8081/dashboard
 ```
 
-### Main pipeline (each inbound message)
+### Pipeline d’un message entrant (ordre de priorité)
 
-1. Receive WhatsApp message (text or audio).
-2. If audio → enhance (ffmpeg) → Whisper transcription → Voice NLU.
-3. Detect language (FR / Darija).
-4. **Intent Router** → language, intent, service, flags (`bookAppointment`, `cancelAppointment`, …).
-5. **Smart handlers** (cancel, confirmation reply, slot proposal) before generic LLM.
-6. **CRM workflow** if booking-related → templates (form / summary / confirmation).
-7. Else **LLM** with clinic knowledge + router block + conversation history.
-8. Reply as WhatsApp text; persist to `messages` + `conversations`.
-9. Persist **business audit** via `activity_history` (actor = Assistant IA for automations).
+1. Réception WhatsApp (texte / audio).
+2. Audio → ffmpeg → Whisper → NLU.
+3. Détection langue + **Intent Router**.
+4. Handlers **déterministes** (avant le LLM) :
+   - Annulation patient
+   - Réponse à une proposition de créneau staff
+   - Confirmation 24h (y compris sélection multi-RDV)
+   - **Consultation disponibilités** (date → liste → choix créneau)
+5. Workflow CRM booking (formulaire / résumé / OUI) si pertinent.
+6. Sinon LLM + base de connaissances cabinet.
+7. Réponse WhatsApp + persistance messages / conversations / Historique.
 
-Templates for booking form / summary / confirmation are **exact** (`shouldSkipLlm: true`) — AI must not rewrite them.
+Les templates booking / confirmation / listes de créneaux sont **exacts** (`shouldSkipLlm: true`) — le LLM ne doit pas les réécrire.
+
+### Source de vérité des créneaux
+
+Fonction partagée : **`getBookableSlotsForDate()`** dans `appointment-slots.js`.
+
+Utilisée par :
+
+- Agenda (dashboard)
+- Chatbot disponibilités
+- Alternatives de créneaux booking
+- (même règles : horaires, durée, RDV bloquants, lead time, same-day, horizon)
+
+Statuts qui **bloquent** un créneau : `non_confirme`, `pending_confirmation`, `confirmed` (via `isAppointmentSlotBlocking`).  
+`cancelled` ne bloque plus le créneau.
 
 ---
 
-## 4. Technologies
+## 5. Technologies
 
-### Backend
+| Couche | Tech |
+|--------|------|
+| Runtime | Node.js, JavaScript CommonJS |
+| HTTP | Express |
+| WhatsApp | whatsapp-web.js + Puppeteer |
+| IA | OpenAI Chat + Whisper |
+| DB | SQLite (`node:sqlite`) |
+| Dashboard | React 19, TypeScript, Vite, Tailwind 4 |
+| Charts | recharts |
+| Icons | lucide-react |
 
-| Layer | Tech |
-|-------|------|
-| Runtime | **Node.js** |
-| Language | **JavaScript** (CommonJS) |
-| HTTP server | **Express** |
-| WhatsApp | **whatsapp-web.js** + **Puppeteer** |
-| AI chat | **OpenAI** API |
-| Speech-to-text | **Whisper** |
-| Database | **SQLite** (`node:sqlite`) |
-| Config | **dotenv** |
-
-### Frontend (Smart CRM dashboard)
-
-| Layer | Tech |
-|-------|------|
-| Language | **TypeScript** |
-| UI | **React 19** |
-| Build | **Vite 8** |
-| Styling | **Tailwind CSS 4** |
-| Routing | **react-router-dom** |
-| Charts | **recharts** (Analyses) |
-| Icons | **lucide-react** |
-| Motion | **framer-motion** |
-
-### Design tokens HEL
+### Design HEL
 
 ```
 Primary Navy    #12324A
 Medical Cyan    #13AEC1
-Cyan Tint       #E4F6F8
 Background      #F5FAFC
-Surface         #FFFFFF
-Border          #DCEAF0
-Secondary       #708299
-Success         #20B26B
-Warning         #F59E0B
-Error           #E34C4C
 Font            Manrope
 ```
 
-### Data & storage (local)
-
-| Path | Purpose |
-|------|---------|
-| `whatsapp/storage/crm.sqlite` | Full CRM + Smart CRM + `dashboard_users` + `activity_history` |
-| `whatsapp/storage/sessions/` | WhatsApp LocalAuth session |
-| `whatsapp/storage/ai-conversations.json` | LLM chat memory per conversation (UTF-8, no BOM) |
-| `whatsapp/storage/dashboard-auth.json` | Legacy admin login (bootstraps SQLite users) |
-| `whatsapp/storage/dashboard-sessions.json` | Dashboard sessions |
-| `whatsapp/storage/media/` | Inbound/outbound media copies |
-| `whatsapp/storage/voice-nlu-logs/` | Voice NLU debug logs |
-| `whatsapp/storage/backups/` | Manual CRM reset backups |
-
 ---
 
-## 5. Repository structure
+## 6. Structure du dépôt (principale)
 
 ```
 ChatBot-HEL/
-├── prompt.md                 ← this file
+├── prompt.md
+├── docker-compose.yml          # déploiement (ex. Hetzner)
+├── scripts/deploy-*.ps1
 └── whatsapp/
     ├── package.json
-    ├── .env                  # secrets (DO NOT commit)
-    ├── .env.example
-    ├── scripts/              # integration tests
-    ├── storage/              # runtime data (gitignored)
-    ├── dashboard-app/        # React + TS source
-    │   └── src/
-    │       ├── pages/
-    │       ├── components/   # layout, auth, history, settings, UI
-    │       ├── context/      # AuthContext, NotificationContext
-    │       ├── hooks/        # usePermissions, useIdleSession
-    │       └── lib/          # api, permissions, history-ui, labels
+    ├── .env                    # secrets — NE PAS commit
+    ├── scripts/                # tests d’intégration
+    ├── storage/                # données runtime (gitignore)
+    ├── dashboard-app/          # source React
     └── src/
-        ├── index.js          # Express + WhatsApp + AI loop + CRM appointment mutations
+        ├── index.js            # boucle WhatsApp + API
+        ├── whatsapp-identity.js
         ├── knowledge/
-        ├── dashboard/
-        │   ├── auth.js
-        │   ├── auth-middleware.js
-        │   ├── permissions.js
-        │   ├── users.js          # dashboard_users CRUD
-        │   ├── user-routes.js    # /users, /permissions (MANAGE_USERS only)
-        │   ├── smart-routes.js   # /dashboard/api/*
-        │   └── dist/             # built SPA
+        ├── dashboard/          # auth, RBAC, smart-routes, SPA dist/
         ├── crm/
         │   ├── workflow.js
         │   ├── repository.js
-        │   ├── schema.sql
+        │   ├── appointment-slots.js      # moteur créneaux partagé
+        │   ├── working-hours.js
+        │   ├── contact-patients.js       # multi-patient
+        │   ├── binary-confirmation.js    # OUI/NON
         │   └── smart/
-        │       ├── index.js
-        │       ├── activity-history.js   # append-only audit
-        │       ├── activity-actors.js     # dashboard_user | assistant_ai
-        │       ├── cabinet-settings.js
-        │       ├── analytics-board.js
-        │       ├── patients-board.js
-        │       ├── followups-board.js
         │       ├── agenda-board.js
         │       ├── appointment-confirmation.js
+        │       ├── appointment-selection.js
+        │       ├── availability-flow.js
+        │       ├── availability-date.js
+        │       ├── availability-slot-select.js
         │       ├── whatsapp-cancel.js
         │       ├── slot-proposals.js
-        │       ├── slot-release-notifications.js
-        │       ├── conversation-context.js
+        │       ├── manual-appointment-flow.js
+        │       ├── cabinet-settings.js
+        │       ├── activity-history.js
+        │       ├── followups-board.js
+        │       ├── patients-board.js
+        │       ├── analytics-board.js
         │       ├── conversation-routing.js
-        │       ├── contact-resolver.js
-        │       └── defaults.js
-        └── voice-nlu/
+        │       └── knowledge-prompt.js
+        └── voice-nlu/          # intent router, classifiers, Darija
 ```
 
 ---
 
-## 6. Auth, RBAC, users
+## 7. Dashboard Smart CRM
 
-### Roles
+**URL locale :** `http://127.0.0.1:8081/dashboard`
 
-| Role | UI label | Access |
-|------|----------|--------|
-| `admin` | Administrateur | All permissions (bypass) |
-| `secretary` | Secrétaire | Explicit permission list |
-
-Users live in SQLite (`dashboard_users` + `dashboard_user_permissions`), not only in the JSON auth file. Login UI: **AccountSelector** (pick account then password). Session: `req.dashboardUser` via `auth-middleware.js`.
-
-**Never trust** `req.body.actorUserId` / `actor_display_name` for audit. Actor for dashboard mutations comes from the **authenticated session**.
-
-### Permissions (high level)
-
-Messages, agenda (create/edit/cancel/confirm/propose slot), patients, relances, assistant, analyses, historique, integrations, settings, **MANAGE_USERS**.
-
-`user-routes.js` applies `requireManageUsers` **per route** only — never as a global `router.use` on `/dashboard/api` (that 403’d every CRM call for secretaries).
-
-### Paramètres (SettingsPage)
-
-Sidebar sections (permission-gated):
-
-| Section | Content |
-|--------|---------|
-| Utilisateurs et accès | CRUD accounts, permissions, disable/delete |
-| Rendez-vous | Slot duration, lead times, waitlist, proposals |
-| Confirmations & rappels | 24h confirm, 4h/24h reminders, send window |
-| Automatisations | Toggle backend automations |
-| Sécurité & sessions | Session TTL, idle timeout (`useIdleSession`) |
-| Notifications internes | Bell + **Sons de notification** |
-
-Idle logout: actor remains the logged-in user; origin = session expiry (if logged).
-
----
-
-## 7. Smart CRM dashboard (current)
-
-**URL:** `http://localhost:8081/dashboard`
-
-### Navigation (sidebar)
-
-| Route | Page | Permission |
+| Route | Page | Rôle |
 |-------|------|------|
-| `/` | **Aujourd’hui** | `VIEW_TODAY` |
-| `/messages` | **Messages** | `VIEW_MESSAGES` |
-| `/agenda` | **Agenda** | `VIEW_AGENDA` |
-| `/patients` | **Patients** | `VIEW_PATIENTS` |
-| `/relances` | **Relances** | `VIEW_FOLLOWUPS` |
-| `/assistant` | **Assistant IA** | `VIEW_ASSISTANT` |
-| `/analyses` | **Analyses** | `VIEW_ANALYTICS` |
-| `/historique` | **Historique** | `VIEW_HISTORY` |
-| `/integrations` | **Intégrations** | `VIEW_INTEGRATIONS` |
-| `/parametres` | **Paramètres** | `VIEW_SETTINGS` |
+| `/` | Aujourd’hui | KPIs du jour |
+| `/messages` | Messages | Inbox WhatsApp + handoff |
+| `/agenda` | Agenda | Créneaux réels, RDV, propositions |
+| `/patients` | Patients | Fiches, multi-patient |
+| `/relances` | Relances | Non confirmés, no-response, etc. |
+| `/assistant` | Assistant IA | Pause, personnalité, knowledge |
+| `/analyses` | Analyses | KPIs période |
+| `/historique` | Historique | Audit append-only |
+| `/integrations` | Intégrations | WhatsApp QR / session |
+| `/parametres` | Paramètres | Users, RDV, rappels, sécu, notifs |
 
-**Removed from UI:**
+### Historique — « Exécuté par »
 
-- `/automatisations` — page removed; automations still run in backend (`automations` table + Paramètres).
-- Legacy `/commandes`, `/config` — compat only.
+| Autorisé | Interdit |
+|----------|----------|
+| Compte dashboard réel (Admin, Sawsane…) | Patient |
+| **Assistant IA** | Système, Équipe, Bot, WhatsApp (comme acteur) |
 
-### Historique (`HistoryPage.tsx`) — audit journal
+- Actor = qui a exécuté dans le CRM.
+- Origin = dashboard / whatsapp_patient / automation / scheduler…
+- Mutations WhatsApp auto → **Assistant IA**.
+- Clics dashboard → **utilisateur session** (jamais `req.body.actor`).
 
-Append-only business audit (`activity_history`). Not a copy of every WhatsApp message.
+### Notifications cloche
 
-**Column « Exécuté par » — non-negotiable:**
+- Principalement sur **annulation** (créneau libéré).
+- Son configurable dans Paramètres.
 
-| Allowed | Never |
-|---------|--------|
-| Real dashboard account (Admin, Sawsane, Sarah A. + role) | Patient |
-| **Assistant IA** / subtitle Automatisation | Système, Équipe, WhatsApp, Bot, CRM, Scheduler |
+### RBAC
 
-**Concepts (do not mix):**
-
-- **Actor** — who executed in the CRM (`dashboard_user` \| `assistant_ai`)
-- **Target** — patient / appointment / user concerned
-- **Origin** — dashboard, WhatsApp patient, automation, scheduler
-
-Examples:
-
-- Patient books via chatbot → actor **Assistant IA**, origin WhatsApp patient.
-- Patient replies OUI to a slot → actor **Assistant IA**.
-- Sawsane clicks « Proposer un créneau » → actor **Sawsane** (even if WhatsApp sends the message).
-- Admin creates RDV in Agenda → actor **Admin**.
-
-**KPI « Équipe »** on the History page = count of `dashboard_user` actions (aggregation). Individual rows still show the real name.
-
-CSV/PDF: Exécuté par = Admin / Sawsane / Assistant IA. Never Patient / Système / Équipe.
-
-Filter « Tous les exécutants » lists dashboard users + Assistant IA. No Patient/Système/Équipe.
-
-### Assistant IA (`AssistantPage.tsx`)
-
-- **Shown:** status toggle (pause modal), personality (name/tone), languages (FR + Darija), knowledge base drawer.
-- **Hidden from UI (backend unchanged):** capabilities, guardrails, AI action journal.
-- Pause/enable and knowledge edits are audited as the **dashboard user**.
-
-### Intégrations (`IntegrationsPage.tsx`)
-
-- **Only WhatsApp** (SQLite / Google / Outlook / Webhooks hidden).
-- Real state from `GET /dashboard/api/instances` + QR.
-- Connect / reconnect / disconnect with confirmation.
-
-### Relances / Patients / Analyses
-
-Unchanged product rules from previous versions: relance categories + manual WhatsApp; multi-patient drawer; period analytics with real KPIs only.
+- `admin` : tout.
+- `secretary` : permissions explicites.
+- Users dans SQLite (`dashboard_users`).
 
 ---
 
-## 8. History / audit model (backend)
+## 8. Intents WhatsApp (principaux)
 
-### Actor types (new events)
+| Intent | Signification |
+|--------|----------------|
+| `BOOK_APPOINTMENT` | Veut réserver (verbe explicite) |
+| `CHECK_APPOINTMENT_AVAILABILITY` | Veut voir les créneaux libres du cabinet |
+| `LIST_MY_APPOINTMENTS` | Veut ses propres RDV |
+| `CANCEL_APPOINTMENT` | Veut annuler |
+| `RESCHEDULE_APPOINTMENT` | Veut déplacer |
+| `ASK_SERVICES` | Liste des soins / services |
+| `ASK_OPENING_HOURS` / `ASK_LOCATION` / `ASK_PRICE` | FAQ cabinet |
+| `DENTAL_PAIN` / `DENTAL_EMERGENCY` | Douleur / urgence |
+| `GREETING` / `THANKS` / `OTHER` | Conversation |
 
-```
-dashboard_user  → actor_user_id, actor_display_name snapshot, actor_role snapshot
-assistant_ai    → displayName always "Assistant IA", userId null
-```
-
-Helpers (`activity-actors.js` / `activity-history.js`):
-
-- `recordUserAuditEvent(user, …)` — session required
-- `recordAssistantAuditEvent(…)` — Assistant IA
-- Reject / do not persist visible `patient` / `system` / `team` as actor
-
-Snapshots keep showing « Sawsane · Secrétaire » after rename or account deletion.
-
-### Origin values
-
-`dashboard` · `whatsapp_patient` · `assistant_ai` · `automation` · `scheduler` · `integration` · `system_internal`
-
-Origin ≠ Exécuté par.
-
-### Legacy backfill (on boot)
-
-- Rows with `actor_user_id` → keep that dashboard user.
-- WhatsApp / automation / patient / system → **Assistant IA**.
-- « Équipe » with recoverable name/metadata → recover user; **never invent Admin**.
-
-### Instrumented mutations (minimum)
-
-- Appointments: create, update (date/time/both → moved), confirm, cancel, delete, slot released
-- Slot proposals: sent (manual = user, auto = Assistant IA), accepted, declined
-- Patients, notes, handoff, relances, users/permissions, settings, assistant, WhatsApp connect/disconnect
-- Log **after** successful mutation only. Do not log page views / polling / hover.
+Le routing **contextuel** (state machine) a priorité sur le LLM pour : sélection de créneau, OUI/NON confirmation, sélection multi-RDV, annulation.
 
 ---
 
-## 9. Key backend modules
+## 9. Modules backend clés
 
-### CRM core (`src/crm/`)
+| Module | Rôle |
+|--------|------|
+| `appointment-slots.js` | Disponibilité partagée Agenda ↔ bot |
+| `availability-flow.js` | Flow WhatsApp « créneaux disponibles » |
+| `appointment-confirmation.js` | Rappels 24h + confirmation / multi-sélection |
+| `appointment-selection.js` | Parser `1` / `2` / noms / multi |
+| `whatsapp-cancel.js` | Annulation patient |
+| `slot-proposals.js` | Propositions staff |
+| `manual-appointment-flow.js` | RDV dashboard + WhatsApp |
+| `cabinet-settings.js` | Paramètres métier persistés |
+| `contact-patients.js` | Contact ↔ plusieurs patients |
+| `whatsapp-identity.js` | LID / téléphone / routage envoi |
+| `workflow.js` | Collecte booking CRM |
+| `knowledge-prompt.js` | Knowledge live pour l’Assistant |
+| `activity-history.js` | Journal d’audit |
 
-- Booking workflow, extraction, working hours, repository.
-- Tables: `customers`, `appointments`, `dental_cases`, `conversation_logs`.
-- Manual create/update/delete appointments in `index.js` must pass `getAuthenticatedActor(req.dashboardUser)` into `recordActivity`.
+---
 
-### Smart CRM (`src/crm/smart/`)
+## 10. Données & stockage local
 
-| Module | Purpose |
+| Chemin | Contenu |
 |--------|---------|
-| `index.js` | Orchestrator: conversations, messages, tasks, settings, today KPIs |
-| `activity-history.js` | Append-only audit journal + CSV + actor filters |
-| `activity-actors.js` | Actor helpers — `dashboard_user` \| `assistant_ai` only |
-| `cabinet-settings.js` | Appointments / reminders / automations / security / notifications |
-| `analytics-board.js` | Period-scoped KPIs, daily series, intents (FR labels) |
-| `patients-board.js` | Patient list, search, context drawer |
-| `followups-board.js` | Relances categories, manual remind, validation |
-| `agenda-board.js` | Agenda view, practitioners, types |
-| `appointment-confirmation.js` | 24h confirmation, followups, WhatsApp confirm/cancel |
-| `whatsapp-cancel.js` | Patient self-cancel with OUI/NON |
-| `slot-proposals.js` | Manual/auto slot proposal; accept/decline |
-| `slot-release-notifications.js` | Bell on cancellation only |
-| `contact-resolver.js` | WhatsApp identity ↔ phone ↔ patient |
-| `conversation-context.js` | Intent/summary for Messages panel |
-| `conversation-language.js` | Active language per chat |
-| `conversation-routing.js` | Context routing vs booking |
-| `labels.js` | French UI labels |
-
-### Dashboard API (`src/dashboard/smart-routes.js`)
-
-Mounted under `/dashboard/api/` (dashboard session + permission).
-
-Key routes:
-
-- `GET /today`, `GET /search`
-- `GET|POST /conversations`, handoff, messages, media
-- `GET|POST /patients`, notes, tags, context
-- `GET /agenda`, slot proposals, moves
-- `GET /followups`, `POST /followups/remind`, validate-all
-- `GET /analytics?days=`
-- `GET|PATCH /assistant`, `PUT /knowledge`
-- `GET /integrations` (WhatsApp metadata only)
-- `GET|PUT /settings/*` (appointments, reminders, automations, security, notifications)
-- `GET /notifications`, read/mark-all
-- `GET /history`, `GET /history/actors`, `GET /history/export.csv`, `GET /history/:id`
-
-Users (`user-routes.js`, `MANAGE_USERS`):
-
-- `GET /permissions`, `GET|POST /users`, `PATCH /users/:id`, permissions, reset-password, disable/enable, delete
-
-WhatsApp instance (`index.js`):
-
-- `GET|POST /dashboard/api/instances`
-- `GET|POST /dashboard/api/instances/:id/qr`
-- `DELETE /dashboard/api/instances/:id`
-
-CRM appointments (`index.js`):
-
-- `POST /dashboard/api/crm/appointments` — create + audit
-- `PATCH /dashboard/api/crm/appointments/:id` — update/confirm/cancel + audit
-- `DELETE /dashboard/api/crm/appointments/:id` — delete + audit
-
-### Voice NLU (`src/voice-nlu/`)
-
-- Language detection, intent classification, intent router, dental-problem classifier, NLU fallback.
+| `whatsapp/storage/crm.sqlite` | CRM + Smart CRM + users + history |
+| `whatsapp/storage/sessions/` | Session WhatsApp LocalAuth |
+| `whatsapp/storage/ai-conversations.json` | Mémoire LLM |
+| `whatsapp/storage/dashboard-sessions.json` | Sessions dashboard |
+| `whatsapp/.env` | Secrets (jamais commit) |
 
 ---
 
-## 10. Analytics KPI definitions (reference)
-
-| KPI | Formula |
-|------|---------|
-| Messages patients | inbound `messages` in period |
-| Traitement auto % | AI outbound replies ÷ inbound messages × 100 |
-| RDV créés | `appointments.created_at` in period |
-| Taux confirmation | cohort: created in period & now `confirmed` ÷ created × 100 |
-| Confirmations auto | `confirmation_source = whatsapp_patient` |
-| Créneaux récupérés | cancelled slot later filled by another active appointment |
-| Handoff rate | `handoff_to_human` ÷ conversations touched (backend; not shown on Analyses UI) |
-| Graph | daily created + confirmed, zero-fill missing days, timezone local |
-
----
-
-## 11. How to run locally
+## 11. Lancer en local
 
 ```powershell
-cd "whatsapp"
+cd whatsapp
 npm install
-# copy .env.example → .env and set OPENAI_API_KEY
+# .env avec OPENAI_API_KEY
 npm start
 ```
 
-Dashboard build (after UI changes):
+Dashboard : `http://127.0.0.1:8081/dashboard`  
+Rebuild UI : `npm run build:dashboard` puis relancer `npm start`.
+
+### Tests utiles
 
 ```powershell
-npm run build:dashboard
-# restart npm start to serve new static files
-```
-
-Useful tests:
-
-```powershell
-npm run test:crm
-npm run test:intent-router
-npm run test:darija-nlu
-npm run test:history
-npm run test:dashboard-auth
-npm run test:analytics
-npm run test:followups
-npm run test:patients
-npm run test:whatsapp-cancel
-npm run test:agenda
+npm run test:chatbot-availability-flow
+npm run test:multi-appointment-selection
 npm run test:appointment-confirmation
-npm run test:manual-slot-proposal
+npm run test:whatsapp-cancel
+npm run test:whatsapp-identity
+npm run test:agenda
+npm run test:multi-patient-contact
+npm run test:history
+npm run test:crm
 ```
 
-Also: `test:dashboard-rbac`, `test:cabinet-settings`, `test:notification-sound` (scripts in `whatsapp/scripts/`).
+Un seul process bot sur le port **8081**.
 
-Service listens on **`:8081`**. Only **one** bot process at a time.
+### Déploiement
 
-### Reset CRM data (dev)
-
-Stop server → backup & delete `storage/crm.sqlite*` → reset `ai-conversations.json` (UTF-8 **without BOM**) and `dashboard-sessions.json` → keep `sessions/` (WhatsApp) and `dashboard-auth.json` → restart. Backups go to `storage/backups/crm-reset-*`. Admin is re-bootstrapped from legacy auth.
+- Historique : Railway (`chatbot-hel.up.railway.app`).
+- Scripts Hetzner / Docker : `docker-compose.yml`, `scripts/deploy-direct.ps1`.
 
 ---
 
-## 12. Environment (main variables)
+## 12. Variables d’environnement (principales)
 
-See `whatsapp/.env.example`. Critical ones:
+Voir `whatsapp/.env.example` :
 
-- `OPENAI_API_KEY` — required for chat + transcription
-- `CHATBOT_MODE=standalone`
+- `OPENAI_API_KEY` — chat + Whisper
 - `CRM_ENABLED=true`
 - `CRM_DB_PATH=./storage/crm.sqlite`
 - `AI_REPLY_TO_AUDIO=true`
 - `AI_VOICE_NLU_ENABLED=true`
 - `AI_KNOWLEDGE_PATH=./src/knowledge/centre-dentaire-hel.md`
-- `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` (legacy bootstrap)
-- `DASHBOARD_AUTH_PATH=./storage/dashboard-auth.json`
 - `PORT=8081`
-
-**Never commit `.env` or API keys.** Never store passwords in History (only « mot de passe mis à jour »).
-
----
-
-## 13. Design / product constraints for AI agents
-
-When modifying this project:
-
-1. Prefer **minimal, targeted diffs** — do not refactor unrelated files.
-2. Booking templates (form / summary / confirmation) must stay **exact** — no AI rewrite.
-3. Darija replies = **Arabic script only**.
-4. Full name requires **two words** (first + last).
-5. Do not open the booking form for weak service mentions or random voice notes.
-6. Use HEL design tokens (Navy `#12324A`, Cyan `#13AEC1`, Manrope).
-7. **No raw backend enums in UI** (`BOOK_APPOINTMENT`, `connected`, `needs_configuration`, `dashboard_user` as raw chip, etc.).
-8. Analytics KPIs must come from **real backend data** — no fake trends.
-9. Integrations page: show **only actually usable** integrations (currently WhatsApp).
-10. Bell notifications **only on cancellation**.
-11. Multi-patient: never assume phone = single patient; never convert `@lid` to a phone.
-12. **History « Exécuté par »:** only a real dashboard account **or** « Assistant IA ». Never Patient / Système / Équipe.
-13. Dashboard mutations: actor from **session**, never from client body.
-14. History is **append-only**; no edit/delete events in the dashboard.
-15. Commit only when the user asks; do not force-push unless explicitly requested.
+- Auth dashboard (bootstrap legacy) : `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD`
 
 ---
 
-## 14. Recent changes log (Aug 2026)
+## 13. Contraintes pour un agent / développeur IA
 
-| Area | Change |
-|------|--------|
-| **Historique** | Audit journal: actor = `dashboard_user` \| `assistant_ai`; origin separate; legacy Patient/Système/Équipe remapped |
-| **RBAC** | Admin / secretary, `dashboard_users`, permission routes, Users section in Paramètres |
-| **Auth** | AccountSelector login; idle session; session TTL from cabinet settings |
-| **Paramètres** | 6 sections: users, appointments, reminders, automations, security, notifications |
-| **Notifications** | Sound via NotificationContext (new IDs, not unread count); settings toggle |
-| **Analyses** | 4 KPIs, period filter, real daily chart |
-| **Assistant IA** | Simplified UI; Capacités / Garde-fous / Journal hidden |
-| **Intégrations** | WhatsApp-only |
-| **Automatisations** | Page removed; still in backend + Paramètres |
-| **Relances / Patients** | Boards + drawers, multi-patient safe |
-| **WhatsApp cancel** | Self-cancel with OUI/NON; audit as Assistant IA |
-| **Notifications bell** | Cancellation only |
-| **CRM reset** | Wipe `crm.sqlite` with backup; keep WA session + login |
+1. Diffs **minimales** et ciblées.
+2. Templates booking / listes / confirmations = texte **exact**, pas de réécriture LLM.
+3. Réponses darija = **arabe script**.
+4. Nom complet = **prénom + nom** (au moins 2 mots).
+5. Ne pas ouvrir le formulaire booking sur une simple mention de soin.
+6. Tokens HEL (Navy / Cyan / Manrope).
+7. Pas d’enums bruts dans l’UI.
+8. Analytics = données réelles uniquement.
+9. Notifications cloche : surtout annulations.
+10. Multi-patient + anti-mélange RDV : règles non négociables.
+11. Historique « Exécuté par » : dashboard user **ou** Assistant IA.
+12. Actor dashboard depuis la **session**, jamais le body client.
+13. **Aucun créneau inventé** — toujours `getBookableSlotsForDate` / Agenda.
+14. Commit / push uniquement si l’utilisateur le demande.
 
 ---
 
-## 15. One-sentence summary
+## 14. Journal des évolutions récentes (août–septembre 2026)
 
-**ChatBot HEL is a Node.js WhatsApp dental clinic assistant (JS + OpenAI + WhatsApp Web) with Darija/French NLU, SQLite Smart CRM, RBAC dashboard users, an append-only audit History (dashboard user or Assistant IA), and a React/TypeScript dashboard for messages, agenda, patients, relances, analytics, settings, and WhatsApp.**
+| Domaine | Évolution |
+|---------|-----------|
+| **Disponibilités WhatsApp** | Intent + demande date + liste complète créneaux + choix n°/heure + reprise booking |
+| **Moteur créneaux** | `getBookableSlotsForDate` partagé Agenda ↔ chatbot + settings |
+| **Confirmation multi-RDV** | Snapshot candidats, parser index/nom/multi, plus de boucle « حدد شكون » |
+| **Identité WA** | Gestion LID Android, téléphone réel, Intégrations « ready » |
+| **RDV manuel** | Confirmation WhatsApp depuis dashboard |
+| **Knowledge** | Assistant branché sur knowledge DB live |
+| **Historique / RBAC** | Audit dashboard_user \| assistant_ai ; users & permissions |
+| **Paramètres** | RDV, rappels, automations, sécurité, notifications |
+| **Annulation patient** | Flow OUI/NON + cloche créneau libéré |
+| **UI** | Assistant simplifié ; Intégrations WhatsApp-only |
+
+---
+
+## 15. Résumé en une phrase
+
+**ChatBot HEL est un assistant WhatsApp dentaire (Node.js + OpenAI + WhatsApp Web) qui réserve et confirme des rendez-vous en français/darija, affiche les vraies disponibilités du cabinet, gère les familles multi-patients, et s’accompagne d’un Smart CRM React (agenda, relances, historique audité, RBAC) pour le Centre Dentaire HEL.**
+
+---
+
+## 16. Phrase de validation produit
+
+> Quand un patient demande les rendez-vous disponibles, le chatbot lui demande le jour et le mois s’ils ne sont pas déjà précisés, récupère tous les vrais créneaux de cette journée depuis le même moteur que l’Agenda, les affiche clairement, permet de choisir par numéro ou par heure, puis continue la réservation sans perdre les informations déjà collectées.  
+> Quand plusieurs RDV sont à confirmer sur le même WhatsApp, `1`, `2`, un nom ou une sélection multiple sont compris immédiatement, sans répéter la liste et sans mélanger les patients.

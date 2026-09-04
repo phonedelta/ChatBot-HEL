@@ -6,12 +6,19 @@
  */
 
 const { CLINIC_SERVICES } = require('./transcript-interpreter')
+const {
+  normalizeDarijaForNlu,
+  classifyIntentFromConcepts,
+  logDarijaNlu,
+} = require('./darija-normalizer')
 
 const INTENT_NAMES = [
   'ASK_SERVICES',
   'BOOK_APPOINTMENT',
   'CANCEL_APPOINTMENT',
   'RESCHEDULE_APPOINTMENT',
+  'CHECK_APPOINTMENT_AVAILABILITY',
+  'LIST_MY_APPOINTMENTS',
   'ASK_PRICE',
   'ASK_LOCATION',
   'ASK_OPENING_HOURS',
@@ -45,11 +52,16 @@ const INTENT_DICTIONARY = {
       // Darija latin
       'chno homa les service',
       'chno homa les services',
-      'chno kayn',
+      // Avoid bare "chno kayn" alone — ambiguous with availability
       'chno kaynin',
       'chno kaynin mn service',
       'chno kaynin mn services',
+      'chno kayn 3andkom',
+      'chno kayn 3ndkom',
       'ach katdirou',
+      'wach katdiro',
+      'wach katdirou',
+      'wach katdiro implant',
       'ach kat9edmo',
       'chno kat9edmo',
       'chno kat9ademo',
@@ -69,23 +81,24 @@ const INTENT_DICTIONARY = {
       'شنو عندكم',
       'شنو الخدمات',
       'شنو كتقدمو',
-      'شنو كاين',
       'شنو كاينين',
       'الخدمات',
       'ما هي خدماتكم',
       'اش كتديرو',
+      'واش كتديرو',
     ],
     keywords: [
       'services', 'service', 'serviss', 'servis', 'prestations', 'soins',
-      'traitements', 'interventions', 'خدمات', 'خدمة', 'katdirou', 'kat9edmo',
+      'traitements', 'interventions', 'خدمات', 'خدمة', 'katdirou', 'katdiro', 'kat9edmo',
       'kat9ademo', 'kaynin', 'chno homa',
     ],
   },
   BOOK_APPOINTMENT: {
     phrases: [
-      'bghit rendez-vous', 'bghit rdv', 'nakhod rdv', 'bghit nji',
+      'bghit rendez-vous', 'bghit rdv', 'nakhod rdv', 'bghit nakhod rdv', 'bghit nji',
+      'brit rdv', 'baghi rdv', 'khasni rdv', '3afak bghit rdv',
       'prendre rendez-vous', 'je veux un rendez-vous', 'je voudrais un rdv',
-      'بغيت موعد', 'نبغي نجي',
+      'بغيت موعد', 'بغيت ناخد موعد', 'نبغي نجي',
       'bghit n7yed derssa', 'bghit n7yed ders', 'bghit n9ala3 ders', 'bghit extraction',
       'bghit nettoyage', 'bghit tn9iya', 'bghit blanchiment', 'bghit tabyid',
       'bghit appareil', 'bghit ta9wim', 'bghit implant',
@@ -98,43 +111,106 @@ const INTENT_DICTIONARY = {
   },
   CANCEL_APPOINTMENT: {
     phrases: [
-      'annuler mon rendez-vous', 'bghit nalghi rdv', 'نبغي نلغي الموعد',
+      'annuler mon rendez-vous', 'bghit nalghi rdv', 'bghit nlghi rdv', 'نبغي نلغي الموعد',
+      'بغيت نلغي الموعد', 'annuler lia rdv', 'annuler lia rendez-vous',
       'cancel appointment', 'annuler rdv', 'je veux annuler',
       'je ne pourrai pas venir', 'je ne peux pas venir',
-      'pouvez-vous annuler', 'je souhaite annuler',
+      'pouvez-vous annuler', 'je souhaite annuler', 'ma9darch nji',
     ],
-    keywords: ['annuler', 'annulation', 'cancel', 'نلغي', 'nlrgi', 'nalghi'],
+    keywords: ['annuler', 'annulation', 'cancel', 'نلغي', 'nlrgi', 'nalghi', 'nlghi'],
+  },
+  CHECK_APPOINTMENT_AVAILABILITY: {
+    phrases: [
+      'chno les rendez-vous disponibles',
+      'chno les rdv disponibles',
+      'chno les creneaux disponibles',
+      'chno les créneaux disponibles',
+      'chno kayn disponible',
+      'chno kayn mn rendez-vous',
+      'chno kayn mn rdv',
+      'chno kayn ghdda',
+      'chno kayn ghedda',
+      'wach kayn chi blassa',
+      'wach kayn chi rdv',
+      'wach disponible',
+      'je veux nchof chno kayn',
+      'bghit nchof les disponibilites',
+      'bghit nchof les disponibilités',
+      '3andkom chi rendez-vous disponible',
+      '3andkom chi rdv disponible',
+      'bghit nchof les horaires disponibles',
+      'quels creneaux sont disponibles',
+      'quels créneaux sont disponibles',
+      'quelles sont vos disponibilites',
+      'quelles sont vos disponibilités',
+      'quels sont les rendez-vous disponibles',
+      'rendez vous disponibles',
+      'horaires disponibles',
+      'المواعيد المتوفرة',
+      'شنو المواعيد المتوفرة',
+      'شنو كاين من موعد',
+      'واش كاين شي موعد',
+      'واش كاين شي بلاصة',
+    ],
+    keywords: [
+      'disponible', 'disponibles', 'disponibilite', 'disponibilité', 'dispo',
+      'متوفر', 'متوفرة', 'créneaux', 'creneaux', 'blassa',
+    ],
+  },
+  LIST_MY_APPOINTMENTS: {
+    phrases: [
+      'chno les rendez-vous dyali',
+      'chno les rdv dyali',
+      'chno rdv dyali',
+      'wach 3ndi chi rdv',
+      'wach 3andi chi rdv',
+      'bghit nchof rendez-vous dyali',
+      'mes rendez-vous',
+      'mes rdv',
+      'مواعيدي',
+      'شنو مواعيدي',
+      'شنو المواعيد ديالي',
+      'my appointments',
+    ],
+    keywords: ['dyali', 'مواعيدي', 'mes rdv', 'ديالي'],
   },
   RESCHEDULE_APPOINTMENT: {
     phrases: [
       'reporter mon rendez-vous', 'changer mon rdv', 'bghit nbddl rdv',
-      'نبدل الموعد', 'reschedule',
+      'bghit nbdl lheure', 'bghit nbdl lwa9t', 'momkin n7wel rdv',
+      'نبدل الموعد', 'بغيت نبدل الموعد', 'reschedule', 'changer mon rendez-vous',
+      'reporter mon rdv',
     ],
-    keywords: ['reporter', 'reschedule', 'nbddl', 'نبدل', 'changer rdv'],
+    keywords: ['reporter', 'reschedule', 'nbddl', 'nbdl', 'نبدل', 'changer rdv', 'n7wel'],
   },
   ASK_PRICE: {
     phrases: [
-      'ch7al taman', 'combien ca coute', 'quel est le prix', 'بشحال',
+      'ch7al taman', 'ch7al taman detartrage', 'combien ca coute', 'combien detartrage',
+      'quel est le prix', 'بشحال',
     ],
     keywords: ['prix', 'taman', 'ثمن', 'combien', 'ch7al', 'chhal', 'cout', 'coût'],
   },
   ASK_LOCATION: {
     phrases: [
-      'fin kayn cabinet', 'ou se trouve', 'votre adresse', 'فين كاين',
+      'fin kayn cabinet', 'fin kaynin', 'fin jay cabinet', '3tini localisation',
+      'ou se trouve', 'votre adresse', 'فين كاين', 'فين كاين المركز',
     ],
-    keywords: ['adresse', 'localisation', 'fin', 'فين', 'parking', 'où', 'ou'],
+    keywords: ['adresse', 'localisation', 'فين', 'parking', 'où'],
   },
   ASK_OPENING_HOURS: {
     phrases: [
-      'quels sont vos horaires', 'wa9t ouverture', 'وقت العمل',
+      'quels sont vos horaires', 'chno les horaires', 'chno les horaires dyalkom',
+      'fo9ach kat7ello', 'wa9t ouverture', 'wach halin sebt',
+      'وقت العمل', 'وقتاش كتحلو', 'واش حالين',
     ],
-    keywords: ['horaire', 'horaires', 'ouvert', 'ouverture', 'wa9t', 'وقت'],
+    keywords: ['horaire', 'horaires', 'ouvert', 'ouverture', 'wa9t', 'وقت', 'fo9ach', 'kat7ello'],
   },
   DENTAL_PAIN: {
     phrases: [
-      'kan wje3ni dersi', 'j ai mal aux dents', 'عندي وجع',
+      'kan wje3ni dersi', '3ndi wja3 f drssa', '3andi wja3', 'darsa katwja3ni',
+      'j ai mal aux dents', 'عندي وجع', 'عندي وجع فالضرس',
     ],
-    keywords: ['wje3', 'waj3', 'وجع', 'douleur', 'mal', '7ri9', 'hri9'],
+    keywords: ['wje3', 'wja3', 'waj3', 'وجع', 'douleur', 'mal', '7ri9', 'hri9'],
   },
   DENTAL_EMERGENCY: {
     phrases: [
@@ -143,12 +219,12 @@ const INTENT_DICTIONARY = {
     keywords: ['urgence', 'urgent', 'mosta3jel', 'مستعجل', 'nafkha', 'waram', 'طوارئ'],
   },
   GREETING: {
-    phrases: ['salam', 'bonjour', 'bonsoir', 'السلام عليكم'],
-    keywords: ['salam', 'سلام', 'bonjour', 'bonsoir', 'hello', 'hi'],
+    phrases: ['salam', 'slm', 'salam 3likom', 'bonjour', 'bonsoir', 'السلام عليكم', 'سلام عليكم'],
+    keywords: ['salam', 'slm', 'سلام', 'bonjour', 'bonsoir', 'hello', 'hi'],
   },
   THANKS: {
-    phrases: ['merci beaucoup', 'choukran', 'شكرا'],
-    keywords: ['merci', 'choukran', 'شكرا', 'thanks'],
+    phrases: ['merci beaucoup', 'merci bzaf', 'choukran', 'chokran', 'lah y3tik sa7a', 'شكرا'],
+    keywords: ['merci', 'choukran', 'chokran', 'شكرا', 'thanks'],
   },
 }
 
@@ -223,57 +299,128 @@ function scoreIntent(text, dict) {
  */
 function askServicesBoost(text) {
   let boost = 0
-  const asksWhat = /\b(chno|ach|شنو|اش|quels?|quelle|quoi|what)\b/i.test(text)
-  const hasServiceWord = /\b(service|services|serviss|servis|soins|prestations|traitements|خدمات|خدمة)\b/i.test(text)
-  const hasOfferVerb = /\b(katdirou|kat9edmo|kat9ademo|katkedmo|kayn|kaynin|3andkom|3ndkom|proposez|disponibles?|كتقدمو|عندكم|كاينين)\b/i.test(text)
+  const asksWhat = /\b(chno|ach|wach|wash|شنو|اش|واش|quels?|quelle|quoi|what)\b/i.test(text)
+  const hasServiceWord = /\b(service|services|serviss|servis|soins|prestations|traitements|خدمات|خدمة|implant|appareil|detartrage|orthodont)\b/i.test(text)
+  const hasOfferVerb = /\b(katdirou|katdiro|kat9edmo|kat9ademo|katkedmo|kayn|kaynin|3andkom|3ndkom|proposez|disponibles?|كتقدمو|كتديرو|عندكم|كاينين)\b/i.test(text)
   const wantsToKnow = /\b(bghit n3ref|bghit n3raf|n3ref|n3raf|بغيت نعرف|نعرف)\b/i.test(text)
+
+  // Availability of slots ≠ list of services
+  if (
+    /\b(blassa|créneau|creneau|disponible|ghdda|ghedda)\b/i.test(text)
+    && /\b(rdv|rendez|موعد|kayn)\b/i.test(text)
+    && !/\b(service|services|soins|خدمات)\b/i.test(text)
+  ) {
+    return 0
+  }
 
   if (asksWhat && hasServiceWord) boost += 0.35
   if (asksWhat && hasOfferVerb) boost += 0.3
   if (hasServiceWord && hasOfferVerb) boost += 0.28
   if (wantsToKnow && (hasServiceWord || hasOfferVerb)) boost += 0.25
   if (/\bli kaynin\b|\bf had centre\b|\bles soins disponibles\b/i.test(text)) boost += 0.2
+  if (/\b(wach|wash)\s+katdiro/i.test(text)) boost += 0.35
 
   return Math.min(0.45, boost)
 }
 
 /**
  * Classify patient intent from text (and optional voice hints).
+ * Uses Darija normalization + concept scoring before phrase dictionary.
  * @param {string} rawText
- * @param {{ voiceIntent?: string|null, interpreterIntent?: string|null }} [options]
- * @returns {{ intent: string, confidence: number, matched: string|null, matchType: string|null }}
+ * @param {{ voiceIntent?: string|null, interpreterIntent?: string|null, stage?: string|null }} [options]
+ * @returns {{ intent: string, confidence: number, matched: string|null, matchType: string|null, nlu?: object }}
  */
 function classifyIntent(rawText, options = {}) {
-  const text = normalizeIntentText(rawText)
-  if (!text) {
+  const darija = normalizeDarijaForNlu(rawText, { stage: options.stage || null })
+  const text = normalizeIntentText(darija.normalizedText || rawText)
+  const rawNorm = normalizeIntentText(rawText)
+  if (!text && !rawNorm) {
     return { intent: 'OTHER', confidence: 0, matched: null, matchType: null }
   }
 
   /** @type {{ intent: string, confidence: number, matched: string|null, matchType: string|null }} */
   let best = { intent: 'OTHER', confidence: 0, matched: null, matchType: null }
 
-  for (const intentName of INTENT_NAMES) {
-    if (intentName === 'OTHER') continue
-    const dict = INTENT_DICTIONARY[intentName]
-    if (!dict) continue
-    const scored = scoreIntent(text, dict)
-    let confidence = scored.score
-
-    if (intentName === 'ASK_SERVICES') {
-      confidence = Math.min(0.99, confidence + askServicesBoost(text))
-      // Guard: "service" alone inside booking sentence should not win.
-      if (/\b(rdv|rendez|موعد|nakhod|nji)\b/i.test(text) && !askServicesBoost(text)) {
-        confidence *= 0.4
-      }
+  // Phrase-level concept rules (Darija Arabizi / AR / mixed)
+  const conceptHit = classifyIntentFromConcepts(darija.concepts, darija.normalizedText)
+  if (conceptHit && conceptHit.confidence >= 0.86) {
+    best = {
+      intent: conceptHit.intent,
+      confidence: conceptHit.confidence,
+      matched: conceptHit.matched,
+      matchType: 'darija_concepts',
     }
+  }
 
-    // Prefer phrase matches globally over weak keyword noise.
-    if (confidence > best.confidence) {
-      best = {
-        intent: intentName,
-        confidence: Number(confidence.toFixed(3)),
-        matched: scored.matched,
-        matchType: scored.matchType,
+  // Score dictionary on both normalized + raw (FR phrases still match raw)
+  for (const sourceText of [...new Set([text, rawNorm].filter(Boolean))]) {
+    for (const intentName of INTENT_NAMES) {
+      if (intentName === 'OTHER') continue
+      const dict = INTENT_DICTIONARY[intentName]
+      if (!dict) continue
+      const scored = scoreIntent(sourceText, dict)
+      let confidence = scored.score
+
+      if (intentName === 'ASK_SERVICES') {
+        confidence = Math.min(0.99, confidence + askServicesBoost(sourceText))
+        if (/\b(rdv|rendez|موعد|nakhod|nji)\b/i.test(sourceText) && !askServicesBoost(sourceText)) {
+          confidence *= 0.4
+        }
+        if (
+          /\b(disponible|disponibles|disponibilite|dispo|متوفر|créneau|creneau|horaire|blassa|kayn)\b/i.test(sourceText)
+          && /\b(rendez|rdv|موعد|créneau|creneau|horaire|blassa)\b/i.test(sourceText)
+          && !/\b(service|services|soins|خدمات)\b/i.test(sourceText)
+        ) {
+          confidence *= 0.25
+        }
+      }
+
+      if (intentName === 'CHECK_APPOINTMENT_AVAILABILITY') {
+        if (
+          /\b(disponible|disponibles|dispo|متوفر|متوفرة|blassa|kayn)\b/i.test(sourceText)
+          && /\b(rendez|rdv|موعد|créneau|creneau|horaire|سوايع|blassa|ghdda|lyoum)\b/i.test(sourceText)
+        ) {
+          confidence = Math.max(confidence, 0.92)
+        }
+        if (/\bwash?\s+kayn\s+chi\b/i.test(sourceText) || /\bchno\s+kayn\b/i.test(sourceText)) {
+          if (!/\bdyali\b/i.test(sourceText)) confidence = Math.max(confidence, 0.9)
+        }
+        if (/\b(dyali|mes\s+rendez|مواعيدي)\b/i.test(sourceText)) {
+          confidence = 0
+        }
+      }
+
+      if (intentName === 'LIST_MY_APPOINTMENTS') {
+        if (/\b(dyali|mes\s+rendez|mes\s+rdv|مواعيدي|3ndi\s+chi\s+rdv)\b/i.test(sourceText)) {
+          confidence = Math.max(confidence, 0.93)
+        }
+      }
+
+      if (intentName === 'BOOK_APPOINTMENT') {
+        if (/\b(bghit|brit|baghi|بغيت).{0,30}\b(rdv|rendez|موعد|nakhod)\b/i.test(sourceText)) {
+          confidence = Math.max(confidence, 0.93)
+        }
+      }
+
+      if (intentName === 'ASK_OPENING_HOURS') {
+        if (/\bfo9ach\b|\bkat7ell/i.test(sourceText) || /وقتاش|حالين/.test(sourceText)) {
+          confidence = Math.max(confidence, 0.9)
+        }
+      }
+
+      if (intentName === 'ASK_LOCATION') {
+        if (/\bfin\s+kayn/i.test(sourceText) || /فين\s*كاين/.test(sourceText)) {
+          confidence = Math.max(confidence, 0.92)
+        }
+      }
+
+      if (confidence > best.confidence) {
+        best = {
+          intent: intentName,
+          confidence: Number(confidence.toFixed(3)),
+          matched: scored.matched,
+          matchType: scored.matchType || 'dictionary',
+        }
       }
     }
   }
@@ -305,10 +452,33 @@ function classifyIntent(rawText, options = {}) {
   }
 
   if (best.confidence < 0.45) {
-    return { intent: 'OTHER', confidence: best.confidence, matched: best.matched, matchType: best.matchType }
+    logDarijaNlu({
+      raw: rawText,
+      normalized: darija.normalizedText,
+      intent: 'OTHER',
+      source: 'low_confidence',
+      confidence: best.confidence,
+      concepts: darija.concepts,
+    })
+    return {
+      intent: 'OTHER',
+      confidence: best.confidence,
+      matched: best.matched,
+      matchType: best.matchType,
+      nlu: darija,
+    }
   }
 
-  return best
+  logDarijaNlu({
+    raw: rawText,
+    normalized: darija.normalizedText,
+    intent: best.intent,
+    source: best.matchType,
+    confidence: best.confidence,
+    concepts: darija.concepts,
+  })
+
+  return { ...best, nlu: darija }
 }
 
 /**

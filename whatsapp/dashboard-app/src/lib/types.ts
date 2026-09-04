@@ -35,7 +35,14 @@ export interface WaInstance {
   managed?: boolean
   stored_session?: boolean
   can_connect?: boolean
+  connected?: boolean
   phone_number?: string | null
+  phone_resolved?: boolean
+  account?: {
+    phone?: string | null
+    resolved?: boolean
+    jid_type?: string | null
+  }
   lastSeenAt?: string | null
   lastError?: string | null
   qrCreatedAt?: string | null

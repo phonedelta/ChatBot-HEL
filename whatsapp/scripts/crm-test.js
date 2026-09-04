@@ -106,7 +106,7 @@ async function run() {
       'Téléphone : 0612345678',
       'Ville : Casablanca',
       'Problème : Douleur à la molaire droite',
-      'Rendez-vous : 30/07/2026 à 15:30',
+      'Rendez-vous : 17/09/2026 à 15:30',
     ].join('\n'),
     languageHint: 'fr',
   })
@@ -176,7 +176,7 @@ async function run() {
       '0602269408',
       'Casablanca',
       'Bghit ndir détartrage',
-      '28/08/2026 12:00',
+      '18/09/2026 12:00',
     ].join('\n'),
     languageHint: 'darija',
   })
@@ -229,7 +229,7 @@ async function run() {
       'Sara Alaoui',
       'Rabat',
       'douleur dentaire',
-      '31/07/2026 à 10:30',
+      '18/09/2026 à 10:30',
     ].join('\n'),
     languageHint: 'fr',
   })
@@ -314,7 +314,7 @@ async function run() {
       'Téléphone : 0611112233',
       'Ville : Rabat',
       'Problème : contrôle',
-      'Rendez-vous : 02/08/2026 à 11:00',
+      'Rendez-vous : 20/09/2026 à 11:00',
     ].join('\n'),
     languageHint: 'fr',
   })
@@ -333,7 +333,7 @@ async function run() {
       'Téléphone : 0611112233',
       'Ville : Rabat',
       'Problème : contrôle',
-      'Rendez-vous : 01/08/2026 à 15:00',
+      'Rendez-vous : 19/09/2026 à 15:00',
     ].join('\n'),
     languageHint: 'fr',
   })
@@ -582,7 +582,7 @@ async function run() {
       'Téléphone : 0611112233',
       'Ville : Rabat',
       'Problème : contrôle',
-      'Rendez-vous : 30/07/2026 à 15:30',
+      'Rendez-vous : 17/09/2026 à 14:00',
     ].join('\n'),
     languageHint: 'fr',
   })
@@ -634,7 +634,7 @@ async function run() {
   await crm.processCrmTurn({
     conversationId: convAll,
     chatId: '212677700014@c.us',
-    userText: 'mon numéro est 0612345678, je suis à Casablanca, jeudi 30/07/2026 à 11h00',
+    userText: 'mon numéro est 0612345678, je suis à Casablanca, jeudi 17/09/2026 à 11h00',
     languageHint: 'fr',
   })
   turn = await crm.processCrmTurn({
@@ -713,7 +713,7 @@ async function run() {
       'Téléphone : 0688889999',
       'Ville : Rabat',
       'Problème : contrôle',
-      'Rendez-vous : 30/07/2026 à 16:00',
+      'Rendez-vous : 17/09/2026 à 16:00',
     ].join('\n'),
     languageHint: 'fr',
   })

@@ -98,6 +98,22 @@ function isBookingConfirmNo(text) {
   return parseYesNoReply(text, { allowTypoYes: false }).value === 'no'
 }
 
+/** Explicit cancel of the *draft* booking request (not a plain NON / modify). */
+function isExplicitDraftCancelIntent(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return false
+  const n = normalizeConfirmationText(raw)
+  if (/^(non|no|nn|la|laa|لا|لاء)$/i.test(n)) return false
+  if (/\bannul(e|er|é|ee|ation)?\b/i.test(n)) return true
+  if (/\bcancel(l?er|lation)?\b/i.test(n)) return true
+  if (/\bsupprim(e|er|é)?\b/i.test(n)) return true
+  if (/\b(nlghi|nalghi|n\s*lghi|lghi)\b/i.test(n)) return true
+  if (/بغيت\s*نلغي|نلغي|تلغي|الغاء|إلغاء|ألغ|الغ/.test(raw)) return true
+  if (/ما\s*بغيتش\s*(هاد\s*)?(الموعد|الرنديفو|rendez)/.test(raw)) return true
+  if (/je\s+ne\s+veux\s+plus(\s+(le\s+)?(rendez|rdv|demande))?/i.test(n)) return true
+  return false
+}
+
 function parseRejectionChoice(text) {
   const raw = String(text || '').trim()
   const n = normalizeConfirmationText(raw)
@@ -381,22 +397,32 @@ function draftCancelConfirmMessage(language = 'fr') {
 }
 
 function unclearReplyCancelAskMessage(language = 'fr') {
+  // Legacy helper kept for explicit cancel confirmations only.
+  return draftCancelConfirmMessage(language)
+}
+
+function unclearSummaryClarifyMessage(language = 'fr') {
   if (isDarija(language)) {
     return [
-      'ما فهمتش الاختيار ديالك.',
+      'ما فهمتش شنو بغيتي تبدل.',
       '',
-      'واش بغيتي تلغي طلب الموعد؟',
-      '',
-      'جاوب بنعم ولا لا.',
+      'تقدر تكتب ليا الاسم، التلفون، المدينة، المشكل، النهار ولا الساعة باش نصححو،',
+      'ولا جاوب بـ *نعم* إلا كلشي صحيح.',
     ].join('\n')
   }
   return [
-    'Je n’ai pas compris votre choix.',
+    'Je n’ai pas compris ce que vous souhaitez modifier.',
     '',
-    'Voulez-vous annuler cette demande de rendez-vous ?',
-    '',
-    'Répondez OUI ou NON.',
+    'Indiquez le nom, téléphone, ville, motif, date ou heure à corriger,',
+    'ou répondez *OUI* si tout est correct.',
   ].join('\n')
+}
+
+function askFullNameAfterPartialCorrection(language = 'fr') {
+  if (isDarija(language)) {
+    return 'شكراً. عفاك صيفط ليا الاسم الكامل ديالك: الاسم والنسب.'
+  }
+  return 'Merci. Pouvez-vous m’envoyer votre prénom et votre nom complets ?'
 }
 
 function draftCancelledMessage(language = 'fr') {
@@ -413,7 +439,9 @@ function confirmationOuiNonFooter(language = 'fr') {
       '',
       'جاوب:',
       '• *نعم* باش تأكد الموعد',
-      '• *لا* باش تصحح شي معلومة ولا تلغي الطلب',
+      '• *لا* باش تصحح شي معلومة',
+      '',
+      'إلا بغيتي تلغي الطلب، كتب صراحة « بغيت نلغي ».',
     ].join('\n')
   }
   return [
@@ -421,7 +449,9 @@ function confirmationOuiNonFooter(language = 'fr') {
     '',
     'Répondez :',
     '• *OUI* pour confirmer',
-    '• *NON* pour modifier ou annuler',
+    '• *NON* pour modifier une information',
+    '',
+    'Pour annuler la demande, écrivez explicitement « annuler ».',
   ].join('\n')
 }
 
@@ -436,6 +466,7 @@ module.exports = {
   serializeCorrectionState,
   isStrictBookingConfirmYes,
   isBookingConfirmNo,
+  isExplicitDraftCancelIntent,
   parseRejectionChoice,
   parseFieldsToCorrect,
   parseFieldCorrectionValue,
@@ -445,6 +476,8 @@ module.exports = {
   fieldCorrectionRetry,
   draftCancelConfirmMessage,
   unclearReplyCancelAskMessage,
+  unclearSummaryClarifyMessage,
+  askFullNameAfterPartialCorrection,
   draftCancelledMessage,
   confirmationOuiNonFooter,
   outsideHoursRetry,

@@ -8,15 +8,16 @@
 
 const CONFIRM_YES_PATTERNS = [
   /^(oui+|ouais|ok+|okay|yes|yep|daccord|je confirme|confirm[ée]?|cest bon|vas y)$/i,
-  /^(نعم+|موافق|أكيد|اكيد|ايوا|أيوا|إيوا|واخا|تمام|صح|وا)$/i,
-  /^(iwa|iyeh|iyah|iwa+|wakha|ah|confirmi|confirm)$/i,
+  /^(نعم+|موافق|أكيد|اكيد|ايوا|أيوا|إيوا|واخا|تمام|صح|وا|ايه|آها)$/i,
+  /^(iwa|iyeh|iyah|iyeh+|iwa+|wakha|ah|aah|aaah|confirmi|confirm)$/i,
   /^(إيوا\s*نعم|ايوا\s*نعم|n?ak?d(?:\s*lmo3id|\s*lmow3id)?)$/i,
 ]
 
 const CONFIRM_NO_PATTERNS = [
   /^(non+|no|nn|pas|annule|annuler|annulé|annulee)$/i,
   /^(لا|لاء|ماشي|كانسل|الغ|ألغ|تعديل)$/i,
-  /^(la|laa|la2|lah)$/i,
+  /^(la|laa|lla|la2|lah|mabghitch|mabghitsh)$/i,
+  /^(مابغيتش|ما\s*بغيتش)$/i,
   /\b(pas possible|autre date|nest pas bon)\b/i,
   /^(non merci|je garde|finalement non)$/i,
 ]
@@ -93,12 +94,12 @@ function matchesAny(patterns, value) {
 }
 
 function isExactBinaryNoToken(normalized) {
-  return /^(la|laa|la2|lah|non|no|nn|لا|لاء)$/.test(normalized)
+  return /^(la|laa|lla|la2|lah|non|no|nn|لا|لاء|mabghitch|mabghitsh|مابغيتش)$/.test(normalized)
 }
 
 function isExactBinaryYesToken(normalized) {
-  if (/^(la|laa|la2|lah|non|no|nn|لا|لاء)$/.test(normalized)) return false
-  return /^(oui|ouais|ok|okay|yes|yep|wakha|iwa|iyeh|iyah|ah|نعم|ايوا|أيوا|واخا)$/.test(normalized)
+  if (/^(la|laa|lla|la2|lah|non|no|nn|لا|لاء)$/.test(normalized)) return false
+  return /^(oui|ouais|ok|okay|yes|yep|wakha|iwa|iyeh|iyah|ah|aah|نعم|ايوا|أيوا|واخا|ايه|وا)$/.test(normalized)
 }
 
 /** Common typos for "oui" in YES/NO contexts (slot proposal, confirmation). */
@@ -116,6 +117,14 @@ function parseYesNoReply(text, opts = {}) {
   const allowTypoYes = opts.allowTypoYes !== false
   const normalized = normalizeConfirmationText(text)
   if (!normalized) return { value: 'unknown', confidence: 0, reason: 'empty' }
+
+  // Complex intent (reschedule / cancel / book) → let router handle
+  if (
+    normalized.split(/\s+/).length >= 3
+    && /\b(bghit|brit|baghi|nbdl|n7wel|nlghi|annul|changer|reporter|walakin|mais)\b/i.test(normalized)
+  ) {
+    return { value: 'unknown', confidence: 0.25, reason: 'complex_intent' }
+  }
 
   if (isExactBinaryNoToken(normalized) || matchesAny(CONFIRM_NO_PATTERNS, normalized)) {
     return { value: 'no', confidence: isExactBinaryNoToken(normalized) ? 0.98 : 0.88, reason: 'binary_no' }
@@ -173,6 +182,15 @@ function parseBinaryConfirmation(input = {}) {
   // Never treat scheduling phrases as binary NO
   if (context === 'generic' && /\b(la semaine prochaine|la semaine|la prochaine)\b/i.test(normalized)) {
     return { value: 'unknown', confidence: 0, reason: 'scheduling_phrase' }
+  }
+
+  // "ah walakin bghit nbdl..." is not a blind YES
+  if (
+    normalized.split(/\s+/).length >= 3
+    && /\b(walakin|mais|bghit|nbdl|n7wel|nlghi|annul|changer)\b/i.test(normalized)
+    && context !== 'cancel_confirmation'
+  ) {
+    return { value: 'unknown', confidence: 0.25, reason: 'complex_intent' }
   }
 
   if (context === 'cancel_confirmation') {

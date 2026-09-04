@@ -8,6 +8,7 @@ const {
   weekdayFromIsoDate,
   toMinutes,
 } = require('../working-hours')
+const { getBookableSlotsForDate } = require('../appointment-slots')
 const {
   appointmentStatusLabel,
   WAITLIST_PRIORITY_LABELS,
@@ -184,10 +185,17 @@ function createAgendaBoard(deps) {
     listPractitioners,
     listAppointmentTypes,
     getSlotDurationMinutes = () => SLOT_MINUTES,
+    getAppointmentsSettings = null,
   } = deps
 
   function slotStep() {
     return Math.max(5, Number(getSlotDurationMinutes()) || SLOT_MINUTES)
+  }
+
+  function appointmentsSettings() {
+    return typeof getAppointmentsSettings === 'function'
+      ? getAppointmentsSettings()
+      : { slotDurationMinutes: slotStep() }
   }
 
   function loadAppointmentsInRange({ from, to, practitionerId = null, type = null, status = null }) {
@@ -340,23 +348,23 @@ function createAgendaBoard(deps) {
       }
     }
 
-    // Available slots (computed, not fake appointments)
+    // Available slots (same engine as WhatsApp availability)
     const availableSlots = []
     if (!status || status === 'all' || status === 'available') {
+      const settings = appointmentsSettings()
       for (const day of range.days) {
         if (!day.hours) continue
-        for (const time of buildSlotsForDay(day.date, step)) {
-          if (isSlotOccupied(occupied, day.date, time)) continue
-          // Skip past slots for today
-          if (day.date === todayLocal()) {
-            const now = new Date()
-            const nowMin = now.getHours() * 60 + now.getMinutes()
-            if ((toMinutes(time) || 0) < nowMin) continue
-          }
+        const bookable = getBookableSlotsForDate(db, day.date, {
+          durationMinutes: slotStep(),
+          appointmentsSettings: settings,
+          applyBookingRules: true,
+          practitionerId,
+        })
+        for (const time of bookable.times || []) {
           availableSlots.push({
             slot_date: day.date,
             slot_time: time,
-            duration_minutes: step,
+            duration_minutes: slotStep(),
             kind: 'available',
           })
         }

@@ -133,7 +133,11 @@ const CANONICAL_GROUPS = [
   },
   {
     canonical: 'annuler',
-    forms: ['annuler', 'annulation', 'cancel', 'نلغي', 'nlrgi', 'nbddl', 'نبدل', 'changer', 'reporter', 'nbdel'],
+    forms: ['annuler', 'annulation', 'cancel', 'نلغي', 'nlrgi', 'nalghi', 'nlghi'],
+  },
+  {
+    canonical: 'reporter',
+    forms: ['nbddl', 'nbdl', 'نبدل', 'changer', 'reporter', 'nbdel', 'n7wel', 'نحول', 'reschedule'],
   },
   {
     canonical: 'urgence',

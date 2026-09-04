@@ -15,6 +15,7 @@ const {
   classifyIntent,
   routePatientMessage,
   buildRouterLlmBlock,
+  classifyIntentSemanticFallback,
 } = require('./voice-nlu')
 const {
   shouldUseNluFallback,
@@ -34,6 +35,15 @@ const { createCrmService } = require('./crm')
 const { openCrmDatabase } = require('./crm/db')
 const { getAuthenticatedActor } = require('./crm/smart/activity-actors')
 const { formatKnowledgeItemsForPrompt } = require('./crm/smart/knowledge-prompt')
+const {
+  classifyJid,
+  sanitizeAccountPhone,
+  resolveConnectedWhatsAppAccount,
+  resolveMessageDirection,
+  isPrivateChatJid,
+  serializedOf,
+} = require('./whatsapp-identity')
+const { formatPhoneDisplay } = require('./crm/phone')
 
 const port = Number(process.env.PORT || 8081)
 const provider = (process.env.WHATSAPP_PROVIDER || 'custom').toLowerCase()
@@ -833,7 +843,65 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       voiceIntent: voiceNlu?.intent || options.voiceIntent || null,
       interpreterIntent: voiceNlu?.interpreter?.intent || null,
       voiceService: voiceNlu?.serviceDetection || options.voiceService || null,
+      stage: options.crmStage || options.stage || null,
     })
+
+    // Controlled LLM semantic fallback for unknown Darija (never overrides active CRM stages)
+    const stageHint = String(options.crmStage || options.stage || '')
+    const needsSemantic = (
+      !/awaiting_|selection|confirm/i.test(stageHint)
+      && router.nlu?.hasDarijaSignal
+      && (router.intent === 'OTHER' || router.intent === 'UNKNOWN' || Number(router.intentConfidence || 0) < 0.55)
+      && openAiClient
+      && openAiModel
+    )
+    if (needsSemantic) {
+      try {
+        const semantic = await classifyIntentSemanticFallback({
+          openai: openAiClient,
+          model: openAiModel,
+          rawText: patientPlainText,
+          normalizedText: router.nlu?.normalizedText || null,
+          stage: stageHint || null,
+        })
+        if (
+          semantic?.intent
+          && semantic.intent !== 'OTHER'
+          && Number(semantic.confidence || 0) >= 0.82
+        ) {
+          router.intent = semantic.intent
+          router.intentConfidence = Number(semantic.confidence)
+          router.intentMatched = 'llm_semantic'
+          if (semantic.intent === 'BOOK_APPOINTMENT') {
+            // Still require explicit booking language for form open
+            const { hasExplicitBookingIntent } = require('./voice-nlu/intent-table')
+            router.bookAppointment = hasExplicitBookingIntent(patientPlainText)
+          }
+          if (semantic.intent === 'CHECK_APPOINTMENT_AVAILABILITY') {
+            router.bookAppointment = false
+          }
+          if (semantic.intent === 'CANCEL_APPOINTMENT') {
+            router.cancelAppointment = true
+          }
+          if (
+            semantic.intent === 'ASK_PRICE'
+            || semantic.intent === 'ASK_SERVICES'
+            || semantic.intent === 'ASK_LOCATION'
+            || semantic.intent === 'ASK_OPENING_HOURS'
+          ) {
+            router.bookAppointment = false
+          }
+          router.llmBlock = buildRouterLlmBlock(router)
+          console.log('[iadis-wa] darija semantic fallback', {
+            conversation_id: key,
+            intent: router.intent,
+            confidence: router.intentConfidence,
+          })
+        }
+      } catch (err) {
+        console.warn('[iadis-wa] semantic intent fallback failed', err?.message || err)
+      }
+    }
 
     const languageHint = activeLanguage
       || normalizeReplyLanguageHint(options.languageHint)
@@ -1064,8 +1132,18 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
     }
 
     // Appointment confirmation reply (24h WhatsApp) — only if NOT booking-form confirmation
+    // and not mid availability selection (bare "1"/"2" belong to availability)
     let confirmationTurn = null
-    if (crm?.smart?.handleInboundConfirmationReply && !isVoice) {
+    const availabilityStatePeek = crm?.smart?.availabilityFlow?.getState?.(options.chatId || key) || null
+    const inAvailabilityFlow = Boolean(
+      availabilityStatePeek
+      && (
+        availabilityStatePeek.stage === 'awaiting_availability_date'
+        || availabilityStatePeek.stage === 'awaiting_available_slot_selection'
+        || availabilityStatePeek.stage === 'awaiting_precise_slot_confirm'
+      ),
+    )
+    if (crm?.smart?.handleInboundConfirmationReply && !isVoice && !inAvailabilityFlow) {
       try {
         const leadPeek = crm.repo.getLead?.(key) || null
         const inBookingConfirm = leadPeek?.stage === 'confirmation'
@@ -1111,6 +1189,65 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
         service: router.service,
         appointment_id: confirmationTurn.appointmentId || null,
         router,
+      }
+    }
+
+    // Cabinet availability consultation (before CRM booking / NLU fallback)
+    let availabilityTurn = null
+    if (crm?.smart?.handleInboundAvailability && !isVoice) {
+      try {
+        const leadPeekAvail = crm.repo.getLead?.(key) || null
+        const inBookingConfirmAvail = leadPeekAvail?.stage === 'confirmation'
+        if (!inBookingConfirmAvail) {
+          availabilityTurn = await crm.smart.handleInboundAvailability({
+            chatKey: options.chatId || key,
+            text: patientPlainText,
+            language: languageHint === 'darija' || languageHint === 'ar' ? 'darija' : 'fr',
+            routerIntent: router.intent,
+          })
+        }
+      } catch (error) {
+        console.warn('[iadis-wa] availability flow failed', error.message || error)
+      }
+    }
+
+    if (availabilityTurn?.handled && availabilityTurn.forceReply) {
+      const availReplies = Array.isArray(availabilityTurn.forceReplies) && availabilityTurn.forceReplies.length
+        ? availabilityTurn.forceReplies
+        : [availabilityTurn.forceReply]
+      try {
+        for (const outboundText of availReplies) {
+          crm.smart?.trackWhatsAppTurn?.({
+            chatId: options.chatId || key,
+            conversationId: key,
+            outboundText,
+            outboundAuthor: 'ai',
+            contactName: options.contactName || null,
+          })
+        }
+      } catch (trackError) {
+        console.warn('[iadis-wa] smart track failed', trackError.message || trackError)
+      }
+      setAiConversationHistory(key, [
+        ...history,
+        { role: 'user', content: isVoice && cleanPatientText ? `[vocal] ${cleanPatientText}` : content },
+        ...availReplies.map((outboundText) => ({ role: 'assistant', content: outboundText })),
+      ])
+      return {
+        reply: availReplies[0],
+        replies: availReplies,
+        reason: availabilityTurn.action === 'slot_selected'
+          ? 'availability_slot_selected'
+          : 'availability_flow',
+        model: openAiModel,
+        language_hint: languageHint,
+        is_voice: isVoice,
+        intent: router.intent || 'CHECK_APPOINTMENT_AVAILABILITY',
+        intent_confidence: router.intentConfidence,
+        should_skip_llm: true,
+        router,
+        appointment_date: availabilityTurn.appointmentDate || null,
+        appointment_time: availabilityTurn.appointmentTime || null,
       }
     }
 
@@ -3207,6 +3344,11 @@ function nowIso() {
   return new Date().toISOString()
 }
 
+function publicAccountPhone(record) {
+  const resolved = sanitizeAccountPhone(record?.phoneE164 || record?.phone)
+  return resolved ? formatPhoneDisplay(resolved) : null
+}
+
 function serializeStatus(record) {
   if (!record) {
     return {
@@ -3218,18 +3360,34 @@ function serializeStatus(record) {
       pushname: null,
       lastError: null,
       pendingMessages: 0,
+      connected: false,
+      phone_resolved: false,
+      account: {
+        phone: null,
+        resolved: false,
+        jid_type: null,
+      },
     }
   }
 
+  const phone = publicAccountPhone(record)
+  const ready = String(record.state || '').toLowerCase() === 'ready'
   return {
     state: record.state || 'missing',
     lastSeenAt: record.lastSeenAt || null,
     lastMessageAt: record.lastMessageAt || null,
     lastHistorySyncAt: record.lastHistorySyncAt || null,
-    phone: record.phone || null,
+    phone,
     pushname: record.pushname || null,
     lastError: record.lastError || null,
     pendingMessages: Number(record.pendingMessages || 0),
+    connected: ready,
+    phone_resolved: Boolean(phone),
+    account: {
+      phone,
+      resolved: Boolean(phone),
+      jid_type: record.accountJidType || null,
+    },
   }
 }
 
@@ -3325,8 +3483,17 @@ async function resetInstanceForQr(instanceId, reason = 'Dashboard QR refresh') {
     record.client = client
     record.qr = null
     record.qrCreatedAt = null
+    record.listenerClient = null
     attachClientListeners(record)
-    updateState(record, 'disconnected', { lastError: null, phone: null, pushname: null })
+    updateState(record, 'disconnected', {
+      lastError: null,
+      phone: null,
+      phoneE164: null,
+      phoneResolved: false,
+      accountJid: null,
+      accountJidType: null,
+      pushname: null,
+    })
     initializeRecord(record)
     return record
   }
@@ -3384,6 +3551,9 @@ function serializeDashboardInstance(instanceId) {
     can_connect: Boolean(WaClient && LocalAuth && QRCode),
     ...baseStatus,
     phone_number: baseStatus.phone,
+    phone_resolved: baseStatus.phone_resolved,
+    connected: baseStatus.connected,
+    account: baseStatus.account,
     qr_available: Boolean(record?.qr),
     qr_created_at: record?.qrCreatedAt || null,
   }
@@ -3421,6 +3591,18 @@ function updateState(record, state, details = {}) {
 
   if (details.phone !== undefined) {
     record.phone = details.phone
+  }
+  if (details.phoneE164 !== undefined) {
+    record.phoneE164 = details.phoneE164
+  }
+  if (details.phoneResolved !== undefined) {
+    record.phoneResolved = details.phoneResolved
+  }
+  if (details.accountJid !== undefined) {
+    record.accountJid = details.accountJid
+  }
+  if (details.accountJidType !== undefined) {
+    record.accountJidType = details.accountJidType
   }
 
   if (details.pushname !== undefined) {
@@ -3574,6 +3756,7 @@ function initializeRecord(record) {
         record.client = client
         record.qr = null
         record.qrCreatedAt = null
+        record.listenerClient = null
         attachClientListeners(record)
         updateState(record, 'initializing', { lastError: null })
 
@@ -3729,6 +3912,7 @@ function recoverInstance(record, reason = '') {
       record.qrCreatedAt = null
       record.initPromise = null
 
+      record.listenerClient = null
       attachClientListeners(record)
       updateState(record, 'disconnected', {
         lastError: reason || 'Recovering instance',
@@ -3786,12 +3970,22 @@ async function checkInstanceHealth(record) {
 
       const normalized = String(state || '').toLowerCase()
       if (!normalized || normalized === 'connected' || normalized === 'open' || normalized === 'ready') {
-        updateState(record, 'ready', { lastError: null })
+        if (record.state === 'ready') {
+          updateState(record, 'ready', { lastError: null })
+        } else if (record.state !== 'qr' && record.state !== 'authenticated' && record.state !== 'connecting') {
+          updateState(record, 'ready', { lastError: null })
+        }
         return
       }
 
-      if (normalized === 'opening' || normalized === 'pairing') {
-        updateState(record, normalized, { lastError: null })
+      if (normalized === 'opening' || normalized === 'pairing' || normalized === 'unpaired') {
+        if (record.state === 'qr' || record.state === 'authenticated' || record.state === 'connecting' || record.state === 'initializing') {
+          return
+        }
+        if (record.state === 'ready' && normalized === 'unpaired') {
+          throw new Error(`Unexpected WhatsApp state: ${normalized}`)
+        }
+        updateState(record, normalized === 'unpaired' ? 'connecting' : normalized, { lastError: null })
         return
       }
 
@@ -3923,8 +4117,51 @@ function syncAutomationHistory(record, reason = 'interval') {
   return record.historySyncPromise
 }
 
+function notifyWhatsAppError(title, body) {
+  try {
+    crm?.smart?.createNotification?.({
+      type: 'whatsapp_error',
+      title,
+      body,
+      link_path: '/integrations',
+    })
+  } catch {
+    // optional
+  }
+}
+
+async function refreshConnectedAccount(record) {
+  if (!record?.client) return
+  try {
+    const account = await resolveConnectedWhatsAppAccount(record.client)
+    updateState(record, record.state, {
+      phone: account.phoneNumber,
+      phoneE164: account.phoneNumber,
+      phoneResolved: account.resolved,
+      accountJid: account.jid || null,
+      accountJidType: account.jidType || null,
+      pushname: account.pushname,
+    })
+    console.log('[WA_SESSION_READY]', {
+      instance_id: record.instanceId,
+      jidType: account.jidType,
+      phoneResolved: account.resolved,
+      state: record.state,
+    })
+  } catch (error) {
+    console.warn('[WA_IDENTITY_RESOLUTION_FAILED]', {
+      instance_id: record.instanceId,
+      reason: error.message || String(error),
+    })
+  }
+}
+
 function attachClientListeners(record) {
   const client = record.client
+  if (!client || record.listenerClient === client) {
+    return
+  }
+  record.listenerClient = client
 
   client.on('qr', async (rawQr) => {
     try {
@@ -3938,7 +4175,12 @@ function attachClientListeners(record) {
       record.qrCreatedAt = null
     }
 
-    updateState(record, 'qr', { lastError: null })
+    updateState(record, 'qr', {
+      lastError: null,
+      phone: null,
+      phoneE164: null,
+      phoneResolved: false,
+    })
   })
 
   client.on('authenticated', () => {
@@ -3950,21 +4192,21 @@ function attachClientListeners(record) {
 
   client.on('ready', () => {
     clearReconnectTimer(record)
-    const info = client.info || {}
-    const phone = info?.wid?.user || null
-    const pushname = info?.pushname || null
-
-    updateState(record, 'ready', {
-      phone,
-      pushname,
-      lastError: null,
-    })
+    updateState(record, 'ready', { lastError: null })
+    void refreshConnectedAccount(record)
     syncAutomationHistory(record, 'ready')
   })
 
   client.on('auth_failure', (message) => {
     clearReconnectTimer(record)
-    updateState(record, 'auth_failure', { lastError: message || 'Authentication failed' })
+    const reason = message || 'Authentication failed'
+    updateState(record, 'auth_failure', {
+      lastError: reason,
+      phone: null,
+      phoneE164: null,
+      phoneResolved: false,
+    })
+    notifyWhatsAppError('Erreur WhatsApp', 'Échec d’authentification de la session WhatsApp.')
   })
 
   client.on('disconnected', (reason) => {
@@ -3975,29 +4217,27 @@ function attachClientListeners(record) {
   client.on('change_state', (value) => {
     const state = String(value || '').toLowerCase()
     if (state === 'connected') {
-      updateState(record, 'ready')
+      if (record.state !== 'ready') {
+        updateState(record, 'connecting', { lastError: null })
+      }
       return
     }
 
-    if (record.state !== 'ready' && state) {
+    if (record.state !== 'ready' && state && state !== 'unpaired') {
       updateState(record, state)
     }
   })
 
   client.on('message', (message) => {
-    if (message?.fromMe) {
-      return
-    }
-
-    enqueueRealtimeMessage(record, message, { fromMe: false })
+    const own = record.accountJid || record.client?.info?.wid?._serialized || ''
+    const direction = resolveMessageDirection(message, own)
+    enqueueRealtimeMessage(record, message, { fromMe: direction.fromMe })
   })
 
   client.on('message_create', (message) => {
-    if (!message?.fromMe) {
-      return
-    }
-
-    enqueueRealtimeMessage(record, message, { fromMe: true })
+    const own = record.accountJid || record.client?.info?.wid?._serialized || ''
+    const direction = resolveMessageDirection(message, own)
+    enqueueRealtimeMessage(record, message, { fromMe: direction.fromMe })
   })
 }
 
@@ -4023,6 +4263,10 @@ function ensureInstance(instanceId) {
       lastMessageAt: null,
       lastHistorySyncAt: null,
       phone: null,
+      phoneE164: null,
+      phoneResolved: false,
+      accountJid: null,
+      accountJidType: null,
       pushname: null,
       lastError: null,
       qr: null,
@@ -4034,6 +4278,7 @@ function ensureInstance(instanceId) {
       reconnectTimer: null,
       queuePromise: Promise.resolve(),
       pendingMessages: 0,
+      listenerClient: null,
     }
 
     attachClientListeners(record)
@@ -4166,7 +4411,7 @@ async function storeOutboundMessage(conversationId, reply, chatbotDecision, prov
 }
 
 function resolveOwnParticipantId(record, message) {
-  const ownWid = String(record?.client?.info?.wid?._serialized || '')
+  const ownWid = String(record?.accountJid || record?.client?.info?.wid?._serialized || '')
   if (ownWid) {
     return ownWid
   }
@@ -4176,22 +4421,40 @@ function resolveOwnParticipantId(record, message) {
     return authorId
   }
 
-  const ownDigits = normalizePhone(record?.phone || '')
-  return ownDigits ? `${ownDigits}@c.us` : ''
+  const ownDigits = sanitizeAccountPhone(record?.phoneE164 || record?.phone)
+  return ownDigits ? `${ownDigits.replace(/\D+/g, '')}@c.us` : ''
 }
 
 async function processRealtimeMessage(record, message, options = {}) {
-  const fromMe = Boolean(options.fromMe)
-  const skipIfSynced = Boolean(options.skipIfSynced)
-  const source = String(options.source || 'realtime')
-  let alreadySynced = false
-  let media = null
-  let audioTranscript = null
-  let audioTranscriptionFailed = false
-  let replyLanguageHint = null
-  let voiceNluAnalysis = null
+    const skipIfSynced = Boolean(options.skipIfSynced)
+    const source = String(options.source || 'realtime')
+    let alreadySynced = false
+    let media = null
+    let audioTranscript = null
+    let audioTranscriptionFailed = false
+    let replyLanguageHint = null
+    let voiceNluAnalysis = null
 
-  try {
+    const ownSerialized = record.accountJid
+      || serializedOf(record.client?.info?.wid)
+      || ''
+    const direction = resolveMessageDirection(message, ownSerialized)
+    const fromMe = Boolean(options.fromMe) || direction.fromMe
+    const inboundKey = resolveMessageId(message)
+      || [message?.id?._serialized, message?.timestamp, direction.chatJid, fromMe ? 'out' : 'in'].filter(Boolean).join(':')
+    record.processedMessageKeys = record.processedMessageKeys || new Set()
+    if (inboundKey && record.processedMessageKeys.has(inboundKey)) {
+      return
+    }
+    if (inboundKey) {
+      record.processedMessageKeys.add(inboundKey)
+      if (record.processedMessageKeys.size > 4000) {
+        const first = record.processedMessageKeys.values().next().value
+        record.processedMessageKeys.delete(first)
+      }
+    }
+
+    try {
     let content = String(message?.body || '').trim()
     const hasMedia = Boolean(message?.hasMedia)
     const messageType = String(message?.type || '').toLowerCase()
@@ -4219,42 +4482,55 @@ async function processRealtimeMessage(record, message, options = {}) {
     }
 
     if (!chatId) {
-      chatId = String(fromMe ? (message?.to || message?.from || '') : (message?.from || message?.to || ''))
+      chatId = direction.chatJid
+        || String(fromMe ? (message?.to || message?.from || '') : (message?.from || message?.to || ''))
     }
 
     if (!chatId) {
+      console.warn('[WA_ROUTING]', { accepted: false, reason: 'missing_chat_id' })
       return
     }
 
     if (isStatusOrBroadcastChatId(chatId)) {
+      console.log('[WA_INCOMING]', { chatType: 'broadcast', accepted: false })
       return
     }
 
     const groupChat = isGroupChatId(chatId)
     const senderId = fromMe
-      ? resolveOwnParticipantId(record, message)
-      : String(message?.author || chatId)
+      ? (ownSerialized || resolveOwnParticipantId(record, message))
+      : String(message?.author || direction.senderJid || chatId)
 
     let conversationKey = ''
     if (fromMe) {
       if (groupChat) {
         conversationKey = resolveInboundConversationKey(chatId, senderId || chatId, true)
-      } else if (isLidChatId(chatId) || isLidChatId(message?.to)) {
+      } else if (isLidChatId(chatId) || isLidChatId(message?.to) || isPrivateChatJid(chatId)) {
         conversationKey = String(chatId || message?.to || '').trim()
       } else {
         const recipientDigits = normalizePhone(chatId || message?.to || '')
         if (!recipientDigits) {
-          return
+          conversationKey = String(chatId || '').trim()
+        } else {
+          conversationKey = `+${recipientDigits}`
         }
-        conversationKey = `+${recipientDigits}`
       }
     } else {
       conversationKey = resolveInboundConversationKey(chatId, senderId || chatId, groupChat)
     }
 
     if (!conversationKey) {
+      console.warn('[WA_ROUTING]', { accepted: false, reason: 'missing_conversation_key', chat_id: chatId })
       return
     }
+
+    const incomingClass = classifyJid(chatId)
+    console.log('[WA_INCOMING]', {
+      chatType: groupChat ? 'group' : (incomingClass.isPrivate ? 'private' : incomingClass.jidType),
+      identityType: incomingClass.jidType,
+      phoneResolved: Boolean(incomingClass.phoneNumber),
+      from_me: fromMe,
+    })
 
     let contactName = chatName
     let contactPhoneE164 = null
@@ -4863,6 +5139,11 @@ async function processRealtimeMessage(record, message, options = {}) {
     ].map((item) => String(item || '').trim()).filter(Boolean)
     const firstReply = outboundReplies[0] || chatbot.reply
     const sent = await replyToInboundMessage(message, record, replyDigits, firstReply, chatId)
+    console.log('[WA_REPLY]', {
+      success: true,
+      chat_id: sent.chatId,
+      message_id: messageId,
+    })
     console.log('[iadis-wa] chatbot reply sent', {
       chat_id: sent.chatId,
       message_id: messageId,
@@ -4930,6 +5211,9 @@ async function processRealtimeMessage(record, message, options = {}) {
       code: error.code || null,
       stack: error.stack || null,
     })
+    if (error.code === 'INVALID_PHONE' || error.code === 'NUMBER_NOT_REGISTERED' || /send/i.test(String(error.message || ''))) {
+      console.warn('[WA_SEND_FAILED]', { reason: error.message || String(error) })
+    }
     if (isProtocolTimeoutError(error)) {
       await recoverInstance(record, error.message || 'Realtime processing timed out')
     }
@@ -4974,15 +5258,22 @@ async function sendTextThroughInstance(record, toPhone, text, preferredChatId = 
         chatId: directChatId,
       }
     } catch (directError) {
-      // Fall back to phone-based routing when direct chat id send fails.
-      console.warn('[iadis-wa] direct chat_id send failed, fallback to phone lookup', directError.message || directError)
+      console.warn('[WA_SEND_FAILED]', {
+        reason: directError.message || String(directError),
+        chat_id: directChatId,
+      })
+      notifyWhatsAppError(
+        'Erreur WhatsApp',
+        'Échec d’envoi sur le JID de conversation. Tentative via le numéro si disponible.',
+      )
     }
   }
 
   const normalizedPhone = normalizePhone(toPhone)
   if (!normalizedPhone) {
-    const error = new Error('Invalid recipient phone number')
+    const error = new Error('Invalid recipient for WhatsApp send')
     error.code = 'INVALID_PHONE'
+    console.warn('[WA_SEND_FAILED]', { reason: error.message, chat_id: directChatId || null })
     throw error
   }
 
@@ -4990,13 +5281,16 @@ async function sendTextThroughInstance(record, toPhone, text, preferredChatId = 
   const numberId = await record.client.getNumberId(normalizedPhone)
   const serialized = numberId?._serialized || numberId?.serialized || null
 
-  if (serialized) {
+  if (serialized && String(serialized).includes('@')) {
     chatId = serialized
-  } else if (numberId?.user) {
-    chatId = `${numberId.user}@c.us`
+  } else if (numberId?.user && sanitizeAccountPhone(numberId.user)) {
+    chatId = `${String(numberId.user).replace(/\D+/g, '')}@c.us`
+  } else if (serialized) {
+    chatId = serialized
   } else {
     const error = new Error('Phone number is not registered on WhatsApp')
     error.code = 'NUMBER_NOT_REGISTERED'
+    console.warn('[WA_SEND_FAILED]', { reason: error.message })
     throw error
   }
 
@@ -5250,6 +5544,11 @@ app.get('/health', (_req, res) => {
       puppeteer_executable: resolvePuppeteerExecutablePath() || null,
       main_state: mainRecord?.state || 'missing',
       main_last_error: mainRecord?.lastError || null,
+      connected: String(mainRecord?.state || '').toLowerCase() === 'ready',
+      account: {
+        phone: publicAccountPhone(mainRecord),
+        resolved: Boolean(publicAccountPhone(mainRecord)),
+      },
     },
     chatbot: {
       mode: chatbotMode,

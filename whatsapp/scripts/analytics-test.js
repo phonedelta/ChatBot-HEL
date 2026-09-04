@@ -66,7 +66,7 @@ async function run() {
 
   // Seed appointments across days
   const slots = [
-    weekdayFuture(5, '10:00'),
+    weekdayFuture(5, '10:30'),
     weekdayFuture(6, '11:00'),
     weekdayFuture(7, '15:00'),
   ]
@@ -127,7 +127,7 @@ async function run() {
   `).run(day2.iso, b2.appointment.id)
 
   // Extra appointment outside period
-  const oldSlot = weekdayFuture(12, '09:00')
+  const oldSlot = weekdayFuture(12, '10:30')
   const old = crm.repo.saveConfirmedBooking({
     full_name: 'Old Outside',
     phone_number: '+212612399099',

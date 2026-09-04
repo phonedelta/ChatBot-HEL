@@ -15,6 +15,20 @@ const {
 
 const UNCLEAR = ['ui', '???', 'asdf', '...', 'je sais pas']
 
+function weekdayFuture(daysAhead = 5, time = '11:00') {
+  for (let i = daysAhead; i < daysAhead + 14; i += 1) {
+    const d = new Date()
+    d.setDate(d.getDate() + i)
+    if (d.getDay() === 0) continue
+    const yyyy = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    const t = d.getDay() === 6 ? '11:00' : time
+    return { date: `${yyyy}-${mm}-${dd}`, time: t, day: dd }
+  }
+  throw new Error('no weekday')
+}
+
 async function run() {
   // Typo yes in binary context
   assert.strictEqual(parseYesNoReply('ui').value, 'yes')
@@ -43,18 +57,21 @@ async function run() {
     whatsapp_chat_id: chat,
   })
 
+  const current = weekdayFuture(5, '11:00')
+  const proposed = weekdayFuture(8, '11:00')
+
   const appt = crm.db.prepare(`
     INSERT INTO appointments (
       customer_id, appointment_date, appointment_time, status, conversation_id, duration_minutes, created_at
-    ) VALUES (?, '2026-09-01', '11:00', 'non_confirme', ?, 30, datetime('now'))
-  `).run(customerId, chat)
+    ) VALUES (?, ?, ?, 'non_confirme', ?, 30, datetime('now'))
+  `).run(customerId, current.date, current.time, chat)
 
   crm.db.prepare(`
     INSERT INTO slot_proposals (
       customer_id, appointment_id, conversation_id, chat_key,
       slot_date, slot_time, status, language, created_at, updated_at
-    ) VALUES (?, ?, NULL, ?, '2026-08-31', '11:00', 'pending', 'darija', datetime('now'), datetime('now'))
-  `).run(customerId, appt.lastInsertRowid, chat)
+    ) VALUES (?, ?, NULL, ?, ?, ?, 'pending', 'darija', datetime('now'), datetime('now'))
+  `).run(customerId, appt.lastInsertRowid, chat, proposed.date, proposed.time)
 
   const state = crm.smart.resolveConversationRouting(chat)
   assert.strictEqual(state.activeWorkflow, 'slot_proposal')
@@ -64,7 +81,7 @@ async function run() {
 
   const clarify = contextualClarificationMessage(state, 'darija', 1)
   assert.match(clarify, /[\u0600-\u06FF]/)
-  assert.match(clarify, /31/)
+  assert.match(clarify, new RegExp(proposed.day))
   assert.ok(!/الاسم/.test(clarify))
   assert.ok(!/الهاتف/.test(clarify))
 
@@ -91,12 +108,13 @@ async function run() {
   assert.ok(['accepted', 'clarify', 'declined', 'expired'].includes(slotTurn.action) || slotTurn.ok)
 
   // Re-seed pending for unknown test
+  const proposed2 = weekdayFuture(10, '11:30')
   crm.db.prepare(`UPDATE slot_proposals SET status='cancelled' WHERE chat_key=?`).run(chat)
   crm.db.prepare(`
     INSERT INTO slot_proposals (
       customer_id, appointment_id, chat_key, slot_date, slot_time, status, language, created_at, updated_at
-    ) VALUES (?, ?, ?, '2026-08-31', '11:00', 'pending', 'darija', datetime('now'), datetime('now'))
-  `).run(customerId, appt.lastInsertRowid, chat)
+    ) VALUES (?, ?, ?, ?, ?, 'pending', 'darija', datetime('now'), datetime('now'))
+  `).run(customerId, appt.lastInsertRowid, chat, proposed2.date, proposed2.time)
 
   const unknownTurn = await crm.smart.handleInboundSlotProposalReply({ chatKey: chat, text: 'ksjdhfk' })
   assert.strictEqual(unknownTurn.action, 'clarify')

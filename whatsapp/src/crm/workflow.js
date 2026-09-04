@@ -27,17 +27,23 @@ const {
 const {
   checkSlotAvailability,
   listAvailableSlotTimes,
+  getBookableSlotsForDate,
   isSlotUnavailableError,
+  normalizeSlotTime,
+  normalizeTimeExpression,
 } = require('./appointment-slots')
+const { parseAvailableSlotSelection } = require('./smart/availability-slot-select')
 const {
   detectCorrectionIntent,
   buildCorrectionPatch,
+  detectInlineNameCorrection,
 } = require('./booking-corrections')
 const {
   parseCorrectionState,
   serializeCorrectionState,
   isStrictBookingConfirmYes,
   isBookingConfirmNo,
+  isExplicitDraftCancelIntent,
   parseRejectionChoice,
   parseFieldsToCorrect,
   parseFieldCorrectionValue,
@@ -48,6 +54,8 @@ const {
   draftCancelConfirmMessage,
   unclearReplyCancelAskMessage,
   draftCancelledMessage,
+  unclearSummaryClarifyMessage,
+  askFullNameAfterPartialCorrection,
   outsideHoursRetry,
 } = require('./booking-confirmation-flow')
 const { parseYesNoReply } = require('./binary-confirmation')
@@ -838,8 +846,9 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
   }
 
   /**
-   * Slot occupied: keep identity/city/motif; clear only date/time; ask for a new slot.
-   * Conceptual stage AWAITING_NEW_SLOT ≡ awaiting_form + bulk (appointment missing).
+   * Slot occupied: keep identity/city/motif AND the requested date.
+   * Store alternative times; await a slot pick for that date.
+   * Conceptual stage AWAITING_NEW_SLOT ≡ awaiting_form + slot_alternative.
    */
   function rejectSlotUnavailable(conversationId, lead, language, signals, {
     lateConflict = false,
@@ -849,24 +858,186 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
     let alternatives = []
     try {
       if (date && repo.db) {
-        alternatives = listAvailableSlotTimes(repo.db, date, { limit: 3 })
+        alternatives = listAvailableSlotTimes(repo.db, date, { limit: 6 })
+          .map((t) => normalizeSlotTime(t))
       }
     } catch { /* optional */ }
 
+    const correctionPayload = date
+      ? {
+        mode: 'slot_alternatives',
+        date,
+        times: alternatives,
+        rejectedTime: time || null,
+      }
+      : null
+
     const updated = repo.upsertLead(conversationId, {
       stage: 'awaiting_form',
-      awaiting_field: 'bulk',
+      awaiting_field: date && alternatives.length ? 'slot_alternative' : 'bulk',
       booking_intent: 1,
-      appointment_date: null,
+      // Keep the day so "12h30" can complete the slot without re-asking the date
+      appointment_date: date || null,
       appointment_time: null,
-      correction_json: null,
+      correction_json: correctionPayload,
     })
+
+    if (process.env.CRM_DEBUG_BOOKING === '1') {
+      console.log('[BOOKING_FLOW]', {
+        state: 'slot_unavailable',
+        date,
+        rejectedTime: time,
+        alternatives,
+        nextAwaiting: updated.awaiting_field,
+      })
+    }
+
     const msg = slotUnavailableMessage(
       { appointment_date: date, appointment_time: time },
       language,
       { alternatives, lateConflict },
     )
     return finalizeTurn(updated, msg, true, null, signals)
+  }
+
+  function parseSlotAlternativeState(lead) {
+    try {
+      const raw = lead?.correction_json
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+      if (parsed?.mode !== 'slot_alternatives') return null
+      const date = String(parsed.date || lead.appointment_date || '').trim()
+      const times = Array.isArray(parsed.times)
+        ? parsed.times.map((t) => normalizeSlotTime(t)).filter(Boolean)
+        : []
+      if (!date) return null
+      return { date, times, rejectedTime: parsed.rejectedTime || null }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Patient picks an alternative time after a conflict (e.g. "12h30").
+   */
+  function handleSlotAlternativeTurn(conversationId, lead, language, chatId, signals, userText) {
+    const alt = parseSlotAlternativeState(lead)
+    const date = alt?.date || lead.appointment_date
+    if (!date) {
+      const updated = repo.upsertLead(conversationId, {
+        stage: 'awaiting_form',
+        awaiting_field: 'bulk',
+        correction_json: null,
+      })
+      return processAfterData(conversationId, updated, language, signals)
+    }
+
+    const candidates = (alt?.times?.length ? alt.times : null)
+      || (() => {
+        try {
+          return listAvailableSlotTimes(repo.db, date, { limit: 8 }).map((t) => normalizeSlotTime(t))
+        } catch {
+          return []
+        }
+      })()
+
+    // Full date+time message (e.g. "ghda m3a 15h") → fall through to normal merge
+    const fullAppt = (() => {
+      try {
+        const { extractAppointment } = require('./extract')
+        return extractAppointment(userText, new Date())
+      } catch {
+        return null
+      }
+    })()
+    if (fullAppt?.appointment_date && fullAppt?.appointment_time
+      && fullAppt.appointment_date !== date) {
+      return null // let normal mergeSignals handle a new day
+    }
+
+    let selectedTime = null
+    if (candidates.length) {
+      const sel = parseAvailableSlotSelection({
+        input: userText,
+        candidateSlots: candidates,
+      })
+      if (sel.type === 'index' || sel.type === 'time') {
+        selectedTime = sel.selectedTime
+      }
+    }
+    if (!selectedTime) {
+      const parsed = normalizeTimeExpression(userText)
+        || (fullAppt?.appointment_time
+          ? { normalized: normalizeSlotTime(fullAppt.appointment_time) }
+          : null)
+      if (parsed?.normalized) selectedTime = parsed.normalized
+    }
+
+    if (!selectedTime) {
+      // Not a time selection — let caller continue with generic form merge
+      return null
+    }
+
+    if (process.env.CRM_DEBUG_BOOKING === '1') {
+      console.log('[BOOKING_FLOW]', {
+        state: 'awaiting_slot_selection',
+        raw: String(userText || '').slice(0, 80),
+        normalizedTime: selectedTime,
+        date,
+        candidateMatch: candidates.includes(selectedTime),
+      })
+    }
+
+    // Revalidate against live engine (race-safe)
+    let liveTimes = []
+    try {
+      const bookable = getBookableSlotsForDate(repo.db, date, { limit: 20 })
+      if (bookable?.ok) liveTimes = (bookable.times || []).map((t) => normalizeSlotTime(t))
+      else liveTimes = listAvailableSlotTimes(repo.db, date, { limit: 20 }).map((t) => normalizeSlotTime(t))
+    } catch {
+      liveTimes = candidates
+    }
+
+    if (!liveTimes.includes(selectedTime)) {
+      const slotCheck = checkSlotAvailability(repo.db, { date, time: selectedTime })
+      if (slotCheck?.reason === 'occupied' || !slotCheck?.available) {
+        const refreshed = liveTimes.slice(0, 6)
+        const updated = repo.upsertLead(conversationId, {
+          stage: 'awaiting_form',
+          awaiting_field: refreshed.length ? 'slot_alternative' : 'bulk',
+          appointment_date: date,
+          appointment_time: null,
+          correction_json: {
+            mode: 'slot_alternatives',
+            date,
+            times: refreshed,
+            rejectedTime: selectedTime,
+          },
+        })
+        const msg = slotUnavailableMessage(
+          { appointment_date: date, appointment_time: selectedTime },
+          language,
+          { alternatives: refreshed, lateConflict: true },
+        )
+        return finalizeTurn(updated, msg, true, null, signals)
+      }
+    }
+
+    const hoursCheck = validateAppointmentHours(date, selectedTime)
+    if (!hoursCheck.ok) {
+      return rejectOutsideHours(conversationId, lead, language, signals, hoursCheck)
+    }
+
+    const updated = repo.upsertLead(conversationId, {
+      stage: 'awaiting_form',
+      awaiting_field: 'bulk',
+      appointment_date: date,
+      appointment_time: selectedTime,
+      correction_json: null,
+      booking_intent: 1,
+      ...(language ? { language } : {}),
+      ...(chatId ? { whatsapp_chat_id: chatId } : {}),
+    })
+    return processAfterData(conversationId, updated, language, signals)
   }
 
   function assertLeadSlotFree(lead) {
@@ -1221,6 +1392,31 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
         appointment_status: lead.stage,
       })
       return handleBookingConfirmationTurn(conversationId, lead, lang, input.chatId, signals, userText)
+    }
+
+    // Slot alternative selection after conflict (e.g. "12h30") — before generic form merge
+    if (
+      lead.stage === 'awaiting_form'
+      && (lead.awaiting_field === 'slot_alternative' || parseSlotAlternativeState(lead))
+    ) {
+      repo.logConversation({
+        conversation_id: conversationId,
+        whatsapp_chat_id: input.chatId || null,
+        direction: 'inbound',
+        message_text: userText,
+        extracted: { ...signals, stage: lead.stage, awaiting_field: lead.awaiting_field },
+        appointment_status: lead.stage,
+      })
+      const altTurn = handleSlotAlternativeTurn(
+        conversationId,
+        lead,
+        lang,
+        input.chatId,
+        signals,
+        userText,
+      )
+      if (altTurn) return altTurn
+      // fall through if message is not a time selection
     }
 
     const isConfirmReply = false
@@ -1731,8 +1927,9 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
       return finalizeTurn(cleared, confirmationText, true, booking, signals)
     }
 
-    // 2) NON → rejection menu (do not wipe draft)
-    if (isBookingConfirmNo(userText)) {
+    // 2) NON → rejection menu (modify path; not immediate cancel)
+    // Bare "annuler" is handled as explicit cancel below — strip cancel-only tokens from NON.
+    if (isBookingConfirmNo(userText) && !isExplicitDraftCancelIntent(userText)) {
       const updated = repo.upsertLead(conversationId, {
         stage: 'confirmation',
         awaiting_field: 'confirmation_rejection',
@@ -1745,6 +1942,24 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
     const correction = detectCorrectionIntent(userText, { now: new Date() })
     if (correction.isCorrection) {
       const patch = buildCorrectionPatch(correction)
+      // Revalidate appointment if time/date changed
+      if (patch.appointment_date || patch.appointment_time) {
+        const nextDate = patch.appointment_date || lead.appointment_date
+        const nextTime = patch.appointment_time || lead.appointment_time
+        if (nextDate && nextTime) {
+          const hours = validateAppointmentHours(nextDate, nextTime)
+          if (!hours.ok) {
+            return rejectOutsideHours(conversationId, lead, language, signals, hours)
+          }
+          const slotCheck = checkSlotAvailability(repo.db, { date: nextDate, time: nextTime })
+          if (slotCheck && slotCheck.available === false && slotCheck.reason === 'occupied') {
+            const tempLead = { ...lead, appointment_date: nextDate, appointment_time: nextTime }
+            return rejectSlotUnavailable(conversationId, tempLead, language, signals, {
+              lateConflict: false,
+            })
+          }
+        }
+      }
       patch.stage = 'confirmation'
       patch.awaiting_field = 'confirmation'
       patch.correction_json = null
@@ -1775,13 +1990,45 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
       return finalizeTurn(updated, `${ack}\n\n${summary}`, true, null, signals)
     }
 
-    // 4) Unclear → ask cancel?
+    // 3b) Name correction attempt (including incomplete single given name)
+    const nameAttempt = detectInlineNameCorrection(userText)
+    if (nameAttempt.type === 'complete' && nameAttempt.fullName) {
+      const updated = repo.upsertLead(conversationId, {
+        full_name: nameAttempt.fullName,
+        stage: 'confirmation',
+        awaiting_field: 'confirmation',
+        correction_json: null,
+      })
+      const ack = correctionAck(['full_name'], language)
+      const summary = askConfirmation(updated, language)
+      return finalizeTurn(updated, `${ack}\n\n${summary}`, true, null, signals)
+    }
+    if (nameAttempt.type === 'incomplete') {
+      const updated = repo.upsertLead(conversationId, {
+        stage: 'confirmation',
+        awaiting_field: 'field_correction',
+        correction_json: serializeCorrectionState({ fields: ['full_name'], index: 0 }),
+      })
+      return finalizeTurn(updated, askFullNameAfterPartialCorrection(language), true, null, signals)
+    }
+
+    // 4) Explicit cancel intent only (before unclear; "annuler" ≠ NON modify)
+    if (isExplicitDraftCancelIntent(userText)) {
+      const updated = repo.upsertLead(conversationId, {
+        stage: 'confirmation',
+        awaiting_field: 'draft_cancel_confirm',
+        correction_json: null,
+      })
+      return finalizeTurn(updated, draftCancelConfirmMessage(language), true, null, signals)
+    }
+
+    // 5) Unclear → clarification (NEVER implicit cancel)
     const updated = repo.upsertLead(conversationId, {
       stage: 'confirmation',
-      awaiting_field: 'unclear_cancel_confirm',
+      awaiting_field: 'confirmation',
       correction_json: null,
     })
-    return finalizeTurn(updated, unclearReplyCancelAskMessage(language), true, null, signals)
+    return finalizeTurn(updated, unclearSummaryClarifyMessage(language), true, null, signals)
   }
 
   function resetConversation(conversationId) {

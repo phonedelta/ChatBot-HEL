@@ -45,12 +45,91 @@ function normalizeSlotTime(value) {
   return `${String(Number(match[1])).padStart(2, '0')}:${match[2]}`
 }
 
+/**
+ * Normalize natural Moroccan / FR time expressions to HH:mm.
+ * Safe for: 12h30, 12 h 30, 12:30, 12H30, 14h, 14 h, m3a 14h, à 11h.
+ * Does NOT treat bare digits like "3" as 03:00 (selection indices stay separate).
+ * Does NOT treat dates or phone numbers as times.
+ *
+ * @param {string} text
+ * @returns {{ hour: number, minute: number, normalized: string }|null}
+ */
+function normalizeTimeExpression(text) {
+  const raw = String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’']/g, '')
+    .trim()
+  if (!raw) return null
+
+  // Phones / dates / ISO — never treat as clock times
+  if (/^\+?\d[\d\s\-.]{6,}\d$/.test(raw) || /^\+212/.test(raw) || /^0\d{8,}$/.test(raw)) return null
+  if (/^\d{1,2}[\/\-.]\d{1,2}([\/\-.]\d{2,4})?$/.test(raw)) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null
+  // Bare index / year-like — leave to callers
+  if (/^#?\d{1,2}[).]?$/.test(raw)) return null
+
+  const pack = (hour, minute) => {
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
+    return {
+      hour,
+      minute,
+      normalized: normalizeSlotTime(`${hour}:${String(minute).padStart(2, '0')}`),
+    }
+  }
+
+  // 11 ونص / 11 w nos
+  const half = raw.match(/^(?:(?:m3a|مع|a|à)\s+)?(\d{1,2})\s*(?:ونص|w\s*nos|ou?\s*nos)\s*$/i)
+  if (half) return pack(Number(half[1]), 30)
+
+  // 12h30 / 12 h 30 / 12:30 / 12H30 / m3a 12h30
+  const withMin = raw.match(/^(?:(?:m3a|مع|a|à)\s+)?(\d{1,2})\s*(?:h|:)\s*(\d{2})\s*$/i)
+  if (withMin) return pack(Number(withMin[1]), Number(withMin[2]))
+
+  // 14h / 14 h / m3a 14h / à 14h
+  const hourOnly = raw.match(/^(?:(?:m3a|مع|a|à)\s+)?(\d{1,2})\s*h\s*$/i)
+  if (hourOnly) return pack(Number(hourOnly[1]), 0)
+
+  // strict HH:MM
+  const strict = raw.match(/^(\d{1,2}):(\d{2})$/)
+  if (strict) return pack(Number(strict[1]), Number(strict[2]))
+
+  return null
+}
+
+/**
+ * Find a clock time inside a longer sentence (e.g. "Ghda m3a 14h").
+ * @param {string} text
+ * @returns {string|null} HH:mm
+ */
+function extractEmbeddedTime(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return null
+  const direct = normalizeTimeExpression(raw)
+  if (direct) return direct.normalized
+
+  const candidates = []
+  const re = /(?:(?:m3a|مع|a|à)\s*)?\d{1,2}\s*(?:h|:)\s*\d{2}|(?:(?:m3a|مع|a|à)\s*)?\d{1,2}\s*h\b|\d{1,2}:\d{2}|(?:m3a|مع)\s*\d{1,2}\b/gi
+  let m
+  while ((m = re.exec(raw)) !== null) {
+    candidates.push(m[0])
+  }
+  for (const c of candidates) {
+    const hit = normalizeTimeExpression(c)
+      || normalizeTimeExpression(c.replace(/\s+/g, ' ').trim())
+    if (hit) return hit.normalized
+    // "m3a 14" without h
+    const bare = c.match(/(?:m3a|مع)\s*(\d{1,2})\b/i)
+    if (bare) {
+      const packed = normalizeTimeExpression(`${bare[1]}h`)
+      if (packed) return packed.normalized
+    }
+  }
+  return null
+}
+
 function todayLocalIso() {
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
+  return todayLocalIsoFrom(new Date())
 }
 
 /**
@@ -222,43 +301,173 @@ function assertSlotAvailable(db, slotDate, slotTime, options = {}) {
 }
 
 /**
- * Real free HH:mm slots for a day (same grid as Agenda: 30 min within HEL hours).
+ * Real free HH:mm slots for a day (same grid as Agenda).
  * @param {import('node:sqlite').DatabaseSync} db
  * @param {string} slotDate
- * @param {{ limit?: number, excludeAppointmentId?: number|null, durationMinutes?: number }} [options]
+ * @param {{
+ *   limit?: number,
+ *   excludeAppointmentId?: number|null,
+ *   durationMinutes?: number,
+ *   appointmentsSettings?: object|null,
+ *   now?: Date,
+ *   applyBookingRules?: boolean,
+ * }} [options]
  * @returns {string[]}
  */
 function listAvailableSlotTimes(db, slotDate, options = {}) {
+  const result = getBookableSlotsForDate(db, slotDate, {
+    ...options,
+    applyBookingRules: options.applyBookingRules !== false,
+  })
+  if (!result.ok) return []
+  const limit = options.limit != null
+    ? Math.max(1, Math.min(48, Number(options.limit) || 3))
+    : result.times.length
+  return result.times.slice(0, limit)
+}
+
+/**
+ * Canonical bookable slots for one calendar day — shared by Agenda + WhatsApp.
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} slotDate YYYY-MM-DD
+ * @param {{
+ *   excludeAppointmentId?: number|null,
+ *   durationMinutes?: number,
+ *   practitionerId?: number|null,
+ *   appointmentsSettings?: {
+ *     slotDurationMinutes?: number,
+ *     minBookingLeadMinutes?: number,
+ *     bookingHorizonDays?: number,
+ *     allowSameDayBooking?: boolean,
+ *   }|null,
+ *   now?: Date,
+ *   applyBookingRules?: boolean,
+ * }} [options]
+ * @returns {{
+ *   ok: boolean,
+ *   reason: 'invalid_date'|'closed_day'|'past_date'|'same_day_disabled'|'horizon_exceeded'|'none'|null,
+ *   date: string|null,
+ *   times: string[],
+ *   durationMinutes: number,
+ *   closed: boolean,
+ * }}
+ */
+function getBookableSlotsForDate(db, slotDate, options = {}) {
   let date
   try {
     date = normalizeBusinessDate(slotDate)
   } catch {
-    return []
+    return {
+      ok: false,
+      reason: 'invalid_date',
+      date: null,
+      times: [],
+      durationMinutes: 30,
+      closed: false,
+    }
   }
+
+  const now = options.now instanceof Date ? options.now : new Date()
+  const settings = options.appointmentsSettings || null
+  const duration = Math.max(
+    15,
+    Number(options.durationMinutes)
+      || Number(settings?.slotDurationMinutes)
+      || 30,
+  )
+
   const weekday = weekdayFromIsoDate(date)
-  if (weekday == null) return []
+  if (weekday == null) {
+    return {
+      ok: false, reason: 'invalid_date', date, times: [], durationMinutes: duration, closed: false,
+    }
+  }
   const hours = WEEKLY_HOURS[weekday]
-  if (!hours) return []
+  if (!hours) {
+    return {
+      ok: false, reason: 'closed_day', date, times: [], durationMinutes: duration, closed: true,
+    }
+  }
+
+  const today = todayLocalIsoFrom(now)
+  if (date < today) {
+    return {
+      ok: false, reason: 'past_date', date, times: [], durationMinutes: duration, closed: false,
+    }
+  }
+
+  if (settings && options.applyBookingRules !== false) {
+    if (date === today && settings.allowSameDayBooking === false) {
+      return {
+        ok: false, reason: 'same_day_disabled', date, times: [], durationMinutes: duration, closed: false,
+      }
+    }
+    const apptDate = new Date(`${date}T12:00:00`)
+    const todayDate = new Date(`${today}T12:00:00`)
+    const diffDays = Math.floor((apptDate.getTime() - todayDate.getTime()) / 86400000)
+    const horizon = Number(settings.bookingHorizonDays)
+    if (Number.isFinite(horizon) && diffDays > horizon) {
+      return {
+        ok: false, reason: 'horizon_exceeded', date, times: [], durationMinutes: duration, closed: false,
+      }
+    }
+  }
+
   const open = toMinutes(hours.open)
   const close = toMinutes(hours.close)
-  if (open == null || close == null) return []
+  if (open == null || close == null || close <= open) {
+    return {
+      ok: false, reason: 'closed_day', date, times: [], durationMinutes: duration, closed: true,
+    }
+  }
 
-  const duration = Math.max(15, Number(options.durationMinutes) || 30)
-  const limit = Math.max(1, Math.min(12, Number(options.limit) || 3))
+  const step = duration
   const free = []
-  for (let m = open; m + duration <= close; m += 30) {
+  for (let m = open; m + duration <= close; m += step) {
     const hh = String(Math.floor(m / 60)).padStart(2, '0')
     const mm = String(m % 60).padStart(2, '0')
     const time = `${hh}:${mm}`
+
+    if (settings && options.applyBookingRules !== false) {
+      const lead = Number(settings.minBookingLeadMinutes) || 0
+      if (lead > 0) {
+        const apptMs = new Date(`${date}T${time}:00`).getTime()
+        const minMs = now.getTime() + lead * 60000
+        if (!Number.isFinite(apptMs) || apptMs < minMs) continue
+      } else if (date === today) {
+        const nowMin = now.getHours() * 60 + now.getMinutes()
+        if (m <= nowMin) continue
+      }
+    } else if (date === today) {
+      const nowMin = now.getHours() * 60 + now.getMinutes()
+      if (m <= nowMin) continue
+    }
+
     if (isSlotFree(db, date, time, {
       excludeAppointmentId: options.excludeAppointmentId,
       durationMinutes: duration,
+      practitionerId: options.practitionerId,
     })) {
       free.push(time)
-      if (free.length >= limit) break
     }
   }
-  return free
+
+  return {
+    ok: true,
+    reason: free.length ? null : 'none',
+    date,
+    times: free,
+    durationMinutes: duration,
+    closed: false,
+  }
+}
+
+function todayLocalIsoFrom(now = new Date()) {
+  const d = now instanceof Date ? now : new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 /**
@@ -291,14 +500,18 @@ module.exports = {
   slotBlockingStatusesSql,
   normalizeBusinessDate,
   normalizeSlotTime,
+  normalizeTimeExpression,
+  extractEmbeddedTime,
   checkSlotAvailability,
   isSlotFree,
   assertSlotAvailable,
   listAvailableSlotTimes,
+  getBookableSlotsForDate,
   runSlotWriteTransaction,
   createSlotUnavailableError,
   isSlotUnavailableError,
   isUniqueSlotConstraintError,
   parseTimeMinutes,
   todayLocalIso,
+  todayLocalIsoFrom,
 }

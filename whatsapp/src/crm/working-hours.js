@@ -234,6 +234,8 @@ function outsideWorkingHoursError(result) {
 
 module.exports = {
   WEEKLY_HOURS,
+  DAY_NAMES_FR,
+  DAY_NAMES_AR,
   validateAppointmentHours,
   outsideWorkingHoursMessage,
   outsideWorkingHoursError,

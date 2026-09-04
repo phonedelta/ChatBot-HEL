@@ -44,10 +44,10 @@ function hasExplicitBookingIntent(text) {
   if (/\b(n)?reserv(e|er|i|ation)?\b/i.test(raw)) return true
   if (/\b(nhjez|n7jez|n7ajez)\b/i.test(raw)) return true
   if (/\b(je\s+(veux|voudrais))\b.{0,50}\b(rendez[- ]?vous|rdv|appointment|réserver|reserver)\b/i.test(raw)) return true
-  if (/\b(nakhod|nkhod)\b.{0,20}\b(rdv|rendez)\b/i.test(raw)) return true
-  if (/حجز\s*موعد|نحب\s*نحجز|نبغي\s*نجي/.test(raw)) return true
-  // "bghit + come / book / concrete dental action"
-  return /\b(bghit|bghiti|baghit|kanbghi|بغيت)\b.{0,40}\b(nji|ndir|rdv|rendez|موعد|nreserve|reserv|n7yed|n9ala3|n9ale3|extraction|nettoyage|tn9iya|blanchiment|tabyid|appareil|ta9wim|implant|خلع|قلع|تنظيف|تبييض|تقويم|زرع|نحيد|نقلع)\b/i.test(raw)
+  if (/\b(nakhod|nkhod)\b.{0,20}\b(rdv|rendez|موعد)\b/i.test(raw)) return true
+  if (/حجز\s*موعد|نحب\s*نحجز|نبغي\s*نجي|بغيت\s*ناخد\s*موعد/.test(raw)) return true
+  // "bghit/brit/baghi + come / book / concrete dental action"
+  return /\b(bghit|bghiti|brit|baghi|bagha|baghit|kanbghi|khasni|n7taj|بغيت|باغي)\b.{0,40}\b(nji|ndir|nakhod|nkhod|rdv|rendez|موعد|nreserve|reserv|n7yed|n9ala3|n9ale3|extraction|nettoyage|tn9iya|blanchiment|tabyid|appareil|ta9wim|implant|خلع|قلع|تنظيف|تبييض|تقويم|زرع|نحيد|نقلع)\b/i.test(raw)
 }
 
 /**

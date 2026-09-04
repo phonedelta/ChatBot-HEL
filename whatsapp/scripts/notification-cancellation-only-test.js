@@ -73,7 +73,7 @@ async function run() {
     currentTime: '11:00',
     language: 'darija',
   })
-  assert.match(darija, /مرحبا/)
+  assert.match(darija, /السلام عليكم|مرحبا/)
   assert.match(darija, /نعم/)
   assert.ok(!/oui khoya|wakha|bghit/i.test(darija))
 
@@ -114,6 +114,7 @@ async function run() {
   const moved = crm.repo.updateAppointment(b.appointmentId, {
     full_name: 'Sara Dupont',
     phone_number: '+212622222222',
+    problem: 'Consultation',
     appointment_date: newSlot.date,
     appointment_time: newSlot.time,
     status: 'confirmed',

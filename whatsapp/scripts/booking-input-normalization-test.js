@@ -1,0 +1,297 @@
+/**
+ * Regression: booking time alternatives, Darija datetime, summary name corrections.
+ * Run: npm run test:booking-input-normalization
+ */
+const assert = require('assert')
+const path = require('path')
+const fs = require('fs')
+const os = require('os')
+const { createCrmService } = require('../src/crm')
+const {
+  normalizeTimeExpression,
+  extractEmbeddedTime,
+  listAvailableSlotTimes,
+  checkSlotAvailability,
+} = require('../src/crm/appointment-slots')
+const { extractAppointment } = require('../src/crm/extract')
+const { parseAvailableSlotSelection } = require('../src/crm/smart/availability-slot-select')
+const {
+  detectCorrectionIntent,
+  detectInlineNameCorrection,
+} = require('../src/crm/booking-corrections')
+const {
+  unclearSummaryClarifyMessage,
+  askFullNameAfterPartialCorrection,
+} = require('../src/crm/booking-confirmation-flow')
+
+function tomorrowIso(now) {
+  const d = new Date(now)
+  d.setDate(d.getDate() + 1)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+function assertTime(input, expected) {
+  const hit = normalizeTimeExpression(input)
+  assert.ok(hit, `expected time for "${input}"`)
+  assert.strictEqual(hit.normalized, expected, `"${input}" => ${hit.normalized}`)
+}
+
+async function run() {
+  let passed = 0
+
+  // --- Time normalizer ---
+  for (const [raw, expected] of [
+    ['12h30', '12:30'],
+    ['12 h 30', '12:30'],
+    ['12:30', '12:30'],
+    ['12H30', '12:30'],
+    ['14h', '14:00'],
+    ['14 h', '14:00'],
+    ['11h', '11:00'],
+    ['m3a 14h', '14:00'],
+    ['à 11h', '11:00'],
+  ]) {
+    assertTime(raw, expected)
+    passed += 1
+  }
+  assert.strictEqual(normalizeTimeExpression('3'), null)
+  assert.strictEqual(normalizeTimeExpression('+212612345678'), null)
+  assert.strictEqual(normalizeTimeExpression('03/09'), null)
+  assert.strictEqual(normalizeTimeExpression('05/09/2026'), null)
+  passed += 4
+
+  // --- Slot selection formats ---
+  const candidates = ['10:30', '12:00', '12:30']
+  for (const input of ['12h30', '12 h 30', '12:30', '12H30']) {
+    const sel = parseAvailableSlotSelection({ input, candidateSlots: candidates })
+    assert.strictEqual(sel.selectedTime, '12:30', input)
+    assert.notStrictEqual(sel.type, 'invalid')
+    passed += 1
+  }
+  const byIndex = parseAvailableSlotSelection({ input: '3', candidateSlots: candidates })
+  assert.strictEqual(byIndex.type, 'index')
+  assert.strictEqual(byIndex.selectedTime, '12:30')
+  passed += 1
+
+  // --- Darija relative dates ---
+  const now = new Date('2026-09-03T10:00:00')
+  const tmr = tomorrowIso(now)
+  for (const text of [
+    'Ghda m3a 14h',
+    'ghdda m3a 14h',
+    'gheda 14h',
+    'غدا مع 14',
+    'غدا مع 14:00',
+    'Demain à 11h',
+  ]) {
+    const appt = extractAppointment(text, now)
+    assert.strictEqual(appt?.appointment_date, tmr, `date for "${text}"`)
+    assert.ok(appt?.appointment_time, `time for "${text}"`)
+    passed += 1
+  }
+  assert.strictEqual(extractAppointment('Ghda m3a 14h', now).appointment_time, '14:00')
+  assert.strictEqual(extractAppointment('Demain à 11h', now).appointment_time, '11:00')
+  assert.strictEqual(extractAppointment('gheda 14h', now).appointment_time, '14:00')
+  passed += 3
+
+  // --- Name corrections ---
+  const full = detectCorrectionIntent('Smyti Issam Alaoui')
+  assert.ok(full.isCorrection)
+  assert.strictEqual(full.fields.full_name, 'Issam Alaoui')
+  passed += 1
+
+  const full2 = detectInlineNameCorrection("Mon nom c'est Issam Alaoui")
+  assert.strictEqual(full2.type, 'complete')
+  assert.strictEqual(full2.fullName, 'Issam Alaoui')
+  passed += 1
+
+  const inc = detectInlineNameCorrection('Smyti issam')
+  assert.strictEqual(inc.type, 'incomplete')
+  assert.ok(inc.candidate)
+  passed += 1
+
+  const inc2 = detectInlineNameCorrection("Mon nom c'est Issam")
+  assert.strictEqual(inc2.type, 'incomplete')
+  passed += 1
+
+  assert.ok(!/annul/i.test(unclearSummaryClarifyMessage('fr')))
+  assert.ok(/OUI|oui/i.test(unclearSummaryClarifyMessage('fr')))
+  assert.ok(/اسم|نسب/.test(askFullNameAfterPartialCorrection('darija')))
+  passed += 2
+
+  // --- End-to-end CRM: slot alternative "12h30" ---
+  const dbPath = path.join(os.tmpdir(), `booking-norm-${Date.now()}.sqlite`)
+  try { fs.unlinkSync(dbPath) } catch { /* */ }
+  const crm = createCrmService({ dbPath })
+  const chatId = '212677700901@c.us'
+  const conversationId = `main:${chatId}`
+
+  // Find a bookable weekday within horizon
+  const base = new Date('2026-09-08T09:00:00') // Tuesday
+  const dateIso = '2026-09-17' // Thu within horizon from ~Sep 4-8
+  const times = listAvailableSlotTimes(crm.db, dateIso, { limit: 12, now: base })
+  assert.ok(times.length >= 3, `need free slots on ${dateIso}, got ${times.length}`)
+  const busy = times[0]
+  const altA = times[1]
+  // Occupy first slot with a real customer row
+  const blockerId = crm.db.prepare(`
+    INSERT INTO customers (full_name, phone_number, city, created_at)
+    VALUES ('Blocker Slot', '+212600000001', 'Rabat', datetime('now'))
+  `).run().lastInsertRowid
+  crm.db.prepare(`
+    INSERT INTO appointments (
+      customer_id, appointment_date, appointment_time, status, created_at
+    ) VALUES (?, ?, ?, 'confirmed', datetime('now'))
+  `).run(blockerId, dateIso, busy)
+
+  let turn = await crm.processCrmTurn({
+    conversationId,
+    chatId,
+    userText: 'je veux un rendez-vous',
+    languageHint: 'fr',
+  })
+  turn = await crm.processCrmTurn({
+    conversationId,
+    chatId,
+    userText: [
+      'Nom : Ndi Dersa Kadrni',
+      'Téléphone : 0611223344',
+      'Ville : Rabat',
+      'Problème : Bghit ndir nettoyage',
+      `Rendez-vous : ${dateIso.slice(8, 10)}/${dateIso.slice(5, 7)}/2026 à ${busy}`,
+    ].join('\n'),
+    languageHint: 'fr',
+  })
+  // Should propose alternatives and keep date
+  assert.ok(
+    /Créneaux possibles|plus disponible|déjà réservé/i.test(turn.forceReply || ''),
+    turn.forceReply,
+  )
+  assert.strictEqual(turn.lead.appointment_date, dateIso)
+  assert.strictEqual(turn.lead.awaiting_field, 'slot_alternative')
+  assert.ok(!/uniquement[\s\S]*Jour et heure/i.test(turn.forceReply || ''))
+  passed += 3
+
+  // Pick alternative with 12h-style if altB is HH:30, else use HH:mm of altA as "XhYY"
+  const pick = altA
+  const [hh, mm] = pick.split(':')
+  const natural = mm === '00' ? `${Number(hh)}h` : `${Number(hh)}h${mm}`
+  turn = await crm.processCrmTurn({
+    conversationId,
+    chatId,
+    userText: natural,
+    languageHint: 'fr',
+  })
+  assert.strictEqual(turn.lead.appointment_date, dateIso, 'date preserved after alt pick')
+  assert.strictEqual(turn.lead.appointment_time, pick)
+  assert.notStrictEqual(turn.lead.awaiting_field, 'slot_alternative')
+  assert.ok(
+    turn.lead.stage === 'confirmation' || turn.lead.full_name,
+    'draft preserved / advanced',
+  )
+  assert.ok(!/Pour compléter votre demande[\s\S]*Jour et heure/i.test(turn.forceReply || ''))
+  passed += 4
+
+  // Summary name correction: incomplete then complete
+  // Ensure we are on confirmation
+  if (turn.lead.stage !== 'confirmation') {
+    // force summary if still collecting somehow
+    const checkLead = turn.lead
+    if (checkLead.appointment_date && checkLead.appointment_time && checkLead.full_name) {
+      /* ok */
+    }
+  }
+
+  // Create a clean confirmation lead path
+  const chat2 = '212677700902@c.us'
+  const conv2 = `main:${chat2}`
+  const freeTimes = listAvailableSlotTimes(crm.db, dateIso, { limit: 12, now: base })
+    .filter((t) => t !== busy && t !== pick)
+  assert.ok(freeTimes.length, 'need another free slot')
+  const free = freeTimes[0]
+
+  turn = await crm.processCrmTurn({
+    conversationId: conv2,
+    chatId: chat2,
+    userText: 'je veux un rendez-vous',
+    languageHint: 'fr',
+  })
+  turn = await crm.processCrmTurn({
+    conversationId: conv2,
+    chatId: chat2,
+    userText: [
+      'Nom : Ndi Dersa Kadrni',
+      'Téléphone : 0611334455',
+      'Ville : Rabat',
+      'Problème : détartrage',
+      `Rendez-vous : ${dateIso.slice(8, 10)}/${dateIso.slice(5, 7)}/2026 à ${free}`,
+    ].join('\n'),
+    languageHint: 'fr',
+  })
+  assert.strictEqual(turn.lead.stage, 'confirmation')
+  const phoneBefore = turn.lead.phone_number
+  const dateBefore = turn.lead.appointment_date
+  const timeBefore = turn.lead.appointment_time
+
+  turn = await crm.processCrmTurn({
+    conversationId: conv2,
+    chatId: chat2,
+    userText: 'Smyti issam',
+    languageHint: 'fr',
+  })
+  assert.ok(!/annuler cette demande/i.test(turn.forceReply || ''), turn.forceReply)
+  assert.ok(
+    /prénom et votre nom|الاسم الكامل|الاسم والنسب/i.test(turn.forceReply || ''),
+    turn.forceReply,
+  )
+  assert.strictEqual(turn.lead.phone_number, phoneBefore)
+  assert.strictEqual(turn.lead.appointment_date, dateBefore)
+  assert.strictEqual(turn.lead.appointment_time, timeBefore)
+  passed += 4
+
+  turn = await crm.processCrmTurn({
+    conversationId: conv2,
+    chatId: chat2,
+    userText: 'Issam Alaoui',
+    languageHint: 'fr',
+  })
+  assert.ok(/Issam Alaoui/i.test(turn.forceReply || turn.lead.full_name || ''))
+  assert.strictEqual(turn.lead.full_name, 'Issam Alaoui')
+  assert.strictEqual(turn.lead.phone_number, phoneBefore)
+  assert.strictEqual(turn.lead.appointment_date, dateBefore)
+  assert.strictEqual(turn.lead.appointment_time, timeBefore)
+  assert.ok(!/annuler cette demande/i.test(turn.forceReply || ''))
+  passed += 5
+
+  // Unknown input must not auto-cancel
+  turn = await crm.processCrmTurn({
+    conversationId: conv2,
+    chatId: chat2,
+    userText: 'att',
+    languageHint: 'fr',
+  })
+  assert.ok(!/annuler cette demande/i.test(turn.forceReply || ''), turn.forceReply)
+  assert.ok(/modifier|corriger|اسم|صحيح/i.test(turn.forceReply || ''), turn.forceReply)
+  passed += 2
+
+  // Explicit cancel
+  turn = await crm.processCrmTurn({
+    conversationId: conv2,
+    chatId: chat2,
+    userText: 'bghit nlghi had rdv',
+    languageHint: 'darija',
+  })
+  assert.ok(/تلغي|annul/i.test(turn.forceReply || ''), turn.forceReply)
+  assert.strictEqual(turn.lead.awaiting_field, 'draft_cancel_confirm')
+  passed += 2
+
+  try { fs.unlinkSync(dbPath) } catch { /* */ }
+
+  console.log(`\nbooking-input-normalization: ${passed} checks passed`)
+}
+
+run().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})

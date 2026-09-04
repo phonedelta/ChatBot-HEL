@@ -36,7 +36,7 @@ async function run() {
   }, '3andi wje3 f drsa')
   assert.strictEqual(urgence.intent, 'urgence')
   assert.strictEqual(urgence.interpreter.problem, 'Douleur dentaire')
-  assert.strictEqual(urgence.serviceDetection.service, 'Urgence dentaire')
+  assert.strictEqual(urgence.serviceDetection.service, 'Urgences dentaires')
 
   const appareil = normalizeInterpreterResult({
     language: 'darija',

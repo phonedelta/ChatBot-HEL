@@ -83,7 +83,7 @@ function stripPersonNameLabels(value) {
     /^(?:le\s+)?nom(?:\s+complet)?\s*[:\-–]?\s+/i,
     /^(?:le\s+)?nom(?:\s+complet)?\s*[:\-–]\s*/i,
     /^(?:name|full\s*name)\s*[:\-–]?\s+/i,
-    /^(?:smiya|smito|smiyto|smitha|smita|smiti|smiyti|smiyiti)(?:\s+(?:dialo|dyalo|dialha|dyalha|howa|hiya))?\s*[:\-–]?\s+/i,
+    /^(?:smiya|smito|smiyto|smitha|smita|smiti|smyti|smiyti|smiyiti)(?:\s+(?:dialo|dyalo|dialha|dyalha|howa|hiya))?\s*[:\-–]?\s+/i,
     /^(?:changer|corriger|modifier|bdel|bdl)\s+(?:le\s+)?(?:nom|smiya)\s*[:\-–]?\s*/i,
     /^(?:je m['’]appelle|mon nom(?:\s+complet)?(?:\s+(?:est|c['’]est))?|moi c['’]est|ismi|اسمي|سميتي)\s+/i,
     /^(?:الاسم(?:\s+الكامل)?|السمية|اسم)\s*[:\-–]?\s+/u,

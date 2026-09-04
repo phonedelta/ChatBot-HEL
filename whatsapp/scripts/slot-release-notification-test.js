@@ -97,6 +97,7 @@ async function run() {
   const moved = crm.repo.updateAppointment(b.appointmentId, {
     full_name: 'Sara Dupont',
     phone_number: '+212622222222',
+    problem: 'Consultation',
     appointment_date: newSlot.date,
     appointment_time: newSlot.time,
     status: 'confirmed',

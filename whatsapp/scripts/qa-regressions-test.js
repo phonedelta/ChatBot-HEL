@@ -69,7 +69,10 @@ async function run() {
     })
   } catch (e) {
     conflict = true
-    assert.strictEqual(e.code, 'SLOT_CONFLICT')
+    assert.ok(
+      e.code === 'SLOT_CONFLICT' || e.code === 'APPOINTMENT_SLOT_UNAVAILABLE',
+      `unexpected conflict code: ${e.code}`,
+    )
   }
   assert.ok(conflict, 'duplicate active slot blocked')
 

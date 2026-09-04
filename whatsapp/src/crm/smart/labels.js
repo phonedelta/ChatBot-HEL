@@ -112,6 +112,8 @@ const INTENT_LABELS = {
   BOOK_APPOINTMENT: 'Prise de rendez-vous',
   RESCHEDULE_APPOINTMENT: 'Déplacement de rendez-vous',
   CANCEL_APPOINTMENT: 'Annulation',
+  CHECK_APPOINTMENT_AVAILABILITY: 'Consultation des disponibilités',
+  LIST_MY_APPOINTMENTS: 'Liste des rendez-vous du patient',
   ASK_OPENING_HOURS: 'Horaires du cabinet',
   ASK_ADDRESS: 'Demande d’adresse',
   DENTAL_PAIN: 'Douleur dentaire',

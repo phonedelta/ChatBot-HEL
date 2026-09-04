@@ -28,7 +28,7 @@ function chatKeyVariants(chatKey) {
  *   language: string|null,
  * }}
  */
-function resolveConversationRoutingState(db, chatKey, lead = null) {
+function resolveConversationRoutingState(db, chatKey, lead = null, extras = {}) {
   const empty = {
     activeTopic: null,
     activeWorkflow: null,
@@ -45,6 +45,35 @@ function resolveConversationRoutingState(db, chatKey, lead = null) {
   }
 
   const variants = chatKeyVariants(chatKey)
+  const availabilityState = extras?.availabilityState || null
+
+  // PRIORITY 0 — availability consultation in progress (before booking form)
+  if (
+    availabilityState
+    && (
+      availabilityState.stage === 'awaiting_availability_date'
+      || availabilityState.stage === 'awaiting_available_slot_selection'
+      || availabilityState.stage === 'awaiting_precise_slot_confirm'
+    )
+  ) {
+    return {
+      activeTopic: 'availability',
+      activeWorkflow: 'check_availability',
+      pendingStep: availabilityState.stage,
+      pendingQuestionType: availabilityState.stage === 'awaiting_availability_date'
+        ? 'AVAILABILITY_DATE'
+        : (availabilityState.stage === 'awaiting_precise_slot_confirm'
+          ? 'YES_NO_SLOT_BOOK'
+          : 'AVAILABLE_SLOT_SELECT'),
+      blocksBooking: true,
+      lastReliableIntent: 'CHECK_APPOINTMENT_AVAILABILITY',
+      entities: {
+        availabilityDate: availabilityState.availability_date || null,
+        candidateSlots: availabilityState.candidateSlots || [],
+      },
+      language: availabilityState.language || lead?.language || null,
+    }
+  }
 
   // PRIORITY 1 — pending slot proposal (DB source of truth)
   for (const variant of variants) {
@@ -155,7 +184,7 @@ function resolveConversationRoutingState(db, chatKey, lead = null) {
         )
         : (stage === 'awaiting_patient'
           ? (lead?.awaiting_field === 'duplicate_confirm' ? 'DUPLICATE_PATIENT_CONFIRM' : 'PATIENT_SELECT')
-          : 'PROVIDE_BULK_FORM'),
+          : (lead?.awaiting_field === 'slot_alternative' ? 'BOOKING_SLOT_ALTERNATIVE' : 'PROVIDE_BULK_FORM')),
       blocksBooking: false,
       lastReliableIntent: 'BOOKING_IN_PROGRESS',
       entities: {
@@ -202,6 +231,19 @@ function contextualClarificationMessage(state, language, attempt = 1) {
       return `ما فهمتش مزيان. واش بغيتي تأكد الموعد ديال ${slot} ولا تلغيه؟ جاوب بـ نعم أو لا.`
     }
     return `Je n’ai pas bien compris. Souhaitez-vous confirmer ou annuler le rendez-vous du ${slot} ? Répondez OUI ou NON.`
+  }
+
+  if (wf === 'check_availability') {
+    if (state?.pendingQuestionType === 'AVAILABILITY_DATE') {
+      if (lang === 'darija') {
+        return 'ما فهمتش التاريخ مزيان. عطيني النهار والشهر، مثلا: 05/09'
+      }
+      return 'Je n’ai pas bien compris la date. Indiquez le jour et le mois, par exemple : 05/09'
+    }
+    if (lang === 'darija') {
+      return 'ما فهمتش مزيان. اختار رقم الساعة أو كتب ليا الساعة مباشرة.'
+    }
+    return 'Je n’ai pas bien compris. Choisissez le numéro du créneau ou indiquez l’heure.'
   }
 
   if (wf === 'booking') {

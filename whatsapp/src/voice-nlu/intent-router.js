@@ -2,14 +2,16 @@
  * Intent Router — runs BEFORE the LLM for every patient message.
  *
  * Pipeline:
- *   Message → Language → Intent → Service → structured route → LLM / CRM
+ *   Message → Language → Darija normalize → Intent → Service → structured route → LLM / CRM
  *
  * The LLM must consume this route and must NOT re-guess language/intent/service.
+ * Deterministic CRM state machines remain authoritative when a workflow is active.
  */
 
 const { detectLanguage, toReplyLanguageHint } = require('./language')
 const { classifyIntent } = require('./intent-classifier')
 const { detectService } = require('./services-dictionary')
+const { normalizeDarijaForNlu } = require('./darija-normalizer')
 const {
   classifyDentalProblem,
   shouldPreferClassification,
@@ -49,6 +51,7 @@ const {
  * @property {boolean} cancelAppointment
  * @property {boolean} skipProblemQuestion
  * @property {string} llmBlock
+ * @property {object|null} [nlu]
  */
 
 /**
@@ -58,6 +61,7 @@ const {
  *   voiceIntent?: string|null,
  *   interpreterIntent?: string|null,
  *   voiceService?: object|null,
+ *   stage?: string|null,
  * }} [options]
  * @returns {IntentRoute}
  */
@@ -69,9 +73,13 @@ function routePatientMessage(rawText, options = {}) {
     ? forced
     : toReplyLanguageHint(languageRaw)
 
+  const darijaNlu = normalizeDarijaForNlu(text, { stage: options.stage || null })
+  const textForRules = darijaNlu.normalizedText || text
+
   const intentHit = classifyIntent(text, {
     voiceIntent: options.voiceIntent || null,
     interpreterIntent: options.interpreterIntent || null,
+    stage: options.stage || null,
   })
 
   const dentalClassification = classifyDentalProblem(text)
@@ -126,6 +134,7 @@ function routePatientMessage(rawText, options = {}) {
   let intent = intentHit.intent || 'OTHER'
   let intentConfidence = Number(intentHit.confidence || 0)
   const explicitBooking = hasExplicitBookingIntent(text)
+    || hasExplicitBookingIntent(textForRules)
     || serviceBooking.intent === 'BOOK_APPOINTMENT'
 
   // Classifier BOOK_APPOINTMENT alone is not enough (service keywords were too broad).
@@ -154,6 +163,16 @@ function routePatientMessage(rawText, options = {}) {
     bookAppointment = false
   }
 
+  // Price / services FAQ must never open booking even if service name present
+  if (
+    intent === 'ASK_PRICE'
+    || intent === 'ASK_SERVICES'
+    || intent === 'ASK_LOCATION'
+    || intent === 'ASK_OPENING_HOURS'
+  ) {
+    bookAppointment = false
+  }
+
   // Low confidence / gibberish → explicit UNKNOWN (never sensitive workflow)
   if (
     isGibberishMessage(text)
@@ -162,6 +181,7 @@ function routePatientMessage(rawText, options = {}) {
       intent === 'OTHER'
       && intentConfidence < CONFIDENCE_UNKNOWN_MAX
       && !hasSubstantiveContent(text)
+      && !darijaNlu.hasDarijaSignal
     )
   ) {
     intent = 'UNKNOWN'
@@ -172,6 +192,11 @@ function routePatientMessage(rawText, options = {}) {
   const cancelAppointment = intent === 'CANCEL_APPOINTMENT'
     || intent === 'ANNULATION_RENDEZ_VOUS'
     || intent === 'ANNULATION'
+
+  // Availability consultation must not open booking form by itself
+  if (intent === 'CHECK_APPOINTMENT_AVAILABILITY') {
+    bookAppointment = false
+  }
 
   const route = {
     text,
@@ -197,6 +222,13 @@ function routePatientMessage(rawText, options = {}) {
       || (dentalClassification.service && dentalClassification.confidence >= CONFIDENCE_STRONG),
     ),
     llmBlock: '',
+    nlu: {
+      rawText: darijaNlu.rawText,
+      normalizedText: darijaNlu.normalizedText,
+      concepts: darijaNlu.concepts,
+      script: darijaNlu.script,
+      hasDarijaSignal: darijaNlu.hasDarijaSignal,
+    },
   }
 
   route.llmBlock = buildRouterLlmBlock(route)
@@ -214,6 +246,7 @@ function buildRouterLlmBlock(route) {
     `intent: ${route.intent}`,
     `intent_confidence: ${route.intentConfidence}`,
     route.intentMatched ? `intent_matched: ${route.intentMatched}` : null,
+    route.nlu?.normalizedText ? `darija_normalized: ${String(route.nlu.normalizedText).slice(0, 160)}` : null,
     route.service ? `service: ${route.service}` : 'service: none',
     route.service ? `service_confidence: ${route.serviceConfidence}` : null,
     route.serviceMatched ? `service_matched: ${route.serviceMatched}` : null,
@@ -227,8 +260,10 @@ function buildRouterLlmBlock(route) {
     'ROUTER RULES FOR YOUR REPLY:',
     '- Follow language strictly (fr → French only; darija → Arabic script only, never Latin Darija).',
     '- Treat intent/service above as already decided.',
+    '- Patients often write Moroccan Darija in Latin/Arabizi or Arabic script, sometimes mixed with French.',
     '- If book_appointment=yes and a CRM form/summary template is handled by CRM, do not invent a parallel booking flow.',
     '- If cancel_appointment=yes, do NOT invent an appointment id or cancel without the CRM confirmation flow.',
+    '- If intent=CHECK_APPOINTMENT_AVAILABILITY, never invent free slots — CRM availability engine decides.',
     '- If service is known with high confidence, do NOT ask "what is your dental problem?".',
     '- Never say you did not understand when intent_confidence >= 0.70.',
   ]

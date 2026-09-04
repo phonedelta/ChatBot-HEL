@@ -19,26 +19,36 @@ type QrPayload = {
 
 function whatsappStatusLabel(state?: string | null) {
   const v = String(state || '').toLowerCase()
-  if (v === 'ready' || v === 'authenticated') return 'Connecté'
+  if (v === 'ready') return 'Connecté'
+  if (v === 'authenticated' || v === 'connecting') return 'Connexion en cours'
   if (v === 'qr') return 'Connexion requise'
-  if (v === 'initializing' || v === 'recovering' || v === 'connecting') return 'Connexion en cours'
+  if (v === 'initializing' || v === 'recovering' || v === 'pairing' || v === 'opening') return 'Connexion en cours'
   if (v === 'disconnected' || v === 'missing') return 'Déconnecté'
-  if (v === 'auth_failure') return 'Problème de connexion'
+  if (v === 'auth_failure') return 'Erreur de connexion'
   return 'Connexion requise'
 }
 
 function isConnected(state?: string | null) {
-  const v = String(state || '').toLowerCase()
-  return v === 'ready' || v === 'authenticated'
+  return String(state || '').toLowerCase() === 'ready'
 }
 
 function isConnecting(state?: string | null) {
   const v = String(state || '').toLowerCase()
-  return ['initializing', 'qr', 'recovering', 'connecting', 'authenticated'].includes(v)
+  return ['initializing', 'qr', 'recovering', 'connecting', 'authenticated', 'pairing', 'opening'].includes(v)
+}
+
+function looksLikeTechnicalId(value?: string | null) {
+  const raw = String(value || '').trim()
+  if (!raw) return true
+  if (/@lid|@c\.us|@s\.whatsapp\.net|@g\.us/i.test(raw)) return true
+  if (/^\d{13,}$/.test(raw.replace(/\D/g, '')) && !raw.includes('+212')) return true
+  return false
 }
 
 function phoneOf(instance?: WaInstance | null) {
-  return instance?.phone_number || (instance as { phone?: string | null } | undefined)?.phone || null
+  const candidate = instance?.account?.phone || instance?.phone_number || (instance as { phone?: string | null } | undefined)?.phone || null
+  if (!candidate || looksLikeTechnicalId(candidate)) return null
+  return candidate
 }
 
 function formatLastActivity(iso?: string | null) {
@@ -107,12 +117,13 @@ export function IntegrationsPage() {
   }, [load])
 
   useEffect(() => {
-    if (!isConnecting(main?.state) || isConnected(main?.state)) return
+    const waitingNumber = isConnected(main?.state) && !phoneOf(main)
+    if ((!isConnecting(main?.state) || isConnected(main?.state)) && !waitingNumber) return
     const timer = window.setInterval(() => {
       void load(true)
     }, 2500)
     return () => window.clearInterval(timer)
-  }, [main?.state, load])
+  }, [main?.state, main?.phone_number, main?.account?.phone, load])
 
   useEffect(() => {
     if (isConnected(main?.state)) {
@@ -335,6 +346,11 @@ export function IntegrationsPage() {
                 <p className="text-xs text-muted">Compte WhatsApp</p>
                 <p className="mt-1 text-sm font-semibold text-navy">{phone}</p>
               </div>
+            ) : connected ? (
+              <div className="rounded-[10px] bg-[#F5FAFC] px-3.5 py-3 sm:col-span-2">
+                <p className="text-xs text-muted">Compte WhatsApp</p>
+                <p className="mt-1 text-sm font-semibold text-navy">Compte connecté — récupération du numéro...</p>
+              </div>
             ) : null}
           </div>
 
@@ -366,6 +382,11 @@ export function IntegrationsPage() {
                 <div className="flex justify-between gap-3">
                   <dt className="text-muted">Compte</dt>
                   <dd className="font-medium text-navy">{phone}</dd>
+                </div>
+              ) : connected ? (
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted">Compte</dt>
+                  <dd className="font-medium text-navy">Récupération du numéro...</dd>
                 </div>
               ) : null}
               {lastActivity ? (

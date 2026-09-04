@@ -45,6 +45,21 @@ const {
   DENTAL_PROBLEMS,
   shouldPreferClassification,
 } = require('./dental-problem-classifier')
+const {
+  normalizeDarijaForNlu,
+  classifyIntentFromConcepts,
+  isProtectedToken,
+  logDarijaNlu,
+} = require('./darija-normalizer')
+const {
+  CONCEPT_FORMS,
+  conceptForToken,
+  extractConcepts,
+} = require('./darija-lexicon')
+const {
+  classifyIntentSemanticFallback,
+  buildSemanticIntentSystemPrompt,
+} = require('./semantic-intent-fallback')
 
 module.exports = {
   analyzeVoiceTranscript,
@@ -84,4 +99,13 @@ module.exports = {
   classifyDentalProblem,
   DENTAL_PROBLEMS,
   shouldPreferClassification,
+  normalizeDarijaForNlu,
+  classifyIntentFromConcepts,
+  isProtectedToken,
+  logDarijaNlu,
+  CONCEPT_FORMS,
+  conceptForToken,
+  extractConcepts,
+  classifyIntentSemanticFallback,
+  buildSemanticIntentSystemPrompt,
 }

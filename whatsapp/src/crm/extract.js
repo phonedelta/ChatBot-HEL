@@ -33,8 +33,8 @@ const MOROCCAN_CITIES = MOROCCAN_CITY_TOKENS
 const WEEKDAY_ALIASES = {
   dimanche: 0, lundi: 1, mardi: 2, mercredi: 3, jeudi: 4, vendredi: 5, samedi: 6,
   // Darija Latin
-  l7d: 0, lhad: 0, nhar_l7d: 0,
-  tnin: 1, ltnin: 1, tnen: 1, nhar_tnin: 1,
+  l7d: 0, lhad: 0, l7ed: 0, nhar_l7d: 0,
+  tnin: 1, tnine: 1, ltnin: 1, tnen: 1, nhar_tnin: 1,
   tlat: 2, tlata: 2, tleta: 2, tlt: 2, nhar_tlat: 2,
   larb3: 3, larba: 3, arba: 3, arb3: 3, larb3a: 3, nhar_larb3: 3,
   kmis: 4, khamis: 4, lkmess: 4, nhar_kmis: 4,
@@ -220,18 +220,25 @@ function nextWeekday(from, weekday) {
   return date
 }
 
-function extractAppointment(text, now = new Date()) {
+function extractAppointment(text, nowOrOpts = new Date()) {
   const raw = String(text || '')
   const normalized = normalizeText(raw)
+  const now = nowOrOpts instanceof Date
+    ? nowOrOpts
+    : (nowOrOpts && nowOrOpts.now instanceof Date ? nowOrOpts.now : new Date())
   let date = null
   let time = null
 
-  if (/\baujourd'?hui\b|\blyoum\b|اليوم/.test(normalized)) {
+  if (/\baujourd'?hui\b|\blyoum\b|\blyom\b|اليوم/.test(normalized)) {
     date = new Date(now)
-  } else if (/\bdemain\b|\bghedda\b|غدا|غداً/.test(normalized)) {
+  } else if (
+    /\bdemain\b|\bghda\b|\bghedda\b|\bghdda\b|\bgheda\b|\bghada\b|\bgadda\b|غدا|غداً/.test(normalized)
+  ) {
     date = new Date(now)
     date.setDate(date.getDate() + 1)
-  } else if (/\bapres[- ]?demain\b|\bba3d ghedda\b/.test(normalized)) {
+  } else if (
+    /\bapres[- ]?demain\b|\bba3d ghedda\b|\bba3d ghdda\b|\bba3d ghda\b|\bmn b3d ghdda\b|\bmn b3d ghda\b|بعد\s*غدا/.test(normalized)
+  ) {
     date = new Date(now)
     date.setDate(date.getDate() + 2)
   } else {
@@ -256,14 +263,21 @@ function extractAppointment(text, now = new Date()) {
     }
   }
 
-  const timeMatch = raw.match(/\b(\d{1,2})\s*(?:h|:|مع|m3a)\s*(\d{2})?\b/i)
-    || raw.match(/\b(?:m3a|مع)\s*(\d{1,2})(?:\s*[:h]\s*(\d{2}))?\b/i)
-    || raw.match(/\bà\s*(\d{1,2})(?:\s*h)?\b/i)
-  if (timeMatch) {
-    const hours = Number(timeMatch[1])
-    const minutes = Number(timeMatch[2] || 0)
-    if (hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59) {
-      time = `${pad2(hours)}:${pad2(minutes)}`
+  // Shared time normalizer (12h30, 14h, m3a 14h, غدا مع 14, …)
+  try {
+    const { extractEmbeddedTime } = require('./appointment-slots')
+    const embedded = extractEmbeddedTime(raw)
+    if (embedded) time = embedded
+  } catch {
+    const timeMatch = raw.match(/\b(?:m3a|مع|à)\s*(\d{1,2})(?:\s*[:h]\s*(\d{2}))?\b/i)
+      || raw.match(/\b(\d{1,2})\s*[h:]\s*(\d{2})\b/i)
+      || raw.match(/\b(\d{1,2})\s*h(?:\s*(\d{2}))?\b/i)
+    if (timeMatch) {
+      const hours = Number(timeMatch[1])
+      const minutes = Number(timeMatch[2] || 0)
+      if (hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59) {
+        time = `${pad2(hours)}:${pad2(minutes)}`
+      }
     }
   }
 
@@ -281,7 +295,7 @@ function extractLabeledValue(line, pattern) {
 
 function looksLikeDateLine(line) {
   const raw = String(line || '')
-  if (/\d{1,2}[\/\-.]\d{1,2}|\b\d{1,2}\s*(?:h|:|مع|m3a)\s*\d{0,2}\b|\bghedda\b|\bdemain\b|غدا/i.test(raw)) {
+  if (/\d{1,2}[\/\-.]\d{1,2}|\b\d{1,2}\s*(?:h|:|مع|m3a)\s*\d{0,2}\b|\bghda\b|\bghedda\b|\bghdda\b|\bgheda\b|\bdemain\b|غدا/i.test(raw)) {
     return true
   }
   return matchWeekday(normalizeText(raw)) !== null
@@ -354,7 +368,7 @@ function isStandaloneCityMessage(text) {
 function looksLikeAvailabilityProbe(text) {
   const raw = String(text || '').trim()
   const n = normalizeText(raw)
-  const hasDay = matchWeekday(n) !== null || /\b(demain|ghedda|غدا|غداً|aujourdhui|aujourd hui|lyoum|اليوم)\b/.test(n)
+  const hasDay = matchWeekday(n) !== null || /\b(demain|ghda|ghedda|ghdda|gheda|غدا|غداً|aujourdhui|aujourd hui|lyoum|lyom|اليوم)\b/.test(n)
   if (!hasDay) return false
   const hasClock = /\b\d{1,2}\s*(?:h|:|مع|m3a)\s*\d{0,2}\b/i.test(raw)
     || /\bà\s*\d{1,2}\b/i.test(raw)

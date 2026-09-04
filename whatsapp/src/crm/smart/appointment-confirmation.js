@@ -9,6 +9,15 @@ const { formatPhoneDisplay } = require('../phone')
 const { formatDateDisplay, isDarija, formatDateTimeLocalized } = require('../messages')
 const { resolvePatientLanguageFromRow } = require('./resolve-patient-language')
 const { assistantAiActor } = require('./activity-actors')
+const {
+  parseAppointmentSelection,
+  toSelectionCandidate,
+} = require('./appointment-selection')
+
+const SELECTION_STATE_TTL_MS = 12 * 60 * 60 * 1000
+const STAGE_AWAITING_SELECTION = 'awaiting_selection'
+const STAGE_AWAITING_CONFIRMATION = 'awaiting_confirmation'
+const STAGE_AWAITING_MULTI_CONFIRMATION = 'awaiting_multi_confirmation'
 
 function nowIso() {
   return new Date().toISOString()
@@ -117,12 +126,187 @@ function confirmationFollowupMessage(appointment, customer, language = 'fr') {
 }
 
 function confirmationAckMessage(appointment, language = 'fr') {
+  const name = appointment?.full_name || appointment?.patientName || null
   const date = formatDateDisplay(appointment.appointment_date)
   const time = String(appointment.appointment_time || '').slice(0, 5)
   if (isDarija(language)) {
+    if (name) {
+      return [
+        `تم تأكيد الموعد ديال ${name} ✅`,
+        '',
+        `📅 ${date}`,
+        `🕐 ${time}`,
+      ].join('\n')
+    }
     return `شكراً. موعدك نهار ${date} مع ${time} تأكد دابا.`
   }
+  if (name) {
+    return [
+      `Le rendez-vous de ${name} est confirmé ✅`,
+      '',
+      `📅 ${date}`,
+      `🕐 ${time}`,
+    ].join('\n')
+  }
   return `Merci. Votre rendez-vous du ${date} à ${time} est maintenant confirmé.`
+}
+
+function selectionAskMessage(candidates, language = 'fr') {
+  const list = Array.isArray(candidates) ? candidates : []
+  const lines = list.map((c, i) => {
+    const name = c.patientName || c.full_name || 'Patient'
+    const date = formatDateDisplay(c.date || c.appointment_date)
+    const time = String(c.time || c.appointment_time || '').slice(0, 5)
+    if (isDarija(language)) return `${i + 1}. ${name} — ${date} مع ${time}`
+    return `${i + 1}. ${name} — ${date} à ${time}`
+  })
+  const n = list.length
+  if (isDarija(language)) {
+    const countLabel = n === 2 ? 'جوج مواعيد' : `${n} مواعيد`
+    const multiHint = n >= 2
+      ? '\nإلى بغيتي تأكدهم بجوج كتب 1 و 2.'
+      : ''
+    return [
+      `عندك ${countLabel} كيتسناو التأكيد:`,
+      '',
+      ...lines,
+      '',
+      'جاوبني بـ 1 ولا 2، أو كتب ليا السمية.' + multiHint,
+    ].join('\n')
+  }
+  const multiHint = n >= 2
+    ? '\nPour confirmer les deux, répondez 1 et 2.'
+    : ''
+  return [
+    'Vous avez plusieurs rendez-vous en attente de confirmation :',
+    '',
+    ...lines,
+    '',
+    'Répondez 1 ou 2, ou indiquez le nom.' + multiHint,
+  ].join('\n')
+}
+
+function selectionInvalidIndexMessage(candidates, badIndex, language = 'fr') {
+  const list = Array.isArray(candidates) ? candidates : []
+  const lines = list.map((c, i) => {
+    const name = c.patientName || c.full_name || 'Patient'
+    const date = formatDateDisplay(c.date || c.appointment_date)
+    const time = String(c.time || c.appointment_time || '').slice(0, 5)
+    return `${i + 1}. ${name} — ${date} ${isDarija(language) ? 'مع' : 'à'} ${time}`
+  })
+  if (isDarija(language)) {
+    return [
+      `الاختيار ${badIndex} ما كاينش.`,
+      '',
+      'عندك:',
+      ...lines,
+      '',
+      `اختار ${list.map((_, i) => i + 1).join(' ولا ')}.`,
+    ].join('\n')
+  }
+  return [
+    `Le choix ${badIndex} n’existe pas.`,
+    '',
+    'Voici les options :',
+    ...lines,
+    '',
+    `Choisissez ${list.map((_, i) => i + 1).join(' ou ')}.`,
+  ].join('\n')
+}
+
+function selectionUnknownNameMessage(candidates, name, language = 'fr') {
+  const list = Array.isArray(candidates) ? candidates : []
+  const lines = list.map((c, i) => {
+    const n = c.patientName || c.full_name || 'Patient'
+    const date = formatDateDisplay(c.date || c.appointment_date)
+    const time = String(c.time || c.appointment_time || '').slice(0, 5)
+    return `${i + 1}. ${n} — ${date} ${isDarija(language) ? 'مع' : 'à'} ${time}`
+  })
+  const label = String(name || '').trim() || '…'
+  if (isDarija(language)) {
+    return [
+      `ما لقيتش موعد باسم ${label} فهاد المواعيد.`,
+      '',
+      'اختار:',
+      ...lines,
+    ].join('\n')
+  }
+  return [
+    `Aucun rendez-vous au nom de ${label} dans cette liste.`,
+    '',
+    'Choisissez :',
+    ...lines,
+  ].join('\n')
+}
+
+function selectionConfirmAskMessage(appointment, language = 'fr') {
+  const name = appointment?.full_name || 'Patient'
+  const date = formatDateDisplay(appointment.appointment_date)
+  const time = String(appointment.appointment_time || '').slice(0, 5)
+  if (isDarija(language)) {
+    return [
+      'مزيان، الموعد اللي اخترتي هو:',
+      '',
+      name,
+      `📅 ${date}`,
+      `🕐 ${time}`,
+      '',
+      'واش نأكد ليك هاد الموعد؟',
+      'جاوب بنعم ولا.',
+    ].join('\n')
+  }
+  return [
+    'Très bien, voici le rendez-vous sélectionné :',
+    '',
+    name,
+    `📅 ${date}`,
+    `🕐 ${time}`,
+    '',
+    'Souhaitez-vous le confirmer ?',
+    'Répondez OUI ou NON.',
+  ].join('\n')
+}
+
+function multiSelectionConfirmAskMessage(appointments, language = 'fr') {
+  const list = Array.isArray(appointments) ? appointments : []
+  const bullets = list.map((a) => {
+    const name = a.full_name || a.patientName || 'Patient'
+    const date = formatDateDisplay(a.appointment_date || a.date)
+    const time = String(a.appointment_time || a.time || '').slice(0, 5)
+    if (isDarija(language)) return `• ${name} — ${date} مع ${time}`
+    return `• ${name} — ${date} à ${time}`
+  })
+  if (isDarija(language)) {
+    return [
+      'بغيتي نأكد ليك بجوج المواعيد؟',
+      '',
+      ...bullets,
+      '',
+      'جاوبني بنعم ولا.',
+    ].join('\n')
+  }
+  return [
+    'Souhaitez-vous confirmer ces rendez-vous ?',
+    '',
+    ...bullets,
+    '',
+    'Répondez OUI ou NON.',
+  ].join('\n')
+}
+
+function multiConfirmationAckMessage(appointments, language = 'fr') {
+  const list = Array.isArray(appointments) ? appointments : []
+  const bullets = list.map((a) => {
+    const name = a.full_name || 'Patient'
+    const date = formatDateDisplay(a.appointment_date)
+    const time = String(a.appointment_time || '').slice(0, 5)
+    if (isDarija(language)) return `• ${name} — ${date} مع ${time}`
+    return `• ${name} — ${date} à ${time}`
+  })
+  if (isDarija(language)) {
+    return ['تم تأكيد المواعيد ✅', '', ...bullets].join('\n')
+  }
+  return ['Les rendez-vous sont confirmés ✅', '', ...bullets].join('\n')
 }
 
 function cancellationAckMessage(appointment, language = 'fr') {
@@ -234,6 +418,18 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
       );
       CREATE INDEX IF NOT EXISTS idx_acr_status ON appointment_confirmation_requests(status, initial_sent_at);
       CREATE INDEX IF NOT EXISTS idx_acr_chat ON appointment_confirmation_requests(chat_key);
+
+      CREATE TABLE IF NOT EXISTS appointment_confirmation_chat_state (
+        chat_key TEXT PRIMARY KEY,
+        stage TEXT NOT NULL DEFAULT 'awaiting_selection',
+        requested_action TEXT NOT NULL DEFAULT 'confirm',
+        candidate_snapshot_json TEXT NOT NULL DEFAULT '[]',
+        selected_appointment_ids_json TEXT,
+        language TEXT DEFAULT 'fr',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        expires_at TEXT
+      );
     `)
     for (const sql of [
       'ALTER TABLE appointments ADD COLUMN confirmed_at TEXT',
@@ -296,6 +492,108 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
     `).all(key, key.replace(/^[^:]+:/, ''))
   }
 
+  function normalizeChatKey(chatKey) {
+    return String(chatKey || '').trim()
+  }
+
+  function stripChatInstance(chatKey) {
+    return normalizeChatKey(chatKey).replace(/^[^:]+:/, '')
+  }
+
+  function parseJsonSafe(value, fallback) {
+    try {
+      return value ? JSON.parse(value) : fallback
+    } catch {
+      return fallback
+    }
+  }
+
+  function clearSelectionState(chatKey) {
+    const key = normalizeChatKey(chatKey)
+    if (!key) return
+    db.prepare(`
+      DELETE FROM appointment_confirmation_chat_state
+      WHERE chat_key = ? OR chat_key = ?
+    `).run(key, stripChatInstance(key))
+  }
+
+  function getSelectionState(chatKey) {
+    const key = normalizeChatKey(chatKey)
+    if (!key) return null
+    const row = db.prepare(`
+      SELECT * FROM appointment_confirmation_chat_state
+      WHERE chat_key = ? OR chat_key = ?
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(key, stripChatInstance(key)) || null
+    if (!row) return null
+    if (row.expires_at) {
+      const exp = new Date(String(row.expires_at).replace(' ', 'T')).getTime()
+      if (Number.isFinite(exp) && exp < Date.now()) {
+        clearSelectionState(key)
+        return null
+      }
+    }
+    return {
+      ...row,
+      candidates: parseJsonSafe(row.candidate_snapshot_json, []),
+      selectedAppointmentIds: parseJsonSafe(row.selected_appointment_ids_json, []),
+    }
+  }
+
+  function saveSelectionState({
+    chatKey,
+    stage,
+    candidates,
+    selectedAppointmentIds = [],
+    language = 'fr',
+    requestedAction = 'confirm',
+  }) {
+    const key = normalizeChatKey(chatKey)
+    if (!key) return null
+    const expiresAt = new Date(Date.now() + SELECTION_STATE_TTL_MS).toISOString()
+    const ts = nowIso()
+    db.prepare(`
+      INSERT INTO appointment_confirmation_chat_state (
+        chat_key, stage, requested_action, candidate_snapshot_json,
+        selected_appointment_ids_json, language, created_at, updated_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(chat_key) DO UPDATE SET
+        stage = excluded.stage,
+        requested_action = excluded.requested_action,
+        candidate_snapshot_json = excluded.candidate_snapshot_json,
+        selected_appointment_ids_json = excluded.selected_appointment_ids_json,
+        language = excluded.language,
+        updated_at = excluded.updated_at,
+        expires_at = excluded.expires_at
+    `).run(
+      key,
+      stage,
+      requestedAction,
+      JSON.stringify(candidates || []),
+      JSON.stringify(selectedAppointmentIds || []),
+      language || 'fr',
+      ts,
+      ts,
+      expiresAt,
+    )
+    return getSelectionState(key)
+  }
+
+  function snapshotFromPending(pendingRows) {
+    return (pendingRows || []).map((p) => toSelectionCandidate({
+      appointment_id: p.appointment_id,
+      customer_id: p.customer_id,
+      full_name: p.full_name,
+      appointment_date: p.appointment_date,
+      appointment_time: p.appointment_time,
+    }))
+  }
+
+  function disambiguationMessage(pending, language = 'fr') {
+    return selectionAskMessage(snapshotFromPending(pending), language)
+  }
+
   function getPendingRequestForChat(chatKey, customerId = null) {
     const pending = listPendingRequestsForChat(chatKey)
     if (pending.length === 1) return pending[0]
@@ -316,30 +614,6 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
       `).get(Number(customerId)) || null
     }
     return null
-  }
-
-  function disambiguationMessage(pending, language = 'fr') {
-    const lines = pending.map((p, i) => {
-      const date = formatDateDisplay(p.appointment_date)
-      const time = String(p.appointment_time || '').slice(0, 5)
-      return `${i + 1}. ${p.full_name} — ${date} à ${time}`
-    })
-    if (isDarija(language)) {
-      return [
-        'عندك عدة مواعيد للتأكيد:',
-        '',
-        ...lines,
-        '',
-        'عافاك حدد شكون (بالرقم أو بالسمية).',
-      ].join('\n')
-    }
-    return [
-      'Vous avez plusieurs rendez-vous en attente de confirmation :',
-      '',
-      ...lines,
-      '',
-      'Lequel souhaitez-vous confirmer ou annuler ? (indiquez le numéro ou le nom)',
-    ].join('\n')
   }
 
   function loadAppointmentBundle(appointmentId) {
@@ -1125,6 +1399,11 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
   /**
    * Handle inbound patient message when a confirmation is pending.
    * Returns null if not applicable.
+   *
+   * State priority (before LLM / generic yes-no):
+   * - awaiting_selection → parseAppointmentSelection only ("1" ≠ yes)
+   * - awaiting_confirmation / awaiting_multi_confirmation → parseYesNo
+   * - ambiguous pending without selection → open selection, never confirm
    */
   async function handleInboundConfirmationReply({
     chatKey = null,
@@ -1137,18 +1416,329 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
     if (!raw) return null
 
     const req = getPendingRequestForChat(chatKey, customerId)
-    if (!req) return null
+    if (!req) {
+      // Stale selection state with nothing pending
+      if (getSelectionState(chatKey)) clearSelectionState(chatKey)
+      return null
+    }
 
+    // ---------- Multi pending: selection state machine ----------
     if (req.ambiguous && Array.isArray(req.pending)) {
-      const lang = req.pending[0]?.language || 'fr'
+      const pendingLang = req.pending[0]?.language || 'fr'
+      let state = getSelectionState(chatKey)
+      const pendingSnapshot = snapshotFromPending(req.pending)
+
+      // Bootstrap / refresh snapshot (stable order for this selection turn)
+      if (!state || !Array.isArray(state.candidates) || !state.candidates.length) {
+        state = saveSelectionState({
+          chatKey,
+          stage: STAGE_AWAITING_SELECTION,
+          candidates: pendingSnapshot,
+          selectedAppointmentIds: [],
+          language: pendingLang,
+          requestedAction: 'confirm',
+        })
+      } else {
+        // Keep displayed order; drop IDs that are no longer pending
+        const pendingIds = new Set(pendingSnapshot.map((c) => Number(c.appointmentId)))
+        const kept = state.candidates.filter((c) => pendingIds.has(Number(c.appointmentId)))
+        // Append any new pending not in snapshot (end) without reshuffling existing
+        for (const c of pendingSnapshot) {
+          if (!kept.some((k) => Number(k.appointmentId) === Number(c.appointmentId))) {
+            kept.push(c)
+          }
+        }
+        if (!kept.length) {
+          clearSelectionState(chatKey)
+          return null
+        }
+        if (
+          kept.length !== state.candidates.length
+          || kept.some((c, i) => Number(c.appointmentId) !== Number(state.candidates[i]?.appointmentId))
+        ) {
+          state = saveSelectionState({
+            chatKey,
+            stage: STAGE_AWAITING_SELECTION,
+            candidates: kept,
+            selectedAppointmentIds: [],
+            language: state.language || pendingLang,
+            requestedAction: 'confirm',
+          })
+        }
+      }
+
+      const language = state.language || pendingLang
+      const candidates = state.candidates
+
+      // --- AWAITING_APPOINTMENT_CONFIRMATION (single) ---
+      if (state.stage === STAGE_AWAITING_CONFIRMATION) {
+        const selectedId = Number(state.selectedAppointmentIds?.[0])
+        const appt = Number.isFinite(selectedId) ? loadAppointmentBundle(selectedId) : null
+        if (!appt || appt.status !== 'non_confirme') {
+          state = saveSelectionState({
+            chatKey,
+            stage: STAGE_AWAITING_SELECTION,
+            candidates,
+            selectedAppointmentIds: [],
+            language,
+            requestedAction: 'confirm',
+          })
+          return {
+            handled: true,
+            action: 'disambiguate',
+            forceReply: selectionAskMessage(candidates, language),
+            shouldSkipLlm: true,
+            pendingCount: candidates.length,
+          }
+        }
+
+        const yn = parseYesNoReply(raw, { allowTypoYes: true })
+        if (yn.value === 'yes') {
+          const result = confirmAppointment(selectedId, { source: 'whatsapp_patient' })
+          clearSelectionState(chatKey)
+          const refreshed = loadAppointmentBundle(selectedId)
+          return {
+            handled: true,
+            action: 'confirmed',
+            appointmentId: selectedId,
+            appointmentIds: [selectedId],
+            forceReply: confirmationAckMessage(refreshed || appt, language),
+            shouldSkipLlm: true,
+            result,
+          }
+        }
+        if (yn.value === 'no') {
+          const result = cancelAppointmentFromConfirmation(selectedId, {
+            source: 'whatsapp_patient',
+          })
+          clearSelectionState(chatKey)
+          return {
+            handled: true,
+            action: 'cancelled',
+            appointmentId: selectedId,
+            forceReply: cancellationAckMessage(appt, language),
+            shouldSkipLlm: true,
+            result,
+          }
+        }
+        return {
+          handled: true,
+          action: 'clarify',
+          forceReply: selectionConfirmAskMessage(appt, language),
+          shouldSkipLlm: true,
+          appointmentId: selectedId,
+        }
+      }
+
+      // --- AWAITING multi confirmation ---
+      if (state.stage === STAGE_AWAITING_MULTI_CONFIRMATION) {
+        const ids = (state.selectedAppointmentIds || []).map(Number).filter(Number.isFinite)
+        const appts = ids.map((id) => loadAppointmentBundle(id)).filter((a) => a && a.status === 'non_confirme')
+        if (!appts.length) {
+          state = saveSelectionState({
+            chatKey,
+            stage: STAGE_AWAITING_SELECTION,
+            candidates,
+            selectedAppointmentIds: [],
+            language,
+            requestedAction: 'confirm',
+          })
+          return {
+            handled: true,
+            action: 'disambiguate',
+            forceReply: selectionAskMessage(candidates, language),
+            shouldSkipLlm: true,
+            pendingCount: candidates.length,
+          }
+        }
+
+        const yn = parseYesNoReply(raw, { allowTypoYes: true })
+        if (yn.value === 'yes') {
+          const confirmed = []
+          for (const a of appts) {
+            const result = confirmAppointment(a.id, { source: 'whatsapp_patient' })
+            if (result?.ok) confirmed.push(loadAppointmentBundle(a.id) || a)
+          }
+          clearSelectionState(chatKey)
+          return {
+            handled: true,
+            action: 'confirmed_multiple',
+            appointmentIds: confirmed.map((a) => a.id),
+            appointmentId: confirmed[0]?.id || null,
+            forceReply: multiConfirmationAckMessage(confirmed, language),
+            shouldSkipLlm: true,
+          }
+        }
+        if (yn.value === 'no') {
+          // Back to selection — do not confirm, do not cancel all
+          state = saveSelectionState({
+            chatKey,
+            stage: STAGE_AWAITING_SELECTION,
+            candidates,
+            selectedAppointmentIds: [],
+            language,
+            requestedAction: 'confirm',
+          })
+          return {
+            handled: true,
+            action: 'disambiguate',
+            forceReply: selectionAskMessage(candidates, language),
+            shouldSkipLlm: true,
+            pendingCount: candidates.length,
+          }
+        }
+        return {
+          handled: true,
+          action: 'clarify_multi',
+          forceReply: multiSelectionConfirmAskMessage(appts, language),
+          shouldSkipLlm: true,
+        }
+      }
+
+      // --- AWAITING_APPOINTMENT_SELECTION ---
+      // Never treat "1" as yes here — selection parser first.
+      const parsedSel = parseAppointmentSelection({ message: raw, candidates })
+
+      if (parsedSel.type === 'single' && parsedSel.appointmentIds?.[0]) {
+        const selectedId = Number(parsedSel.appointmentIds[0])
+        const appt = loadAppointmentBundle(selectedId)
+        if (!appt || appt.status !== 'non_confirme') {
+          return {
+            handled: true,
+            action: 'disambiguate',
+            forceReply: selectionAskMessage(candidates, language),
+            shouldSkipLlm: true,
+            pendingCount: candidates.length,
+          }
+        }
+        saveSelectionState({
+          chatKey,
+          stage: STAGE_AWAITING_CONFIRMATION,
+          candidates,
+          selectedAppointmentIds: [selectedId],
+          language,
+          requestedAction: 'confirm',
+        })
+        return {
+          handled: true,
+          action: 'selected',
+          appointmentId: selectedId,
+          appointmentIds: [selectedId],
+          matchedBy: parsedSel.matchedBy,
+          forceReply: selectionConfirmAskMessage(appt, language),
+          shouldSkipLlm: true,
+        }
+      }
+
+      if (parsedSel.type === 'multiple' && parsedSel.appointmentIds?.length) {
+        const ids = parsedSel.appointmentIds.map(Number).filter(Number.isFinite)
+        const appts = ids.map((id) => loadAppointmentBundle(id)).filter((a) => a && a.status === 'non_confirme')
+        if (appts.length < 2) {
+          if (appts.length === 1) {
+            saveSelectionState({
+              chatKey,
+              stage: STAGE_AWAITING_CONFIRMATION,
+              candidates,
+              selectedAppointmentIds: [appts[0].id],
+              language,
+              requestedAction: 'confirm',
+            })
+            return {
+              handled: true,
+              action: 'selected',
+              appointmentId: appts[0].id,
+              forceReply: selectionConfirmAskMessage(appts[0], language),
+              shouldSkipLlm: true,
+            }
+          }
+          return {
+            handled: true,
+            action: 'disambiguate',
+            forceReply: selectionAskMessage(candidates, language),
+            shouldSkipLlm: true,
+            pendingCount: candidates.length,
+          }
+        }
+        saveSelectionState({
+          chatKey,
+          stage: STAGE_AWAITING_MULTI_CONFIRMATION,
+          candidates,
+          selectedAppointmentIds: appts.map((a) => a.id),
+          language,
+          requestedAction: 'confirm',
+        })
+        return {
+          handled: true,
+          action: 'selected_multiple',
+          appointmentIds: appts.map((a) => a.id),
+          matchedBy: parsedSel.matchedBy,
+          forceReply: multiSelectionConfirmAskMessage(appts, language),
+          shouldSkipLlm: true,
+        }
+      }
+
+      if (parsedSel.type === 'invalid' && parsedSel.reason === 'index_out_of_range') {
+        const bad = parsedSel.displayIndices?.[0] ?? '?'
+        return {
+          handled: true,
+          action: 'invalid_selection',
+          forceReply: selectionInvalidIndexMessage(candidates, bad, language),
+          shouldSkipLlm: true,
+          pendingCount: candidates.length,
+        }
+      }
+
+      // Oui / Non / unclear without a name match → show list (never treat as patient name)
+      const ynBare = parseYesNoReply(raw, { allowTypoYes: true })
+      if (ynBare.value === 'yes' || ynBare.value === 'no' || parsedSel.type === 'empty') {
+        saveSelectionState({
+          chatKey,
+          stage: STAGE_AWAITING_SELECTION,
+          candidates,
+          selectedAppointmentIds: [],
+          language,
+          requestedAction: 'confirm',
+        })
+        return {
+          handled: true,
+          action: 'disambiguate',
+          forceReply: selectionAskMessage(candidates, language),
+          shouldSkipLlm: true,
+          pendingCount: candidates.length,
+        }
+      }
+
+      if (parsedSel.type === 'invalid' && parsedSel.reason === 'unknown_name') {
+        return {
+          handled: true,
+          action: 'invalid_selection',
+          forceReply: selectionUnknownNameMessage(candidates, raw, language),
+          shouldSkipLlm: true,
+          pendingCount: candidates.length,
+        }
+      }
+
+      if (parsedSel.type === 'ambiguous') {
+        return {
+          handled: true,
+          action: 'ambiguous_selection',
+          forceReply: selectionAskMessage(candidates, language),
+          shouldSkipLlm: true,
+          pendingCount: candidates.length,
+        }
+      }
+
       return {
         handled: true,
         action: 'disambiguate',
-        forceReply: disambiguationMessage(req.pending, lang),
+        forceReply: selectionAskMessage(candidates, language),
         shouldSkipLlm: true,
-        pendingCount: req.pending.length,
+        pendingCount: candidates.length,
       }
     }
+
+    // ---------- Single pending confirmation ----------
+    if (getSelectionState(chatKey)) clearSelectionState(chatKey)
 
     const appt = loadAppointmentBundle(req.appointment_id)
     if (!appt || appt.status !== 'non_confirme') return null
@@ -1346,6 +1936,8 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
     runConfirmationTick,
     getPendingRequestForChat,
     getRequestByAppointment,
+    getSelectionState,
+    clearSelectionState,
     confirmationAskMessage,
     confirmationFollowupMessage,
     confirmationAckMessage,
@@ -1358,4 +1950,7 @@ module.exports = {
   confirmationFollowupMessage,
   confirmationAckMessage,
   cancellationAckMessage,
+  selectionAskMessage,
+  parseAppointmentSelection,
+  toSelectionCandidate,
 }
