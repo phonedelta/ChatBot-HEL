@@ -48,7 +48,12 @@ const { openCrmDatabase } = require('./crm/db')
 const { getAuthenticatedActor } = require('./crm/smart/activity-actors')
 const { formatKnowledgeItemsForPrompt } = require('./crm/smart/knowledge-prompt')
 const { formatPublicServicesKnowledge } = require('./crm/services')
-const { resolvePuppeteerExecutablePath } = require('./puppeteer-executable')
+const { resolvePuppeteerExecutablePath, looksLikeWindowsExecutablePath } = require('./puppeteer-executable')
+const {
+  normalizeWhatsAppClientState,
+  isWhatsAppWaitingForPairing,
+  isWhatsAppConnectedState,
+} = require('./whatsapp-client-state')
 const {
   classifyJid,
   sanitizeAccountPhone,
@@ -156,6 +161,27 @@ function isCloudDeployment() {
     || process.env.RENDER
   )
 }
+
+/** Drop Windows Chrome paths injected via Railway Variables (they break Linux Chromium). */
+function sanitizeCloudBrowserEnv() {
+  if (process.platform === 'win32') return
+  for (const key of ['PUPPETEER_EXECUTABLE_PATH', 'CHROME_BIN']) {
+    const value = String(process.env[key] || '').trim()
+    if (!value) continue
+    if (looksLikeWindowsExecutablePath(value)) {
+      console.warn(`[iadis-wa] clearing invalid ${key} on Linux/cloud`, { configured_path: value })
+      delete process.env[key]
+    }
+  }
+  if (isCloudDeployment() && !String(process.env.PUPPETEER_EXECUTABLE_PATH || '').trim()) {
+    process.env.PUPPETEER_EXECUTABLE_PATH = '/usr/bin/chromium'
+  }
+  if (isCloudDeployment() && !String(process.env.CHROME_BIN || '').trim()) {
+    process.env.CHROME_BIN = '/usr/bin/chromium'
+  }
+}
+
+sanitizeCloudBrowserEnv()
 
 const defaultQrWaitMs = isCloudDeployment() ? 60000 : 7000
 const qrWaitMs = Number(process.env.WA_QR_WAIT_MS || defaultQrWaitMs)
@@ -3980,8 +4006,8 @@ async function checkInstanceHealth(record) {
         'instance.getState',
       )
 
-      const normalized = String(state || '').toLowerCase()
-      if (!normalized || normalized === 'connected' || normalized === 'open' || normalized === 'ready') {
+      const normalized = normalizeWhatsAppClientState(state)
+      if (isWhatsAppConnectedState(normalized)) {
         if (record.state === 'ready') {
           updateState(record, 'ready', { lastError: null })
         } else if (record.state !== 'qr' && record.state !== 'authenticated' && record.state !== 'connecting') {
@@ -3990,14 +4016,22 @@ async function checkInstanceHealth(record) {
         return
       }
 
-      if (normalized === 'opening' || normalized === 'pairing' || normalized === 'unpaired') {
+      // unpaired / unpaired_idle / pairing = waiting for QR or phone link — do not recover-loop
+      if (isWhatsAppWaitingForPairing(normalized)) {
         if (record.state === 'qr' || record.state === 'authenticated' || record.state === 'connecting' || record.state === 'initializing') {
           return
         }
-        if (record.state === 'ready' && normalized === 'unpaired') {
-          throw new Error(`Unexpected WhatsApp state: ${normalized}`)
+        if (record.state === 'ready') {
+          // Session dropped while we thought we were ready — reconnect once, don't spam as fatal
+          console.warn('[iadis-wa] WhatsApp became unpaired after ready; reconnecting', {
+            instance_id: record.instanceId,
+            wa_state: normalized,
+          })
+          updateState(record, 'connecting', { lastError: null })
+          initializeRecord(record)
+          return
         }
-        updateState(record, normalized === 'unpaired' ? 'connecting' : normalized, { lastError: null })
+        updateState(record, record.state === 'qr' ? 'qr' : 'connecting', { lastError: null })
         return
       }
 
@@ -4227,7 +4261,7 @@ function attachClientListeners(record) {
   })
 
   client.on('change_state', (value) => {
-    const state = String(value || '').toLowerCase()
+    const state = normalizeWhatsAppClientState(value)
     if (state === 'connected') {
       if (record.state !== 'ready') {
         updateState(record, 'connecting', { lastError: null })
@@ -4235,7 +4269,16 @@ function attachClientListeners(record) {
       return
     }
 
-    if (record.state !== 'ready' && state && state !== 'unpaired') {
+    if (isWhatsAppWaitingForPairing(state)) {
+      if (record.state === 'ready') {
+        updateState(record, 'connecting', { lastError: null })
+      } else if (record.state !== 'qr') {
+        updateState(record, 'connecting', { lastError: null })
+      }
+      return
+    }
+
+    if (record.state !== 'ready' && state) {
       updateState(record, state)
     }
   })
