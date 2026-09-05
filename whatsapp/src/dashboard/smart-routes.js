@@ -601,12 +601,15 @@ function createSmartCrmRouter(deps) {
     }
   })
 
-  router.post('/agenda/appointments/:id/move', (req, res) => {
+  router.post('/agenda/appointments/:id/move', async (req, res) => {
     if (!perm(req, res, PERMISSIONS.EDIT_APPOINTMENT)) return undefined
     const smart = smartOr503(res)
     if (!smart) return undefined
     try {
-      const result = smart.moveAppointmentDirect({
+      if (typeof deps.sendWhatsAppText === 'function') {
+        smart.setSlotProposalSender?.(deps.sendWhatsAppText)
+      }
+      const moveOpts = {
         appointmentId: Number(req.params.id),
         slotDate: req.body?.slot_date || req.body?.slotDate,
         slotTime: req.body?.slot_time || req.body?.slotTime,
@@ -615,8 +618,14 @@ function createSmartCrmRouter(deps) {
           : undefined,
         actor: dashboardActor(req),
         actorName: actorDisplayName(req),
-        notifyPatient: Boolean(req.body?.notify_patient),
-      })
+        // Default: always WhatsApp-notify patient on staff move
+        notifyPatient: req.body?.notify_patient === false || req.body?.notifyPatient === false
+          ? false
+          : true,
+      }
+      const result = typeof smart.moveAppointmentAndNotify === 'function'
+        ? await smart.moveAppointmentAndNotify(moveOpts)
+        : smart.moveAppointmentDirect(moveOpts)
       return res.json({ ok: true, ...result })
     } catch (error) {
       let code = 400

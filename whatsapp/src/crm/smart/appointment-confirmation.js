@@ -883,6 +883,7 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
     chatKey = null,
     conversationId = null,
     language = null,
+    createBellNotification = true,
   } = {}) {
     const req = ensureRequestForAppointment(appointmentId, {
       chat_key: chatKey,
@@ -903,8 +904,8 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
         })
       } catch { /* optional */ }
     }
-    // Dashboard bell — staff must see new WhatsApp bookings immediately
-    if (createNotification && appt) {
+    // Dashboard bell — staff must see new WhatsApp bookings immediately (not staff moves)
+    if (createNotification && appt && createBellNotification) {
       try {
         const time = String(appt.appointment_time || '').slice(0, 5)
         const dateLabel = formatDateDisplay(appt.appointment_date)

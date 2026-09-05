@@ -10,6 +10,7 @@ const { formatDateTimeLocalized, formatLongDateFr, isDarija } = require('../mess
 const { validateAppointmentHours } = require('../working-hours')
 const { resolvePatientLanguageFromRow } = require('./resolve-patient-language')
 const { assistantAiActor, getAuthenticatedActor } = require('./activity-actors')
+const { findContactByWhatsAppOrPhone } = require('../contact-patients')
 
 function buildSlotProposalMessage(args) {
   return proposalWhatsAppMessage(args)
@@ -17,6 +18,47 @@ function buildSlotProposalMessage(args) {
 
 function nowIso() {
   return new Date().toISOString()
+}
+
+function firstNameFromFull(fullName) {
+  return String(fullName || '').trim().split(/\s+/).filter(Boolean)[0] || fullName || 'Patient'
+}
+
+/**
+ * WhatsApp message after staff manually moves a RDV (agenda).
+ */
+function msgStaffMovedPatient({
+  full_name,
+  old_date,
+  old_time,
+  new_date,
+  new_time,
+}, language = 'fr') {
+  const name = firstNameFromFull(full_name)
+  const oldLabel = formatDateTimeLocalized(old_date, old_time, language)
+  const newLabel = formatDateTimeLocalized(new_date, new_time, language)
+  if (isDarija(language)) {
+    return [
+      `السلام عليكم ${name}،`,
+      '',
+      'تم تغيير الموعد ديالكم عند مركز طب الأسنان HEL.',
+      '',
+      `الموعد القديم : ${oldLabel}`,
+      `الموعد الجديد : ${newLabel}`,
+      '',
+      'نتسناوكم فالوقت الجديد.',
+    ].join('\n')
+  }
+  return [
+    `Bonjour ${name},`,
+    '',
+    'Votre rendez-vous au Centre Dentaire HEL a été modifié.',
+    '',
+    `Ancien créneau : ${oldLabel}`,
+    `Nouveau créneau : ${newLabel}`,
+    '',
+    'Nous vous attendons à la nouvelle date.',
+  ].join('\n')
 }
 
 function runInTransaction(db, fn) {
@@ -718,6 +760,7 @@ function createSlotProposalEngine(db, helpers = {}) {
         registerBookingCreated(appointmentId, {
           chatKey: appt.whatsapp_chat_id || appt.conversation_id,
           language: resolveLanguageForPatient(appt, appt.whatsapp_chat_id || appt.conversation_id).language,
+          createBellNotification: false,
         })
       } catch { /* optional */ }
     }
@@ -768,6 +811,143 @@ function createSlotProposalEngine(db, helpers = {}) {
       released_slot: { slot_date: oldDate, slot_time: oldTime, kind: 'released' },
       notifyPatient,
     }
+  }
+
+  async function notifyPatientOfStaffMove(appointment, {
+    previous = null,
+    actorName = null,
+  } = {}) {
+    const whatsapp = {
+      attempted: false,
+      sent: false,
+      skipped: false,
+      messageId: null,
+      error: null,
+      disconnected: false,
+    }
+
+    const appt = appointment && appointment.id ? appointment : null
+    if (!appt) {
+      whatsapp.error = 'missing_appointment'
+      return whatsapp
+    }
+
+    const oldDate = previous?.date || null
+    const oldTime = previous?.time || null
+    const newDate = appt.appointment_date
+    const newTime = String(appt.appointment_time || '').slice(0, 5)
+    if (!oldDate || !oldTime || !newDate || !newTime) {
+      whatsapp.error = 'missing_slot_info'
+      return whatsapp
+    }
+
+    const phone = appt.phone_number || null
+    let resolvedChat = appt.whatsapp_chat_id || null
+    if (!resolvedChat && phone) {
+      try {
+        const contact = findContactByWhatsAppOrPhone(db, { phone })
+        resolvedChat = contact?.whatsapp_id || contact?.whatsapp_chat_id || null
+      } catch { /* optional */ }
+    }
+    if (!resolvedChat && phone) {
+      const digits = String(phone).replace(/\D/g, '')
+      if (digits) resolvedChat = `${digits}@c.us`
+    }
+    if (!resolvedChat && !phone) {
+      whatsapp.error = 'no_patient_channel'
+      return whatsapp
+    }
+
+    const sendFn = getSendWhatsAppText()
+    if (typeof sendFn !== 'function') {
+      whatsapp.error = 'WhatsApp sender unavailable'
+      return whatsapp
+    }
+
+    const language = resolveLanguageForPatient(appt, resolvedChat).language
+    const text = msgStaffMovedPatient({
+      full_name: appt.full_name,
+      old_date: oldDate,
+      old_time: oldTime,
+      new_date: newDate,
+      new_time: newTime,
+    }, language)
+    whatsapp.attempted = true
+
+    try {
+      const sent = await sendFn({
+        chatId: resolvedChat,
+        phone,
+        text,
+      })
+      whatsapp.sent = true
+      whatsapp.messageId = sent?.messageId || null
+      const outboundChatId = sent?.chatId || resolvedChat
+
+      if (typeof trackWhatsAppTurn === 'function') {
+        try {
+          trackWhatsAppTurn({
+            chatId: outboundChatId,
+            customerId: appt.customer_id || null,
+            outboundText: text,
+            outboundAuthor: 'ai',
+            outboundMessageId: sent?.messageId || null,
+            phoneNumber: phone,
+            contactName: appt.full_name || null,
+          })
+        } catch { /* optional */ }
+      }
+
+      if (typeof logAiAction === 'function') {
+        try {
+          logAiAction({
+            customer_id: appt.customer_id || null,
+            action_type: 'staff_move_notified',
+            reason: actorName
+              ? `Notification déplacement agenda (${actorName})`
+              : 'Notification déplacement agenda',
+            result: String(appt.id),
+            source: 'dashboard',
+            payload: {
+              appointment_id: appt.id,
+              recipient: phone,
+              language,
+              from: { date: oldDate, time: oldTime },
+              to: { date: newDate, time: newTime },
+            },
+          })
+        } catch { /* optional */ }
+      }
+    } catch (error) {
+      whatsapp.sent = false
+      whatsapp.error = error?.message || String(error)
+      if (error?.code === 'WA_NOT_READY') {
+        whatsapp.disconnected = true
+      }
+      console.warn('[MOVE] staff move WhatsApp notify failed', {
+        appointment_id: appt.id,
+        reason: whatsapp.error,
+        code: error?.code || null,
+      })
+    }
+
+    return whatsapp
+  }
+
+  /**
+   * Staff move + WhatsApp notify to patient (default on).
+   */
+  async function moveAppointmentAndNotify(opts = {}) {
+    const notify = opts.notifyPatient !== false
+    const result = moveAppointmentDirect(opts)
+    if (!notify) {
+      return { ...result, whatsapp: { attempted: false, sent: false, skipped: true } }
+    }
+    const whatsapp = await notifyPatientOfStaffMove(result.appointment, {
+      previous: result.previous,
+      actorName: opts.actorName || opts.actor?.displayName || null,
+    })
+    return { ...result, whatsapp }
   }
 
   function resolveLanguageForProposal(proposal) {
@@ -1139,6 +1319,8 @@ function createSlotProposalEngine(db, helpers = {}) {
     isSlotFree,
     createAndSendProposal,
     moveAppointmentDirect,
+    moveAppointmentAndNotify,
+    notifyPatientOfStaffMove,
     acceptProposal,
     declineProposal,
     cancelProposal,
@@ -1148,6 +1330,7 @@ function createSlotProposalEngine(db, helpers = {}) {
     getActiveAppointment,
     proposalWhatsAppMessage,
     buildSlotProposalMessage,
+    msgStaffMovedPatient,
     formatLongDateFr,
   }
 }
@@ -1156,5 +1339,6 @@ module.exports = {
   createSlotProposalEngine,
   proposalWhatsAppMessage,
   buildSlotProposalMessage,
+  msgStaffMovedPatient,
   formatLongDateFr,
 }

@@ -2577,6 +2577,8 @@ function createSmartCrm(db, crmRepo = null) {
     searchPatientsForSlot: (...args) => slotProposals.searchPatientsForSlot(...args),
     createSlotProposal: (...args) => slotProposals.createAndSendProposal(...args),
     moveAppointmentDirect: (...args) => slotProposals.moveAppointmentDirect(...args),
+    moveAppointmentAndNotify: (...args) => slotProposals.moveAppointmentAndNotify(...args),
+    notifyPatientStaffMove: (...args) => slotProposals.notifyPatientOfStaffMove(...args),
     cancelSlotProposal: (...args) => slotProposals.cancelProposal(...args),
     handleInboundSlotProposalReply: (...args) => slotProposals.handleInboundProposalReply(...args),
     whatsappCancel,
