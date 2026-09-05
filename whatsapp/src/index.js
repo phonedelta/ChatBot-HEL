@@ -13,6 +13,7 @@ const {
   buildLowConfidenceVoiceReply,
   updateVoiceNluLog,
   classifyIntent,
+  buildIntentDirectReply,
   routePatientMessage,
   buildRouterLlmBlock,
   classifyIntentSemanticFallback,
@@ -35,6 +36,7 @@ const { createCrmService } = require('./crm')
 const { openCrmDatabase } = require('./crm/db')
 const { getAuthenticatedActor } = require('./crm/smart/activity-actors')
 const { formatKnowledgeItemsForPrompt } = require('./crm/smart/knowledge-prompt')
+const { formatPublicServicesKnowledge } = require('./crm/services')
 const {
   classifyJid,
   sanitizeAccountPhone,
@@ -264,18 +266,24 @@ const crm = crmEnabled ? createCrmService({
 }) : null
 
 function getLiveKnowledgeForPrompt() {
+  const servicesKnowledge = formatPublicServicesKnowledge()
   try {
     if (crm?.smart?.listKnowledge) {
       const items = crm.smart.listKnowledge()
       const formatted = formatKnowledgeItemsForPrompt(items)
-      if (formatted) return formatted
+      if (formatted) {
+        return `${formatted}\n\n${servicesKnowledge}`
+      }
     }
   } catch (error) {
     console.warn('[iadis-wa] unable to load live knowledge from CRM', {
       reason: error.message || String(error),
     })
   }
-  return aiKnowledgeBase || ''
+  const fallback = aiKnowledgeBase || ''
+  return fallback
+    ? `${fallback}\n\n${servicesKnowledge}`
+    : servicesKnowledge
 }
 
 const dashboardDb = crm?.db || openCrmDatabase(crmDbPath)
@@ -1248,6 +1256,49 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
         router,
         appointment_date: availabilityTurn.appointmentDate || null,
         appointment_time: availabilityTurn.appointmentTime || null,
+      }
+    }
+
+    // FAQ services — canned catalogue (never invent "info not available")
+    const askServicesConfidence = Number(router.intentConfidence || 0)
+    const leadPeekServices = crm?.repo?.getLead?.(key) || null
+    const inBookingConfirmationServices = leadPeekServices?.stage === 'confirmation'
+    if (
+      router.intent === 'ASK_SERVICES'
+      && askServicesConfidence >= 0.7
+      && !inBookingConfirmationServices
+      && !inAvailabilityFlow
+    ) {
+      const servicesReply = buildIntentDirectReply('ASK_SERVICES', languageHint)
+        || buildIntentDirectReply('ASK_SERVICES', 'fr')
+      if (servicesReply) {
+        try {
+          crm.smart?.trackWhatsAppTurn?.({
+            chatId: options.chatId || key,
+            conversationId: key,
+            outboundText: servicesReply,
+            outboundAuthor: 'ai',
+            contactName: options.contactName || null,
+          })
+        } catch (trackError) {
+          console.warn('[iadis-wa] smart track failed', trackError.message || trackError)
+        }
+        setAiConversationHistory(key, [
+          ...history,
+          { role: 'user', content: isVoice && cleanPatientText ? `[vocal] ${cleanPatientText}` : content },
+          { role: 'assistant', content: servicesReply },
+        ])
+        return {
+          reply: servicesReply,
+          reason: 'ask_services_direct',
+          model: openAiModel,
+          language_hint: languageHint,
+          is_voice: isVoice,
+          intent: 'ASK_SERVICES',
+          intent_confidence: askServicesConfidence,
+          should_skip_llm: true,
+          router,
+        }
       }
     }
 
@@ -6030,7 +6081,7 @@ app.post('/dashboard/api/crm/appointments', ensureDashboardSession, async (req, 
   }
 })
 
-app.patch('/dashboard/api/crm/appointments/:id', ensureDashboardSession, (req, res) => {
+app.patch('/dashboard/api/crm/appointments/:id', ensureDashboardSession, async (req, res) => {
   const body = req.body || {}
   const isCancel = String(body.status || '') === 'cancelled'
   const isConfirm = String(body.status || '') === 'confirmed'
@@ -6045,11 +6096,14 @@ app.patch('/dashboard/api/crm/appointments/:id', ensureDashboardSession, (req, r
   try {
     // Central cancel — same engine as WhatsApp patient self-cancel
     if (String(body.status || '') === 'cancelled' && crm.smart?.cancelAppointment) {
-      const result = crm.smart.cancelAppointment(req.params.id, {
+      const cancelOpts = {
         source: body.source || 'staff_dashboard',
         actorName: req.dashboardUser?.displayName || req.dashboardUser?.username || null,
         actor: getAuthenticatedActor(req.dashboardUser),
-      })
+      }
+      const result = typeof crm.smart.cancelAppointmentAndNotify === 'function'
+        ? await crm.smart.cancelAppointmentAndNotify(req.params.id, cancelOpts)
+        : crm.smart.cancelAppointment(req.params.id, cancelOpts)
       if (!result.ok && result.reason === 'not_found') {
         return res.status(404).json({ ok: false, error: 'Rendez-vous introuvable' })
       }
@@ -6060,6 +6114,7 @@ app.patch('/dashboard/api/crm/appointments/:id', ensureDashboardSession, (req, r
       return res.json({
         ok: true,
         already: Boolean(result.already),
+        whatsapp: result.whatsapp || null,
         appointment: appt
           ? {
             id: appt.id,

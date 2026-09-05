@@ -551,7 +551,18 @@ function createSmartCrmRouter(deps) {
   })
 
   router.get('/agenda/patients-for-slot', (req, res) => {
-    if (!perm(req, res, PERMISSIONS.PROPOSE_SLOT)) return undefined
+    // Used by propose (PROPOSE_SLOT) and move-from-slot (EDIT_APPOINTMENT)
+    const { hasPermission } = require('./permissions')
+    if (
+      !hasPermission(req.dashboardUser, PERMISSIONS.PROPOSE_SLOT)
+      && !hasPermission(req.dashboardUser, PERMISSIONS.EDIT_APPOINTMENT)
+    ) {
+      return res.status(403).json({
+        ok: false,
+        error: 'forbidden',
+        message: 'Vous n’avez pas l’autorisation d’effectuer cette action.',
+      })
+    }
     const smart = smartOr503(res)
     if (!smart) return undefined
     const q = String(req.query.q || '').trim()
@@ -608,7 +619,10 @@ function createSmartCrmRouter(deps) {
       })
       return res.json({ ok: true, ...result })
     } catch (error) {
-      const code = error.code === 'SLOT_TAKEN' || error.code === 'OUTSIDE_HOURS' ? 409 : 400
+      let code = 400
+      if (error.code === 'SLOT_TAKEN' || error.code === 'OUTSIDE_HOURS') code = 409
+      else if (error.code === 'NOT_FOUND') code = 404
+      else if (error.code === 'SAME_SLOT') code = 400
       return res.status(code).json({ ok: false, error: error.message || 'Déplacement impossible' })
     }
   })
@@ -1110,6 +1124,8 @@ function createSmartCrmRouter(deps) {
   function historyFiltersFromQuery(req) {
     const actorParam = req.query.actorType || req.query.actor_type || req.query.actor || null
     const filters = {
+      // Staff Historique page: humans only (allowlist dashboard_user).
+      humansOnly: true,
       page: req.query.page,
       limit: req.query.limit,
       days: req.query.days,
@@ -1131,7 +1147,10 @@ function createSmartCrmRouter(deps) {
         filters.actorUserId = Number(String(actorParam).slice(5))
         filters.actorType = 'dashboard_user'
       } else if (String(actorParam) === 'assistant_ai' || String(actorParam) === 'ai') {
+        // Rejected by humansOnly allowlist — keep type so WHERE yields empty.
         filters.actorType = 'assistant_ai'
+      } else if (String(actorParam) === 'dashboard_user' || String(actorParam) === 'human') {
+        filters.actorType = 'dashboard_user'
       } else {
         filters.actorType = String(actorParam)
       }
@@ -1184,6 +1203,10 @@ function createSmartCrmRouter(deps) {
     if (req.params.id === 'export.csv' || req.params.id === 'export.pdf') return undefined
     const item = smart.getActivityEvent(req.params.id)
     if (!item) return res.status(404).json({ ok: false, error: 'Événement introuvable' })
+    // Historique staff: never expose IA / automation events via detail endpoint
+    if (String(item.actor?.type || item.actor_type || '') !== 'dashboard_user') {
+      return res.status(404).json({ ok: false, error: 'Événement introuvable' })
+    }
     return res.json({ ok: true, item })
   })
 

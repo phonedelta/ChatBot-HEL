@@ -56,12 +56,32 @@ function Invoke-Tar {
 try {
     Write-Host "Preparing ChatBot-HEL deployment archive..."
 
+    # Build dashboard locally so the remote builder can activate even if its
+    # npm/network toolchain is broken (common silent failure mode).
+    Write-Host "Building dashboard locally..."
+    $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npmCommand) { $npmCommand = Get-Command npm -ErrorAction Stop }
+    Push-Location $whatsappRoot
+    try {
+        & $npmCommand.Source --prefix dashboard-app run build
+        if ($LASTEXITCODE -ne 0) {
+            throw "Local dashboard build failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+    $localDistIndex = Join-Path $whatsappRoot "src\dashboard\dist\index.html"
+    if (-not (Test-Path -LiteralPath $localDistIndex -PathType Leaf)) {
+        throw "Dashboard build did not produce src/dashboard/dist/index.html."
+    }
+
     # Stage a clean whatsapp/ tree so we can keep .env.example while dropping every
     # other .env* secret (e.g. .env.hostinger) without fragile tar --exclude globs.
     $stageWhatsapp = Join-Path $stageRoot "whatsapp"
     New-Item -ItemType Directory -Force -Path $stageRoot | Out-Null
     & robocopy.exe $whatsappRoot $stageWhatsapp /E /NFL /NDL /NJH /NJS /NC /NS /NP `
-        /XD node_modules storage .wwebjs_cache .git logs coverage .cache .npm dist `
+        /XD node_modules storage .wwebjs_cache .git logs coverage .cache .npm `
         /XF *.sqlite *.sqlite-shm *.sqlite-wal *.sqlite-journal *.log *.session *.pem *.key
     $robocopyCode = $LASTEXITCODE
     if ($robocopyCode -ge 8) {
@@ -72,9 +92,9 @@ try {
         Where-Object { $_.Name -ne ".env.example" } |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 
-    $dashDist = Join-Path $stageWhatsapp "src\dashboard\dist"
-    if (Test-Path -LiteralPath $dashDist) {
-        Remove-Item -LiteralPath $dashDist -Recurse -Force
+    # Keep prebuilt dashboard dist (do not delete src/dashboard/dist).
+    if (-not (Test-Path -LiteralPath (Join-Path $stageWhatsapp "src\dashboard\dist\index.html") -PathType Leaf)) {
+        throw "Staged tree is missing prebuilt dashboard dist."
     }
 
     if (-not (Test-Path -LiteralPath (Join-Path $stageWhatsapp ".env.example") -PathType Leaf)) {

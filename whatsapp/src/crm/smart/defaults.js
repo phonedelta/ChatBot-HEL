@@ -147,6 +147,21 @@ const DEFAULT_KNOWLEDGE = [
   { category: 'cabinet', key: 'city', label: 'Ville', value: HEL_CLINIC.city },
   { category: 'cabinet', key: 'neighborhood', label: 'Quartier', value: HEL_CLINIC.neighborhood },
   {
+    category: 'services',
+    key: 'catalogue',
+    label: 'Services disponibles',
+    value: [
+      'Orthodontie',
+      'Dentisterie pédiatrique',
+      'Soins des gencives',
+      'Blanchiment dentaire',
+      'Détartrage',
+      'Traitement des caries',
+      'Facettes dentaires',
+      'Urgences dentaires',
+    ].join('\n'),
+  },
+  {
     category: 'horaires',
     key: 'weekdays',
     label: 'Lundi – Vendredi',

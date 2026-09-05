@@ -6,6 +6,7 @@
  */
 
 const { CLINIC_SERVICES } = require('./transcript-interpreter')
+const { buildPublicServicesReply, PUBLIC_SERVICES_LIST } = require('../crm/services')
 const {
   normalizeDarijaForNlu,
   classifyIntentFromConcepts,
@@ -488,34 +489,8 @@ function classifyIntent(rawText, options = {}) {
  * @returns {string|null}
  */
 function buildIntentDirectReply(intent, languageHint = 'fr') {
-  const darija = languageHint === 'darija' || languageHint === 'mixed'
-
   if (intent === 'ASK_SERVICES') {
-    if (darija) {
-      return [
-        'نقدم الخدمات التالية:',
-        '',
-        '• تقويم الأسنان',
-        '• علاج تسوس الأسنان',
-        '• تنظيف الأسنان (إزالة الجير)',
-        '• علاج اللثة',
-        '• تبييض الأسنان',
-        '• زراعة الأسنان',
-        '• قشور الأسنان',
-        '• طب أسنان الأطفال',
-        '• علاج الحالات المستعجلة',
-        '',
-        'إذا أردت خدمة معينة، أخبرني لأرتب لك موعداً هنا على واتساب.',
-      ].join('\n')
-    }
-    const lines = CLINIC_SERVICES.map((name) => `• ${name}`)
-    return [
-      'Bien sûr. Voici les services disponibles au Centre Dentaire HEL :',
-      '',
-      ...lines,
-      '',
-      'Dites-moi le soin souhaité et je peux vous proposer un rendez-vous ici sur WhatsApp.',
-    ].join('\n')
+    return buildPublicServicesReply(languageHint)
   }
 
   return null
@@ -525,6 +500,7 @@ module.exports = {
   INTENT_NAMES,
   INTENT_DICTIONARY,
   CLINIC_SERVICES,
+  PUBLIC_SERVICES_LIST,
   classifyIntent,
   buildIntentDirectReply,
   normalizeIntentText,

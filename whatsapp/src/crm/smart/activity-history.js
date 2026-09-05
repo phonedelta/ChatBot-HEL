@@ -591,6 +591,12 @@ function enrichRow(row) {
   function buildWhereClause(filters = {}) {
     const clauses = ['1=1']
     const params = []
+    const humansOnly = Boolean(filters.humansOnly)
+
+    // Dashboard Historique: only authenticated dashboard users (never IA / automation / patient).
+    if (humansOnly) {
+      clauses.push("a.actor_type = 'dashboard_user'")
+    }
 
     if (filters.startDate) {
       clauses.push('a.created_at >= ?')
@@ -612,10 +618,12 @@ function enrichRow(row) {
     if (filters.actorType && filters.actorType !== 'all') {
       const at = String(filters.actorType)
       if (at === 'assistant_ai' || at === 'ai') {
-        clauses.push("a.actor_type = 'assistant_ai'")
+        // Conflicting with humansOnly → empty result (IA never shown in staff Historique)
+        if (humansOnly) clauses.push('0 = 1')
+        else clauses.push("a.actor_type = 'assistant_ai'")
       } else if (at === 'dashboard_user' || at === 'human') {
-        clauses.push("a.actor_type = 'dashboard_user'")
-      } else {
+        if (!humansOnly) clauses.push("a.actor_type = 'dashboard_user'")
+      } else if (!humansOnly) {
         clauses.push('a.actor_type = ?')
         params.push(at)
       }
@@ -626,7 +634,7 @@ function enrichRow(row) {
     } else if (filters.actorId && String(filters.actorId).startsWith('user:')) {
       clauses.push('a.actor_user_id = ?')
       params.push(Number(String(filters.actorId).slice(5)))
-    } else if (filters.actorId && !filters.actorType) {
+    } else if (filters.actorId && !filters.actorType && !humansOnly) {
       clauses.push('a.actor_id = ?')
       params.push(String(filters.actorId))
     }
@@ -647,11 +655,13 @@ function enrichRow(row) {
       params.push(String(filters.severity))
     }
     if (filters.typeFilter === 'ai') {
-      clauses.push("a.actor_type = 'assistant_ai'")
+      if (humansOnly) clauses.push('0 = 1')
+      else clauses.push("a.actor_type = 'assistant_ai'")
     } else if (filters.typeFilter === 'human') {
-      clauses.push("a.actor_type = 'dashboard_user'")
+      if (!humansOnly) clauses.push("a.actor_type = 'dashboard_user'")
     } else if (filters.typeFilter === 'patient' || filters.typeFilter === 'system') {
-      clauses.push("a.actor_type = 'assistant_ai'")
+      if (humansOnly) clauses.push('0 = 1')
+      else clauses.push("a.actor_type = 'assistant_ai'")
     } else if (filters.typeFilter === 'errors') {
       clauses.push("a.severity = 'error'")
     } else if (filters.typeFilter && filters.typeFilter !== 'all') {
@@ -822,17 +832,8 @@ function enrichRow(row) {
   }
 
   function listHistoryActorFilters() {
+    // Staff Historique: only real dashboard users (never Assistant IA / automation).
     const groups = [
-      {
-        group: 'Exécutants',
-        items: [
-          {
-            id: 'assistant_ai',
-            label: 'Assistant IA',
-            type: 'assistant_ai',
-          },
-        ],
-      },
       {
         group: 'Équipe',
         items: [],
@@ -857,7 +858,7 @@ function enrichRow(row) {
       if (!uid || seen.has(uid)) continue
       seen.add(uid)
       const inactive = row.is_active === 0
-      groups[1].items.push({
+      groups[0].items.push({
         id: `user:${uid}`,
         label: inactive ? `${row.display_name || 'Utilisateur'} — compte désactivé` : (row.display_name || 'Utilisateur'),
         type: 'dashboard_user',
@@ -873,7 +874,7 @@ function enrichRow(row) {
     `).all()
     for (const u of activeUsers) {
       if (seen.has(Number(u.id))) continue
-      groups[1].items.push({
+      groups[0].items.push({
         id: `user:${u.id}`,
         label: u.display_name,
         type: 'dashboard_user',
@@ -887,7 +888,7 @@ function enrichRow(row) {
     `).all()
     for (const u of admins) {
       if (seen.has(Number(u.id))) continue
-      groups[1].items.unshift({
+      groups[0].items.unshift({
         id: `user:${u.id}`,
         label: u.display_name,
         type: 'dashboard_user',

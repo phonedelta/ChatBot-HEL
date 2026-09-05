@@ -147,6 +147,30 @@ function msgCancelledOk(item, language = 'fr') {
   return `C’est noté. Le rendez-vous de ${item.full_name} du ${when} a bien été annulé.`
 }
 
+/**
+ * Message sent to the patient when staff cancels from the dashboard/agenda.
+ */
+function msgStaffCancelledPatient(item, language = 'fr') {
+  const when = slotLabel(item.appointment_date, item.appointment_time, language)
+  const name = firstName(item.full_name)
+  if (isDarija(language)) {
+    return [
+      `السلام عليكم ${name}،`,
+      '',
+      `الموعد ديالكم نهار ${when} عند مركز طب الأسنان HEL تم إلغاؤه.`,
+      '',
+      'إلا بغيتي تعاودو تحجزو موعد، كتبوا لينا هنا على واتساب.',
+    ].join('\n')
+  }
+  return [
+    `Bonjour ${name},`,
+    '',
+    `Votre rendez-vous du ${when} au Centre Dentaire HEL a été annulé.`,
+    '',
+    'Pour reprendre un rendez-vous, écrivez-nous ici sur WhatsApp.',
+  ].join('\n')
+}
+
 function msgKept(itemOrLanguage = 'fr', languageMaybe = undefined) {
   const language = typeof itemOrLanguage === 'string' && languageMaybe === undefined
     ? itemOrLanguage
@@ -218,7 +242,171 @@ function createWhatsappCancelEngine(db, helpers = {}) {
     getActiveConversationLanguage = null,
     getAppointmentsSettings = null,
     canCancelOrReschedule = null,
+    getSendWhatsAppText = null,
+    trackWhatsAppTurn = null,
   } = helpers
+
+  function isStaffCancelSource(source) {
+    const s = String(source || '').toLowerCase()
+    return s === 'staff_dashboard'
+      || s === 'dashboard'
+      || s === 'staff'
+      || s === 'agenda'
+      || s === 'manual'
+  }
+
+  function resolveCancelNotifyLanguage(appt) {
+    return resolvePatientLanguageFromRow(
+      {
+        preferred_language: appt?.preferred_language,
+        whatsapp_chat_id: appt?.whatsapp_chat_id,
+        language: appt?.language,
+      },
+      {
+        chatKey: appt?.whatsapp_chat_id || null,
+        getActiveConversationLanguage,
+        inboundLanguageHint: appt?.preferred_language || 'fr',
+      },
+    ).language
+  }
+
+  /**
+   * Notify patient on WhatsApp after a staff/manual cancellation.
+   * Never used for patient self-cancel (they already get an in-chat reply).
+   */
+  async function notifyPatientOfStaffCancellation(appointment, {
+    source = 'staff_dashboard',
+    actorName = null,
+  } = {}) {
+    const whatsapp = {
+      attempted: false,
+      sent: false,
+      skipped: false,
+      messageId: null,
+      error: null,
+      disconnected: false,
+    }
+
+    if (!isStaffCancelSource(source)) {
+      whatsapp.skipped = true
+      whatsapp.error = 'not_staff_source'
+      return whatsapp
+    }
+
+    const appt = appointment && appointment.id
+      ? appointment
+      : null
+    if (!appt) {
+      whatsapp.error = 'missing_appointment'
+      return whatsapp
+    }
+
+    const phone = appt.phone_number || null
+    const chatKey = appt.whatsapp_chat_id || null
+
+    // Prefer stored WhatsApp chat id; fall back to phone digits for send layer
+    let resolvedChat = chatKey
+    if (!resolvedChat && phone) {
+      try {
+        const contact = findContactByWhatsAppOrPhone(db, { phone })
+        resolvedChat = contact?.whatsapp_id || contact?.whatsapp_chat_id || null
+      } catch { /* optional */ }
+    }
+    if (!resolvedChat && phone) {
+      const digits = String(phone).replace(/\D/g, '')
+      if (digits) resolvedChat = `${digits}@c.us`
+    }
+
+    if (!resolvedChat && !phone) {
+      whatsapp.error = 'no_patient_channel'
+      return whatsapp
+    }
+
+    const sendFn = typeof getSendWhatsAppText === 'function' ? getSendWhatsAppText() : null
+    if (typeof sendFn !== 'function') {
+      whatsapp.error = 'WhatsApp sender unavailable'
+      return whatsapp
+    }
+
+    const language = resolveCancelNotifyLanguage(appt)
+    const text = msgStaffCancelledPatient(appt, language)
+    whatsapp.attempted = true
+
+    try {
+      const sent = await sendFn({
+        chatId: resolvedChat,
+        phone,
+        text,
+      })
+      whatsapp.sent = true
+      whatsapp.messageId = sent?.messageId || null
+      const outboundChatId = sent?.chatId || resolvedChat
+
+      if (typeof trackWhatsAppTurn === 'function') {
+        try {
+          trackWhatsAppTurn({
+            chatId: outboundChatId,
+            customerId: appt.customer_id || null,
+            outboundText: text,
+            outboundAuthor: 'ai',
+            outboundMessageId: sent?.messageId || null,
+            phoneNumber: phone,
+            contactName: appt.full_name || null,
+          })
+        } catch { /* optional */ }
+      }
+
+      if (typeof logAiAction === 'function') {
+        try {
+          logAiAction({
+            customer_id: appt.customer_id || null,
+            action_type: 'staff_cancellation_notified',
+            reason: actorName
+              ? `Notification annulation agenda (${actorName})`
+              : 'Notification annulation agenda',
+            result: String(appt.id),
+            source: 'dashboard',
+            payload: {
+              appointment_id: appt.id,
+              recipient: phone,
+              language,
+            },
+          })
+        } catch { /* optional */ }
+      }
+    } catch (error) {
+      whatsapp.sent = false
+      whatsapp.error = error?.message || String(error)
+      if (error?.code === 'WA_NOT_READY') {
+        whatsapp.disconnected = true
+      }
+      console.warn('[CANCEL] staff cancellation WhatsApp notify failed', {
+        appointment_id: appt.id,
+        reason: whatsapp.error,
+        code: error?.code || null,
+      })
+    }
+
+    return whatsapp
+  }
+
+  /**
+   * Cancel + optional patient WhatsApp notify for staff sources.
+   */
+  async function executeCancelAndNotify(appointmentId, opts = {}) {
+    const result = executeCancel(appointmentId, opts)
+    if (!result?.ok || result.already) {
+      return { ...result, whatsapp: { attempted: false, sent: false, skipped: true } }
+    }
+    if (!isStaffCancelSource(opts.source)) {
+      return { ...result, whatsapp: { attempted: false, sent: false, skipped: true } }
+    }
+    const whatsapp = await notifyPatientOfStaffCancellation(result.appointment, {
+      source: opts.source,
+      actorName: opts.actorName || null,
+    })
+    return { ...result, whatsapp }
+  }
 
   function ensureTables() {
     db.exec(`
@@ -934,12 +1122,15 @@ function createWhatsappCancelEngine(db, helpers = {}) {
     abandonPending,
     listCancellableAppointments,
     executeCancel,
+    executeCancelAndNotify,
+    notifyPatientOfStaffCancellation,
     startCancelFlow,
     handleInboundCancel,
     looksLikeCancelIntent,
     // templates exported for tests
     msgConfirmCancel,
     msgCancelledOk,
+    msgStaffCancelledPatient,
     msgListAppointments,
     msgNoAppointments,
     msgKept,
@@ -951,6 +1142,7 @@ module.exports = {
   looksLikeCancelIntent,
   msgConfirmCancel,
   msgCancelledOk,
+  msgStaffCancelledPatient,
   msgListAppointments,
   msgNoAppointments,
   msgKept,

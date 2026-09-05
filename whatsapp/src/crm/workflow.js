@@ -10,6 +10,8 @@ const {
   extractCustomerSignals,
   validateFullName,
   resolveMotifPair,
+  patientStatesOwnCity,
+  isStandaloneCityMessage,
 } = require('./extract')
 const { toE164 } = require('./phone')
 const { stripPersonNameLabels } = require('./name-validator')
@@ -37,6 +39,7 @@ const {
   detectCorrectionIntent,
   buildCorrectionPatch,
   detectInlineNameCorrection,
+  detectGeneralCorrectionRequest,
 } = require('./booking-corrections')
 const {
   parseCorrectionState,
@@ -51,11 +54,11 @@ const {
   fieldsToCorrectPrompt,
   fieldCorrectionPrompt,
   fieldCorrectionRetry,
-  draftCancelConfirmMessage,
-  unclearReplyCancelAskMessage,
-  draftCancelledMessage,
-  unclearSummaryClarifyMessage,
   askFullNameAfterPartialCorrection,
+  draftCancelConfirmMessage,
+  unclearSummaryClarifyMessage,
+  draftCancelledMessage,
+  unclearReplyCancelAskMessage,
   outsideHoursRetry,
 } = require('./booking-confirmation-flow')
 const { parseYesNoReply } = require('./binary-confirmation')
@@ -171,7 +174,17 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
       patch._rejected_full_name = true
     }
     if (signals.phone_number) patch.phone_number = signals.phone_number
-    if (signals.city) patch.city = signals.city
+    if (signals.city) {
+      const existingCity = lead?.city || null
+      const raw = String(signals.rawText || '')
+      const cityMarked = /\b(mdina|lmdina|mdinti|medina|ville|city|مدينة|المدينة)\b/i.test(raw)
+        || /مدينتي|المدينة/.test(raw)
+        || patientStatesOwnCity(raw)
+        || isStandaloneCityMessage(raw)
+      if (!existingCity || existingCity === signals.city || cityMarked) {
+        patch.city = signals.city
+      }
+    }
     if (signals.problem) {
       patch.problem = signals.problem
       if (signals.problem_details) patch.problem_details = signals.problem_details
@@ -1394,6 +1407,22 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
       return handleBookingConfirmationTurn(conversationId, lead, lang, input.chatId, signals, userText)
     }
 
+    // Field-correction submenu can also open during progressive collection
+    if (
+      inBooking
+      && (lead.awaiting_field === 'fields_to_correct' || lead.awaiting_field === 'field_correction')
+    ) {
+      repo.logConversation({
+        conversation_id: conversationId,
+        whatsapp_chat_id: input.chatId || null,
+        direction: 'inbound',
+        message_text: userText,
+        extracted: { ...signals, stage: lead.stage, awaiting_field: lead.awaiting_field },
+        appointment_status: lead.stage,
+      })
+      return handleBookingConfirmationTurn(conversationId, lead, lang, input.chatId, signals, userText)
+    }
+
     // Slot alternative selection after conflict (e.g. "12h30") — before generic form merge
     if (
       lead.stage === 'awaiting_form'
@@ -1493,7 +1522,27 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
     }
 
     if (!isConfirmReply && inBooking) {
-      const correction = detectCorrectionIntent(userText, { now: new Date() })
+      const correction = detectCorrectionIntent(userText, { now: new Date(), draft: lead })
+      if (process.env.CRM_DEBUG_BOOKING === '1' && correction.isCorrection) {
+        console.log('[booking-correction]', {
+          state: lead.stage,
+          awaitingField: lead.awaiting_field,
+          detectedFields: correction.changedFields,
+          fields: correction.fields,
+          invalidPhone: Boolean(correction.invalidPhone),
+        })
+      }
+      if (correction.invalidPhone && !correction.fields?.phone_number) {
+        repo.logConversation({
+          conversation_id: conversationId,
+          whatsapp_chat_id: input.chatId || null,
+          direction: 'inbound',
+          message_text: userText,
+          extracted: { correction: true, invalidPhone: true, stage: lead.stage },
+          appointment_status: lead.stage,
+        })
+        return finalizeTurn(lead, fieldCorrectionRetry('phone_number', lang), true, null, signals)
+      }
       if (correction.isCorrection) {
         const beforeLead = { ...lead }
         const patch = buildCorrectionPatch(correction)
@@ -1503,6 +1552,31 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
         if (lead.stage === 'confirmation' || lead.awaiting_field === 'confirmation') {
           patch.stage = 'awaiting_form'
           patch.awaiting_field = 'bulk'
+        }
+        // Date/time corrections must revalidate availability before accepting.
+        if (patch.appointment_date || patch.appointment_time) {
+          const nextDate = patch.appointment_date || lead.appointment_date
+          const nextTime = patch.appointment_time || lead.appointment_time
+          if (nextDate && nextTime) {
+            const hours = validateAppointmentHours(nextDate, nextTime)
+            if (!hours.ok) {
+              lead = repo.upsertLead(conversationId, {
+                ...patch,
+                appointment_date: nextDate,
+                appointment_time: null,
+                stage: 'awaiting_form',
+                awaiting_field: 'bulk',
+              })
+              return rejectOutsideHours(conversationId, lead, lang, signals, hours)
+            }
+            const slotCheck = checkSlotAvailability(repo.db, { date: nextDate, time: nextTime })
+            if (slotCheck && slotCheck.available === false && slotCheck.reason === 'occupied') {
+              const tempLead = { ...lead, ...patch, appointment_date: nextDate, appointment_time: nextTime }
+              return rejectSlotUnavailable(conversationId, tempLead, lang, signals, {
+                lateConflict: false,
+              })
+            }
+          }
         }
         lead = repo.upsertLead(conversationId, patch)
 
@@ -1547,6 +1621,36 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
           { ...signals, _correction: correction },
           replies,
         )
+      }
+
+      // Incomplete name correction ("Smyti Salim") — keep other draft fields
+      const nameAttempt = detectInlineNameCorrection(userText)
+      if (nameAttempt.type === 'incomplete') {
+        repo.logConversation({
+          conversation_id: conversationId,
+          whatsapp_chat_id: input.chatId || null,
+          direction: 'inbound',
+          message_text: userText,
+          extracted: { name_incomplete: true, stage: lead.stage },
+          appointment_status: lead.stage,
+        })
+        const replies = buildBookingCollectionReplies(lead, lang, {
+          missing: Array.from(new Set([...(checkCustomerData(lead).missing || []), 'full_name'])),
+          rejectedName: true,
+        })
+        return finalizeTurn(lead, replies[0] || askFullNameAfterPartialCorrection(lang), true, null, signals, replies)
+      }
+
+      // General "I want to correct something" without field/value
+      if (detectGeneralCorrectionRequest(userText)) {
+        const updated = repo.upsertLead(conversationId, {
+          stage: lead.stage === 'confirmation' ? 'confirmation' : 'awaiting_form',
+          awaiting_field: 'fields_to_correct',
+          correction_json: null,
+          ...(language ? { language } : {}),
+          ...(input.chatId ? { whatsapp_chat_id: input.chatId } : {}),
+        })
+        return finalizeTurn(updated, fieldsToCorrectPrompt(lang), true, null, signals)
       }
 
       const patch = await mergeSignals(lead, signals, lead.awaiting_field)
@@ -1939,7 +2043,19 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
     }
 
     // 3) Explicit correction (even without NON first)
-    const correction = detectCorrectionIntent(userText, { now: new Date() })
+    const correction = detectCorrectionIntent(userText, { now: new Date(), draft: lead })
+    if (process.env.CRM_DEBUG_BOOKING === '1' && correction.isCorrection) {
+      console.log('[booking-correction]', {
+        state: lead.stage,
+        awaitingField: lead.awaiting_field,
+        detectedFields: correction.changedFields,
+        fields: correction.fields,
+        invalidPhone: Boolean(correction.invalidPhone),
+      })
+    }
+    if (correction.invalidPhone && !correction.fields?.phone_number) {
+      return finalizeTurn(lead, fieldCorrectionRetry('phone_number', language), true, null, signals)
+    }
     if (correction.isCorrection) {
       const patch = buildCorrectionPatch(correction)
       // Revalidate appointment if time/date changed
@@ -2010,6 +2126,16 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
         correction_json: serializeCorrectionState({ fields: ['full_name'], index: 0 }),
       })
       return finalizeTurn(updated, askFullNameAfterPartialCorrection(language), true, null, signals)
+    }
+
+    // 3c) General correction request without field/value
+    if (detectGeneralCorrectionRequest(userText)) {
+      const updated = repo.upsertLead(conversationId, {
+        stage: 'confirmation',
+        awaiting_field: 'fields_to_correct',
+        correction_json: null,
+      })
+      return finalizeTurn(updated, fieldsToCorrectPrompt(language), true, null, signals)
     }
 
     // 4) Explicit cancel intent only (before unclear; "annuler" ≠ NON modify)

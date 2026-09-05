@@ -890,6 +890,8 @@ module.exports = {
   looksLikeClinicLocationQuestion,
   looksLikeAvailabilityProbe,
   extractPersonalCity,
+  patientStatesOwnCity,
+  isStandaloneCityMessage,
   isBookingIntent,
   isConfirmationYes,
   isConfirmationNo,

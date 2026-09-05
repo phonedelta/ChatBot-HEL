@@ -25,11 +25,19 @@ function run() {
 
   const replyFr = buildIntentDirectReply('ASK_SERVICES', 'fr')
   assert.ok(replyFr.includes('Orthodontie'))
-  assert.ok(replyFr.includes('Blanchiment des dents'))
+  assert.ok(replyFr.includes('Blanchiment dentaire'))
+  assert.ok(replyFr.includes('Traitement des caries'))
+  assert.ok(replyFr.includes('Vous pouvez nous écrire sur WhatsApp'))
+  assert.ok(!replyFr.includes('Implants dentaires'))
 
   const replyDarija = buildIntentDirectReply('ASK_SERVICES', 'darija')
   assert.ok(replyDarija.includes('تقويم'))
-  assert.ok(/خدمات|كاينين|أهلا|نقدم/.test(replyDarija))
+  assert.ok(/خدمات|موعد|واتساب/.test(replyDarija))
+  assert.ok(!replyDarija.includes('زراعة'))
+
+  const userCase = classifyIntent('Chno les services li kaynin')
+  assert.strictEqual(userCase.intent, 'ASK_SERVICES')
+  assert.ok(userCase.confidence >= 0.7)
 
   const booking = classifyIntent('Bghit rendez-vous')
   assert.strictEqual(booking.intent, 'BOOK_APPOINTMENT')

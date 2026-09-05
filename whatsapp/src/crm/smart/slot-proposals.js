@@ -346,7 +346,7 @@ function createSlotProposalEngine(db, helpers = {}) {
       LEFT JOIN appointments a ON a.id = (
         SELECT a2.id FROM appointments a2
         WHERE a2.customer_id = c.id
-          AND a2.status IN ('non_confirme', 'confirmed')
+          AND a2.status IN ('non_confirme', 'pending_confirmation', 'confirmed')
           AND a2.appointment_date >= date('now', 'localtime')
         ORDER BY a2.appointment_date ASC, a2.appointment_time ASC
         LIMIT 1
@@ -635,8 +635,8 @@ function createSlotProposalEngine(db, helpers = {}) {
       err.code = 'NOT_FOUND'
       throw err
     }
-    if (!['non_confirme', 'confirmed'].includes(appt.status)) {
-      const err = new Error('Ce rendez-vous n’est pas actif')
+    if (!['non_confirme', 'pending_confirmation', 'confirmed'].includes(appt.status)) {
+      const err = new Error('Ce rendez-vous ne peut pas être déplacé')
       err.code = 'INACTIVE'
       throw err
     }
@@ -644,6 +644,15 @@ function createSlotProposalEngine(db, helpers = {}) {
     const date = String(slotDate || '').trim()
     const time = String(slotTime || '').slice(0, 5)
     const duration = Number(appt.duration_minutes) || 30
+
+    const oldDate = appt.appointment_date
+    const oldTime = String(appt.appointment_time).slice(0, 5)
+
+    if (oldDate === date && oldTime === time) {
+      const err = new Error('Ce rendez-vous est déjà prévu sur ce créneau.')
+      err.code = 'SAME_SLOT'
+      throw err
+    }
 
     if (!isSlotFree(date, time, { excludeAppointmentId: appointmentId, durationMinutes: duration })) {
       const err = new Error('Ce créneau n’est plus disponible')
@@ -660,9 +669,6 @@ function createSlotProposalEngine(db, helpers = {}) {
 
     const actorObj = actor || (actorName ? { type: 'human', displayName: actorName, role: null } : null)
     const actorLabel = actorObj?.displayName || actorName
-
-    const oldDate = appt.appointment_date
-    const oldTime = String(appt.appointment_time).slice(0, 5)
     const wasConfirmed = appt.status === 'confirmed'
     const nextPractitioner = practitionerId !== undefined
       ? (practitionerId || null)

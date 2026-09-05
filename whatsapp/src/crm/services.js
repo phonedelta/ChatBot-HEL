@@ -13,6 +13,21 @@ function normalizeKey(value) {
     .trim()
 }
 
+/**
+ * Patient-facing services list (ASK_SERVICES / FAQ WhatsApp).
+ * Keep in sync with the official Centre Dentaire HEL catalogue shared with patients.
+ */
+const PUBLIC_SERVICES_LIST = [
+  'Orthodontie',
+  'Dentisterie pédiatrique',
+  'Soins des gencives',
+  'Blanchiment dentaire',
+  'Détartrage',
+  'Traitement des caries',
+  'Facettes dentaires',
+  'Urgences dentaires',
+]
+
 /** Official service catalogue (CRM `problem` / motif IA). */
 const OFFICIAL_SERVICES = [
   'Orthodontie',
@@ -27,6 +42,54 @@ const OFFICIAL_SERVICES = [
   'Extraction dentaire',
   'Consultation',
 ]
+
+/**
+ * Canonical WhatsApp reply for ASK_SERVICES.
+ * @param {'fr'|'darija'|'mixed'|'auto'|string} languageHint
+ * @returns {string}
+ */
+function buildPublicServicesReply(languageHint = 'fr') {
+  const darija = languageHint === 'darija'
+    || languageHint === 'mixed'
+    || languageHint === 'ar'
+    || String(languageHint || '').toLowerCase().includes('darija')
+    || String(languageHint || '').toLowerCase().includes('arab')
+
+  if (darija) {
+    return [
+      'الخدمات المتوفرة بمركز طب الأسنان HEL هي :',
+      '',
+      '- تقويم الأسنان',
+      '- طب أسنان الأطفال',
+      '- علاج اللثة',
+      '- تبييض الأسنان',
+      '- إزالة الجير (دِيتارتراج)',
+      '- علاج التسوس',
+      '- القشور / الفينير',
+      '- الحالات المستعجلة',
+      '',
+      'تقدروا تكتبوا لينا على واتساب باش تحجزو موعد.',
+    ].join('\n')
+  }
+
+  return [
+    'Les services disponibles au Centre Dentaire HEL sont :',
+    '',
+    ...PUBLIC_SERVICES_LIST.map((name) => `- ${name}`),
+    '',
+    'Vous pouvez nous écrire sur WhatsApp pour demander un rendez-vous.',
+  ].join('\n')
+}
+
+/** Compact knowledge block always injected into the LLM clinic facts. */
+function formatPublicServicesKnowledge() {
+  return [
+    '## Services',
+    '- Catalogue officiel (répondre exactement à ASK_SERVICES / « quels services ») :',
+    ...PUBLIC_SERVICES_LIST.map((name) => `  - ${name}`),
+    '- Invitation : le patient peut écrire sur WhatsApp pour demander un rendez-vous.',
+  ].join('\n')
+}
 
 /**
  * Synonyms / free-text → official service.
@@ -399,6 +462,7 @@ function looksLikeServiceText(value) {
 }
 
 module.exports = {
+  PUBLIC_SERVICES_LIST,
   OFFICIAL_SERVICES,
   SERVICE_SYNONYMS,
   NAME_FORBIDDEN_TERMS,
@@ -409,4 +473,6 @@ module.exports = {
   looksLikeServiceText,
   looksLikeAdminOrCatalogQuestion,
   hasPersonalDentalComplaint,
+  buildPublicServicesReply,
+  formatPublicServicesKnowledge,
 }

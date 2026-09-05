@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
+  ArrowLeftRight,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn, formatDateFr, formatAppointmentSlot, todayISO } from '@/lib/format'
+import { appointmentStatusLabel } from '@/lib/labels'
 import { useIsLgUp } from '@/hooks/useMediaQuery'
 import { usePermissions } from '@/hooks/usePermissions'
 import { PERMISSIONS } from '@/lib/permissions'
@@ -57,6 +59,8 @@ export function AgendaPage() {
   const [error, setError] = useState('')
   const [selected, setSelected] = useState<AgendaAppointment | null>(null)
   const [proposeSlot, setProposeSlot] = useState<AgendaSlot | null>(null)
+  const [proposeIntent, setProposeIntent] = useState<'both' | 'move'>('both')
+  const [slotActionMenu, setSlotActionMenu] = useState<AgendaSlot | null>(null)
   const [newAppt, setNewAppt] = useState<{ open: boolean; date?: string; time?: string }>({
     open: false,
   })
@@ -143,8 +147,10 @@ export function AgendaPage() {
         (s) => s.slot_date === highlightDate && String(s.slot_time).slice(0, 5) === highlightTime,
       )
       if (released) {
+        setProposeIntent('both')
         setProposeSlot(released)
       } else if (available) {
+        setProposeIntent('both')
         setProposeSlot({
           slot_date: highlightDate,
           slot_time: highlightTime,
@@ -154,6 +160,7 @@ export function AgendaPage() {
       } else if (params.get('slotTaken') === '1') {
         setToast('Ce créneau n’est plus disponible.')
       } else {
+        setProposeIntent('both')
         setProposeSlot({
           slot_date: highlightDate,
           slot_time: highlightTime,
@@ -283,14 +290,33 @@ export function AgendaPage() {
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Déplacement impossible')
+      await load()
     } finally {
       setActionBusy(false)
     }
   }
 
+  function openSlotActionMenu(slot: AgendaSlot) {
+    const canCreate = can(PERMISSIONS.CREATE_APPOINTMENT)
+    const canMove = can(PERMISSIONS.EDIT_APPOINTMENT)
+    if (!canCreate && !canMove) {
+      setToast('Vous n’avez pas l’autorisation.')
+      return
+    }
+    setSlotActionMenu(slot)
+  }
+
   function handleSlotPickForReschedule(slot: AgendaSlot) {
     if (!rescheduleTarget) return
     setPendingMoveSlot(slot)
+  }
+
+  function handleFreeSlotClick(slot: AgendaSlot) {
+    if (rescheduleTarget) {
+      handleSlotPickForReschedule(slot)
+      return
+    }
+    openSlotActionMenu(slot)
   }
 
   async function patchAppointment(id: number, body: Record<string, unknown>) {
@@ -363,9 +389,11 @@ export function AgendaPage() {
       })
       setToast('Rendez-vous déplacé.')
       setProposeSlot(null)
+      setProposeIntent('both')
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Déplacement impossible')
+      await load()
     } finally {
       setActionBusy(false)
     }
@@ -561,12 +589,15 @@ export function AgendaPage() {
           <Button
             size="sm"
             className="shrink-0"
-            onClick={() => setProposeSlot({
-              slot_date: data.banner!.slot_date,
-              slot_time: data.banner!.slot_time,
-              kind: 'released',
-              appointment_id: data.banner!.appointment_id,
-            })}
+            onClick={() => {
+              setProposeIntent('both')
+              setProposeSlot({
+                slot_date: data.banner!.slot_date,
+                slot_time: data.banner!.slot_time,
+                kind: 'released',
+                appointment_id: data.banner!.appointment_id,
+              })
+            }}
           >
             Choisir un patient
           </Button>
@@ -596,18 +627,8 @@ export function AgendaPage() {
               statusFilter={statusFilter}
               highlightKey={highlightKey}
               onSelectAppointment={setSelected}
-              onSelectAvailable={(slot) => {
-                if (rescheduleTarget) {
-                  handleSlotPickForReschedule(slot)
-                  return
-                }
-                setNewAppt({
-                  open: true,
-                  date: slot.slot_date,
-                  time: slot.slot_time,
-                })
-              }}
-              onSelectReleased={(slot) => setProposeSlot(slot)}
+              onSelectAvailable={handleFreeSlotClick}
+              onSelectReleased={handleFreeSlotClick}
             />
           )}
         </section>
@@ -619,8 +640,12 @@ export function AgendaPage() {
             count={data?.waitlist_count || 0}
             onLaunch={() => {
               const released = data?.released_slots?.[0]
-              if (released) setProposeSlot(released)
-              else setToast('Aucun créneau libéré pour le moment. Cliquez un créneau libre dans l’agenda.')
+              if (released) {
+                setProposeIntent('both')
+                setProposeSlot(released)
+              } else {
+                setToast('Aucun créneau libéré pour le moment. Cliquez un créneau libre dans l’agenda.')
+              }
             }}
           />
           <StatusLegend />
@@ -702,7 +727,7 @@ export function AgendaPage() {
               onClick={() => {
                 const target = cancelConfirm
                 setCancelConfirm(null)
-                void patchAppointment(target.id, { status: 'cancelled' })
+                void patchAppointment(target.id, { status: 'cancelled', source: 'staff_dashboard' })
               }}
             >
               Annuler le rendez-vous
@@ -711,11 +736,39 @@ export function AgendaPage() {
         </Modal>
       ) : null}
 
+      {slotActionMenu ? (
+        <SlotActionMenu
+          slot={slotActionMenu}
+          canCreate={can(PERMISSIONS.CREATE_APPOINTMENT)}
+          canMove={can(PERMISSIONS.EDIT_APPOINTMENT)}
+          onClose={() => setSlotActionMenu(null)}
+          onCreate={() => {
+            const slot = slotActionMenu
+            setSlotActionMenu(null)
+            setNewAppt({
+              open: true,
+              date: slot.slot_date,
+              time: slot.slot_time,
+            })
+          }}
+          onMove={() => {
+            const slot = slotActionMenu
+            setSlotActionMenu(null)
+            setProposeIntent('move')
+            setProposeSlot(slot)
+          }}
+        />
+      ) : null}
+
       {proposeSlot ? (
         <ProposeSlotModal
           slot={proposeSlot}
           busy={actionBusy}
-          onClose={() => setProposeSlot(null)}
+          intent={proposeIntent}
+          onClose={() => {
+            setProposeSlot(null)
+            setProposeIntent('both')
+          }}
           onPropose={(patient) => void runPropose(proposeSlot, patient)}
           onMove={(appointmentId) => void runMoveDirect(proposeSlot, appointmentId)}
         />
@@ -1114,15 +1167,76 @@ function AppointmentDrawer({
   )
 }
 
+function SlotActionMenu({
+  slot,
+  canCreate,
+  canMove,
+  onClose,
+  onCreate,
+  onMove,
+}: {
+  slot: AgendaSlot
+  canCreate: boolean
+  canMove: boolean
+  onClose: () => void
+  onCreate: () => void
+  onMove: () => void
+}) {
+  const slotLabel = formatAppointmentSlot(slot.slot_date, slot.slot_time)
+  return (
+    <Modal onClose={onClose} className="max-w-md">
+      <h2 className="font-display text-xl text-navy">Que voulez-vous faire ?</h2>
+      <p className="mt-1 text-sm text-muted">{slotLabel}</p>
+      <div className="mt-5 flex flex-col gap-2">
+        {canCreate ? (
+          <button
+            type="button"
+            onClick={onCreate}
+            className="flex w-full items-center gap-3 rounded-xl border border-border bg-white px-4 py-3 text-left transition hover:border-primary/40 hover:bg-cyan-tint/50"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-navy text-white">
+              <Plus className="h-5 w-5" />
+            </span>
+            <span>
+              <span className="block text-sm font-semibold text-navy">Nouveau rendez-vous</span>
+              <span className="block text-xs text-muted">Créer un RDV sur ce créneau</span>
+            </span>
+          </button>
+        ) : null}
+        {canMove ? (
+          <button
+            type="button"
+            onClick={onMove}
+            className="flex w-full items-center gap-3 rounded-xl border border-border bg-white px-4 py-3 text-left transition hover:border-primary/40 hover:bg-cyan-tint/50"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-white">
+              <ArrowLeftRight className="h-5 w-5" />
+            </span>
+            <span>
+              <span className="block text-sm font-semibold text-navy">Déplacer un rendez-vous</span>
+              <span className="block text-xs text-muted">Déplacer un RDV existant vers ce créneau</span>
+            </span>
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-5 flex justify-end">
+        <Button variant="secondary" onClick={onClose}>Annuler</Button>
+      </div>
+    </Modal>
+  )
+}
+
 function ProposeSlotModal({
   slot,
   busy,
+  intent = 'both',
   onClose,
   onPropose,
   onMove,
 }: {
   slot: AgendaSlot
   busy: boolean
+  intent?: 'both' | 'move'
   onClose: () => void
   onPropose: (patient: { customer_id: number; appointment_id: number }) => void
   onMove: (appointmentId: number) => void
@@ -1138,15 +1252,18 @@ function ProposeSlotModal({
       appointment_date: string
       appointment_time: string
       status: string
+      appointment_type?: string | null
     } | null
   }
 
+  const moveOnly = intent === 'move'
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<PatientHit[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
   const [selected, setSelected] = useState<PatientHit | null>(null)
   const [step, setStep] = useState<'search' | 'confirm_propose' | 'confirm_move'>('search')
+  const [localError, setLocalError] = useState('')
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -1165,7 +1282,11 @@ function ProposeSlotModal({
           const payload = await api<{ patients?: PatientHit[] }>(
             `/dashboard/api/agenda/patients-for-slot?q=${encodeURIComponent(q)}&limit=20`,
           )
-          setResults(payload.patients || [])
+          let rows = payload.patients || []
+          if (moveOnly) {
+            rows = rows.filter((p) => p.active_appointment?.id)
+          }
+          setResults(rows)
         } catch {
           // Fallback: same CRM search as the Patients page (older servers may lack patients-for-slot)
           try {
@@ -1182,22 +1303,24 @@ function ProposeSlotModal({
                 } | null
               }>
             }>(`/dashboard/api/patients?q=${encodeURIComponent(q)}&limit=20`)
-            setResults(
-              (fallback.patients || []).map((p) => ({
-                customer_id: p.id,
-                full_name: p.full_name,
-                phone_number: p.phone_number,
-                phone_display: p.phone_number,
-                active_appointment: p.next_appointment?.id
-                  ? {
-                    id: p.next_appointment.id,
-                    appointment_date: p.next_appointment.appointment_date,
-                    appointment_time: String(p.next_appointment.appointment_time || '').slice(0, 5),
-                    status: p.next_appointment.status,
-                  }
-                  : null,
-              })),
-            )
+            let mapped = (fallback.patients || []).map((p) => ({
+              customer_id: p.id,
+              full_name: p.full_name,
+              phone_number: p.phone_number,
+              phone_display: p.phone_number,
+              active_appointment: p.next_appointment?.id
+                ? {
+                  id: p.next_appointment.id,
+                  appointment_date: p.next_appointment.appointment_date,
+                  appointment_time: String(p.next_appointment.appointment_time || '').slice(0, 5),
+                  status: p.next_appointment.status,
+                }
+                : null,
+            }))
+            if (moveOnly) {
+              mapped = mapped.filter((p) => p.active_appointment?.id)
+            }
+            setResults(mapped)
           } catch (err) {
             setResults([])
             setSearchError(err instanceof Error ? err.message : 'Recherche impossible')
@@ -1210,15 +1333,28 @@ function ProposeSlotModal({
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current)
     }
-  }, [query])
+  }, [query, moveOnly])
 
-  const slotLabel = `${slot.slot_date} à ${slot.slot_time}`
+  const slotLabel = formatAppointmentSlot(slot.slot_date, slot.slot_time)
   const initials = (selected?.full_name || '?')
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
     .map((p) => p[0]?.toUpperCase() || '')
     .join('') || '?'
+
+  function confirmMoveClick() {
+    const appt = selected?.active_appointment
+    if (!appt) return
+    const sameDate = appt.appointment_date === slot.slot_date
+    const sameTime = String(appt.appointment_time).slice(0, 5) === String(slot.slot_time).slice(0, 5)
+    if (sameDate && sameTime) {
+      setLocalError('Ce rendez-vous est déjà prévu sur ce créneau.')
+      return
+    }
+    setLocalError('')
+    onMove(appt.id)
+  }
 
   if (step === 'confirm_propose' && selected?.active_appointment) {
     return (
@@ -1232,7 +1368,7 @@ function ProposeSlotModal({
           <div>
             <p className="text-muted">Rendez-vous actuel</p>
             <p className="font-medium text-navy">
-              {selected.active_appointment.appointment_date} à {selected.active_appointment.appointment_time}
+              {formatAppointmentSlot(selected.active_appointment.appointment_date, selected.active_appointment.appointment_time)}
             </p>
           </div>
           <div>
@@ -1262,26 +1398,27 @@ function ProposeSlotModal({
   if (step === 'confirm_move' && selected?.active_appointment) {
     return (
       <Modal onClose={onClose} className="max-w-lg">
-        <h2 className="text-xl font-semibold text-navy">Déplacer ce rendez-vous ?</h2>
+        <h2 className="text-xl font-semibold text-navy">Déplacer le rendez-vous ?</h2>
         <div className="mt-4 space-y-3 text-[13px]">
           <div>
             <p className="text-muted">Patient</p>
             <p className="font-semibold text-navy">{selected.full_name}</p>
           </div>
           <div>
-            <p className="text-muted">Actuellement</p>
+            <p className="text-muted">Ancien créneau</p>
             <p className="font-medium text-navy">
-              {selected.active_appointment.appointment_date} · {selected.active_appointment.appointment_time}
+              {formatAppointmentSlot(selected.active_appointment.appointment_date, selected.active_appointment.appointment_time)}
             </p>
           </div>
           <div>
             <p className="text-muted">Nouveau créneau</p>
-            <p className="font-medium text-navy">{slot.slot_date} · {slot.slot_time}</p>
+            <p className="font-medium text-navy">{slotLabel}</p>
           </div>
+          {localError ? <p className="text-sm text-danger">{localError}</p> : null}
         </div>
         <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setStep('search')}>Annuler</Button>
-          <Button loading={busy} onClick={() => onMove(selected.active_appointment!.id)}>
+          <Button variant="secondary" onClick={() => { setLocalError(''); setStep('search') }}>Annuler</Button>
+          <Button loading={busy} onClick={confirmMoveClick}>
             Confirmer le déplacement
           </Button>
         </div>
@@ -1293,10 +1430,12 @@ function ProposeSlotModal({
     <Modal onClose={onClose} className="max-w-lg">
       <div className="flex items-start gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-tint text-primary">
-          <CalendarDays className="h-5 w-5" />
+          {moveOnly ? <ArrowLeftRight className="h-5 w-5" /> : <CalendarDays className="h-5 w-5" />}
         </div>
         <div>
-          <h2 className="text-xl font-semibold text-navy">Créneau disponible</h2>
+          <h2 className="text-xl font-semibold text-navy">
+            {moveOnly ? 'Déplacer un rendez-vous' : 'Créneau disponible'}
+          </h2>
           <p className="text-sm text-muted">{slotLabel}</p>
           {slot.duration_minutes ? (
             <p className="text-xs text-muted">Durée : {slot.duration_minutes} min</p>
@@ -1305,9 +1444,13 @@ function ProposeSlotModal({
       </div>
 
       <div className="mt-5">
-        <p className="mb-2 text-[13px] font-semibold text-navy">Choisir un patient</p>
+        <p className="mb-2 text-[13px] font-semibold text-navy">
+          {moveOnly ? 'Rechercher un rendez-vous' : 'Choisir un patient'}
+        </p>
         <p className="mb-2 text-[12px] text-muted">
-          Recherchez le patient auquel vous souhaitez proposer ce créneau.
+          {moveOnly
+            ? 'Recherchez par nom, téléphone ou date du rendez-vous actuel.'
+            : 'Recherchez le patient auquel vous souhaitez proposer ce créneau.'}
         </p>
         <input
           type="search"
@@ -1316,14 +1459,16 @@ function ProposeSlotModal({
             setQuery(e.target.value)
             setSelected(null)
           }}
-          placeholder="Rechercher par nom ou téléphone..."
+          placeholder="Rechercher patient, téléphone…"
           className="h-10 w-full rounded-[10px] border border-border bg-white px-3 text-sm text-navy outline-none focus:border-primary"
         />
       </div>
 
       {selected ? (
         <div className="mt-4 rounded-[12px] border border-border bg-[#F7FBFC] p-3">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Patient sélectionné</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            {moveOnly ? 'Rendez-vous sélectionné' : 'Patient sélectionné'}
+          </p>
           <div className="mt-2 flex items-start gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-navy text-sm font-bold text-white">
               {initials}
@@ -1337,10 +1482,21 @@ function ProposeSlotModal({
                 </span>
               ) : null}
               {selected.active_appointment ? (
-                <p className="mt-2 text-[13px] text-navy">
-                  <span className="text-muted">Rendez-vous actuel · </span>
-                  {selected.active_appointment.appointment_date} à {selected.active_appointment.appointment_time}
-                </p>
+                <div className="mt-2 space-y-0.5 text-[13px] text-navy">
+                  <p>
+                    <span className="text-muted">Actuellement · </span>
+                    {formatAppointmentSlot(
+                      selected.active_appointment.appointment_date,
+                      selected.active_appointment.appointment_time,
+                    )}
+                  </p>
+                  {selected.active_appointment.appointment_type ? (
+                    <p className="text-muted">{selected.active_appointment.appointment_type}</p>
+                  ) : null}
+                  <p className="text-xs text-muted">
+                    {appointmentStatusLabel(selected.active_appointment.status)}
+                  </p>
+                </div>
               ) : (
                 <p className="mt-2 text-[13px] text-warning">Aucun rendez-vous actif</p>
               )}
@@ -1354,7 +1510,9 @@ function ProposeSlotModal({
             <li className="text-sm text-danger">{searchError}</li>
           ) : null}
           {!searching && !searchError && query.trim().length >= 2 && !results.length ? (
-            <li className="text-sm text-muted">Aucun patient trouvé.</li>
+            <li className="text-sm text-muted">
+              {moveOnly ? 'Aucun rendez-vous déplaçable trouvé.' : 'Aucun patient trouvé.'}
+            </li>
           ) : null}
           {results.map((p) => (
             <li key={p.customer_id}>
@@ -1371,7 +1529,12 @@ function ProposeSlotModal({
                   <p className="text-xs text-muted">{p.phone_display || p.phone_number}</p>
                   {p.active_appointment ? (
                     <p className="mt-1 text-xs text-navy">
-                      RDV actuel · {p.active_appointment.appointment_date} · {p.active_appointment.appointment_time}
+                      {formatAppointmentSlot(p.active_appointment.appointment_date, p.active_appointment.appointment_time)}
+                      {' · '}
+                      {appointmentStatusLabel(p.active_appointment.status)}
+                      {p.active_appointment.appointment_type
+                        ? ` · ${p.active_appointment.appointment_type}`
+                        : ''}
                     </p>
                   ) : (
                     <p className="mt-1 text-xs text-warning">Aucun rendez-vous actif</p>
@@ -1385,18 +1548,20 @@ function ProposeSlotModal({
 
       <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
         <Button variant="secondary" onClick={onClose}>Fermer</Button>
-        <Button
-          variant="secondary"
-          disabled={!selected?.active_appointment || busy}
-          onClick={() => setStep('confirm_propose')}
-        >
-          Envoyer une proposition
-        </Button>
+        {!moveOnly ? (
+          <Button
+            variant="secondary"
+            disabled={!selected?.active_appointment || busy}
+            onClick={() => setStep('confirm_propose')}
+          >
+            Envoyer une proposition
+          </Button>
+        ) : null}
         <Button
           disabled={!selected?.active_appointment || busy}
           onClick={() => setStep('confirm_move')}
         >
-          Déplacer directement
+          {moveOnly ? 'Continuer' : 'Déplacer directement'}
         </Button>
       </div>
     </Modal>

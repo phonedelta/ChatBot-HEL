@@ -138,16 +138,17 @@ function detectCorrectionIntent(text, options = {}) {
   // --- Name corrections with value ---
   // Captures stop at end-of-line so a bulk booking form is NOT treated as a correction.
   const namePatterns = [
-    /(?:changer|corriger|modifier|bdel|bdl)\s+(?:le\s+)?(?:nom(?:\s+complet)?|smiya|smiyto|smito|smiti|smyti|اسم(?:\s+الكامل)?)\s*[:\-–]?\s*([^\n\r]+)/iu,
+    /(?:changer|corriger|modifier|bdel|bdl|nbdl)\s+(?:le\s+)?(?:nom(?:\s+complet)?|smiya|smiyto|smito|smiti|smyti|smiyti|اسم(?:\s+الكامل)?)\s*(?:l|li|en|à|a|ل)?\s*[:\-–]?\s*([^\n\r]+)/iu,
     /(?:changer|corriger)\s+smiya\s*[:\-–]?\s*([^\n\r]+)/iu,
-    /(?:bdel|bdl)\s+smiya\s+(?:l|li|ل)?\s*([^\n\r]+)/iu,
-    /(?:la\s+)?smiya\s+(?:hiya|howa|kamla|correcte?)?\s*[:\-–]?\s*([^\n\r]+)/iu,
-    /(?:^|\n)\s*(?:smiya|smiyto|smito|smitha|smita|smiti|smyti|smiyti)\s+(?:dialo|dyalo|dialha|dyalha|howa|hiya)?\s*[:\-–]?\s*([^\n\r]+)/iu,
+    /(?:bdel|bdl|nbdl)\s+smiya\s+(?:l|li|ل)?\s*([^\n\r]+)/iu,
+    /(?:la\s+)?smiya\s+(?:hiya|howa|kamla|correcte?|s7i7a)?\s*[:\-–]?\s*([^\n\r]+)/iu,
+    /(?:^|\n)\s*(?:smiya|smiyto|smito|smitha|smita|smiti|smyti|smiyti|lism)\s+(?:dialo|dyalo|dialha|dyalha|dyali|howa|hiya)?\s*[:\-–]?\s*([^\n\r]+)/iu,
     /(?:^|\n)\s*(?:je\s+m['’]appelle|ana\s+(?:smiti|smyti|smiya)?|ismi)\s+([^\n\r]+)/iu,
     /(?:^|\n)\s*(?:mon\s+)?nom(?:\s+complet)?\s+(?:est|c['’]est)\s+([^\n\r]+)/iu,
     /(?:^|\n)\s*(?:mon\s+)?nom(?:\s+complet)?\s*[:\-–]\s*([^\n\r]+)/iu,
-    /(?:non[, ]+)?(?:le\s+)?nom\s+correct(?:e)?\s+(?:est|c['’]est)\s+([^\n\r]+)/iu,
+    /(?:non[, ]+)?(?:le\s+)?(?:bon\s+)?nom\s+(?:correct(?:e)?|s7i7)?\s+(?:est|c['’]est)\s+([^\n\r]+)/iu,
     /corrige(?:r)?\s+le\s+nom\s+en\s+([^\n\r]+)/iu,
+    /(?:c['’]est|cest)\s+([\p{L}][\p{L}'’\-\s]{2,60})$/iu,
     /الاسم(?:\s+الكامل)?(?:\s+الصحيح)?\s*(?:هو|:|ديالي)?\s*([^\n\r]+)/u,
     /(?:سميتي|سميتيا|الاسم\s+ديالي)\s+([^\n\r]+)/u,
     /بدل\s+الاسم\s*(?:ل|الى|إلى)?\s*([^\n\r]+)/u,
@@ -177,14 +178,18 @@ function detectCorrectionIntent(text, options = {}) {
 
   // --- Phone ---
   const phonePatterns = [
-    /(?:changer|corriger|bdel|bdl)\s+(?:le\s+)?(?:num[eé]ro|n[°o]|telephone|tel[eé]phone|tel|phone|رقم(?:\s+الهاتف)?)\s*[:\-–]?\s*(.+)$/iu,
-    /(?:la?\s+)?(?:num[eé]ro|telephone|tel[eé]phone|tel|phone)\s+(?:howa|correcte?|est|plutot|plutôt)?\s*[:\-–]?\s*(.+)$/iu,
-    /رقم(?:\s+الهاتف)?(?:\s+الصحيح)?\s*(?:هو|:)\s*(.+)$/u,
-    /(?:telephone|tel[eé]phone|tel|phone|num[eé]ro)\s*[:\-–]\s*(.+)$/iu,
+    /(?:changer|corriger|modifier|bdel|bdl|nbdl)\s+(?:le\s+)?(?:num[eé]ro|n[°o]|telephone|tel[eé]phone|tel|tele|phone|رقم(?:\s+الهاتف)?)\s*(?:l|li|en|à|a|ل)?\s*[:\-–]?\s*(.+)$/iu,
+    /(?:le\s+)?bon\s+(?:num[eé]ro|telephone|tel)\s+(?:est|c['’]est)\s*(.+)$/iu,
+    /(?:mon\s+)?(?:num[eé]ro|telephone|tel[eé]phone|tel|tele|phone)\s+(?:dyali|diali|howa|correcte?|est|c['’]est|plutot|plutôt)?\s*[:\-–]?\s*(.+)$/iu,
+    /(?:r9m|nmr|num)\s+(?:dyali|telephone|tel)?\s*[:\-–]?\s*(.+)$/iu,
+    /رقم(?:\s+الهاتف)?(?:\s+الصحيح)?\s*(?:هو|:|ديالي)?\s*(.+)$/u,
+    /(?:telephone|tel[eé]phone|tel|tele|phone|num[eé]ro)\s*[:\-–]\s*(.+)$/iu,
   ]
+  let phoneMarkerSeen = false
   for (const pattern of phonePatterns) {
     const match = raw.match(pattern)
     if (!match?.[1]) continue
+    phoneMarkerSeen = true
     const phone = parsePhoneValue(match[1])
     if (phone) {
       fields.phone_number = phone
@@ -192,14 +197,43 @@ function detectCorrectionIntent(text, options = {}) {
       break
     }
   }
+  // Contrast: "0612… machi 0600…" / "machi 0600…, 0612…"
+  if (!fields.phone_number) {
+    const phoneContrast = raw.match(
+      /((?:\+?212|0)?[\s.-]*[5-7](?:[\s.-]*\d){8}).{0,20}(?:machi|pas|ماشي).{0,20}((?:\+?212|0)?[\s.-]*[5-7](?:[\s.-]*\d){8})/i,
+    ) || raw.match(
+      /(?:machi|pas|ماشي).{0,20}((?:\+?212|0)?[\s.-]*[5-7](?:[\s.-]*\d){8}).{0,20}[,:]?\s*((?:\+?212|0)?[\s.-]*[5-7](?:[\s.-]*\d){8})/i,
+    )
+    if (phoneContrast) {
+      const a = parsePhoneValue(phoneContrast[1])
+      const b = parsePhoneValue(phoneContrast[2])
+      const draftPhone = options.draft?.phone_number ? parsePhoneValue(options.draft.phone_number) : null
+      const next = (draftPhone && a === draftPhone && b) ? b
+        : (draftPhone && b === draftPhone && a) ? a
+          : (b || a)
+      if (next) {
+        fields.phone_number = next
+        mark('phone_number')
+      }
+    }
+  }
+  // Marker present but invalid value → ask again, never wipe a valid draft phone
+  const invalidPhoneAttempt = Boolean(phoneMarkerSeen && !fields.phone_number)
 
   // --- City ---
   const cityPatterns = [
-    /(?:changer|corriger|bdel|bdl)\s+(?:la\s+)?(?:ville|city|مدينة)\s*[:\-–]?\s*(.+)$/iu,
-    /(?:la\s+)?(?:ville|city)\s+(?:hiya|howa|correcte?|est)?\s*[:\-–]?\s*(.+)$/iu,
-    /(?:ville|city)\s*[:\-–]\s*(.+)$/iu,
-    /المدينة(?:\s+الصحيحة)?\s*(?:هي|:)\s*(.+)$/u,
-    /\bla\s+ana\s+f\s+([\p{L}][\p{L}\s'-]{1,40})$/iu,
+    /(?:changer|corriger|modifier|bdel|bdl|nbdl)\s+(?:la\s+)?(?:ville|city|mdina|lmdina|mdinti|مدينة|المدينة)\s*(?:l|li|en|à|a|ل)?\s*[:\-–]?\s*(.+)$/iu,
+    /(?:la\s+)?(?:ville|city)\s+(?:c['’]est|est|hiya|howa|correcte?|s7i7a|bonne)?\s*[:\-–]?\s*(.+)$/iu,
+    /(?:ma\s+)?(?:ville|city)\s+(?:est|c['’]est)\s+(.+)$/iu,
+    /(?:^|\n)\s*(?:ville|city)\s*[:\-–]?\s*(.+)$/iu,
+    /(?:^|\n)\s*(?:mdina|lmdina|mdinti|medina)\s+(?:hiya|howa|dyali|diali|s7i7a)?\s*[:\-–]?\s*(.+)$/iu,
+    /(?:ana\s+(?:f|fi|men|mn|min)\s+)([\p{L}][\p{L}\s'-]{1,40})$/iu,
+    /(?:ana\s+)?(?:sakn|sakna|saken|sakena)\s+(?:f|fi)\s+([\p{L}][\p{L}\s'-]{1,40})$/iu,
+    /(?:je\s+(?:suis|habite|viens)\s+(?:à|a|de)\s+)([\p{L}][\p{L}\s'-]{1,40})$/iu,
+    /(?:j['’]?habite\s+(?:à|a)\s+)([\p{L}][\p{L}\s'-]{1,40})$/iu,
+    /المدينة(?:\s+الصحيحة|\s+غلط)?\s*(?:هي|:)?\s*(.+)$/u,
+    /(?:أنا\s*(?:في|ف|من)\s*)([\u0600-\u06FF][\u0600-\u06FF\s]{1,40})$/u,
+    /(?:ساكن|ساكنة)\s*(?:ف|في)\s*([\u0600-\u06FF][\u0600-\u06FF\s]{1,40})$/u,
   ]
   for (const pattern of cityPatterns) {
     const match = raw.match(pattern)
@@ -212,22 +246,32 @@ function detectCorrectionIntent(text, options = {}) {
     }
   }
 
+  // Contrast city: "Rabat machi Safi" / "machi Safi, Rabat" / "c'est Rabat pas Safi"
+  if (!fields.city) {
+    const contrastCity = extractContrastCity(raw, options.draft)
+    if (contrastCity) {
+      fields.city = contrastCity
+      mark('city')
+    }
+  }
+
   // --- Motif / complaint (explicit contrast or labeled) ---
   const motifCorrection = (
-    /\b(?:la\s+)?machi\b.+\b(?:bghit|3andi|probl[eè]me|mochkil)\b/i.test(raw)
-    || /\b(?:le\s+)?probl[eè]me\s+c['’]?est\b/i.test(raw)
-    || /\b(?:changer|corriger)\s+(?:le\s+)?(?:probl[eè]me|motif|service)\b/i.test(n)
-    || /المشكل\s+هو/.test(raw)
-    || /\bla\s+machi\s+\w+.+(?:tabyid|blanch|detartrage|jir|facette|urgence|carie|دارssa|ضرس)/i.test(raw)
+    /\b(?:la\s+)?machi\b.+\b(?:bghit|3andi|probl[eè]me|mochkil|motif)\b/i.test(raw)
+    || /\b(?:le\s+)?(?:probl[eè]me|motif|mouchkil|lmochkil|sbab)\s+(?:c['’]?est|huwa|howa|s7i7)\b/i.test(raw)
+    || /\b(?:changer|corriger|modifier|bdel|nbdl)\s+(?:le\s+)?(?:probl[eè]me|motif|service|lmochkil|mouchkil)\b/i.test(n)
+    || /المشكل\s*(?:الحقيقي)?\s*هو/.test(raw)
+    || /(?:السبب|المشكل)\s*(?:هو|:)/.test(raw)
+    || /\b(?:3ndi|3andi)\s+(?:wja3|sen|snan|dent)\b/i.test(n)
+    || /\bla\s+machi\s+\w+.+(?:tabyid|blanch|detartrage|jir|facette|urgence|carie|دارssa|ضرس|douleur|wja3)/i.test(raw)
   )
   if (motifCorrection) {
-    // Prefer text after contrast marker
     let motifText = raw
-    const afterMachi = raw.match(/\bla\s+machi\b[^,]*,?\s*(.+)$/i)
+    const afterMachi = raw.match(/\b(?:la\s+)?machi\b[^,]*,?\s*(.+)$/i)
     if (afterMachi?.[1]) motifText = afterMachi[1]
-    const afterEst = raw.match(/(?:probl[eè]me\s+c['’]?est|المشكل\s+هو)\s*(.+)$/i)
+    const afterEst = raw.match(/(?:probl[eè]me\s+c['’]?est|motif\s+c['’]?est|lmochkil\s+(?:huwa|howa)|المشكل\s*(?:الحقيقي)?\s*هو|السبب\s*هو)\s*(.+)$/i)
     if (afterEst?.[1]) motifText = afterEst[1]
-    const afterChanger = raw.match(/(?:changer|corriger)\s+(?:le\s+)?(?:probl[eè]me|motif|service)\s*[:\-–]?\s*(.+)$/i)
+    const afterChanger = raw.match(/(?:changer|corriger|modifier|bdel|nbdl)\s+(?:le\s+)?(?:probl[eè]me|motif|service|lmochkil|mouchkil)\s*(?:l|li|en|à|a|ل)?\s*[:\-–]?\s*(.+)$/i)
     if (afterChanger?.[1]) motifText = afterChanger[1]
 
     const motif = parseMotifValue(motifText)
@@ -244,14 +288,18 @@ function detectCorrectionIntent(text, options = {}) {
 
   // --- Date / time ---
   const slotCorrection = (
-    /\b(?:changer|corriger|bdel|nbdl|la\s+finalement|plutot|plutôt|bghit\s+nbdl)\b.+\b(?:\d{1,2}[\/\-]\d{1,2}|\d{1,2}\s*h|\d{1,2}:\d{2}|lwa9t|heure)/i.test(raw)
-    || /\b(?:date|heure|jour|موعد)\s*[:\-–]/.test(n)
+    /\b(?:changer|corriger|bdel|nbdl|finalement|plutot|plutôt|bghit\s+nbdl)\b/i.test(raw)
+    || /\b(?:date|heure|jour|nhar|sa3a|saa|wa9t|lwa9t|lwe9t|موعد|ساعة|وقت|نهار|تاريخ)\b/i.test(n)
+    || /\b(?:ghda|gheda|ghdda|ghedda|lyoum|lyom|demain|aujourdhui|aujourd)\b/i.test(n)
     || /^(?:m3a|مع|à)\s*\d{1,2}/i.test(raw.trim())
     || /^\d{1,2}\s*h(?:\s*\d{2})?$/i.test(raw.trim())
     || /^\d{1,2}:\d{2}$/.test(raw.trim())
+    || /\bmachi\b.+\b(?:ghda|lyoum|demain|\d{1,2}\s*h)/i.test(n)
+    || /\b(?:\d{1,2}\s*h|\d{1,2}:\d{2})\s+machi\b/i.test(n)
   )
   if (slotCorrection) {
-    const appointment = extractAppointment(raw, options.now || new Date())
+    const slotText = stripRejectedContrastTail(raw)
+    const appointment = extractAppointment(slotText, options.now || new Date())
     if (appointment?.appointment_date) {
       fields.appointment_date = appointment.appointment_date
       mark('appointment')
@@ -264,8 +312,8 @@ function detectCorrectionIntent(text, options = {}) {
 
   // Multi inline: "nom X ville Y" without changer keyword
   if (!fields.full_name) {
-    const multiName = raw.match(/(?:^|\b)(?:nom|smiya)\s+([\p{L}][\p{L}'’\-\s]{2,60}?)(?=\s+(?:ville|city|مدينة|numero|tel|phone|رقم)|$)/iu)
-    if (multiName?.[1] && /\b(?:ville|city|مدينة|numero|tel)\b/i.test(raw)) {
+    const multiName = raw.match(/(?:^|\b)(?:nom|smiya)\s+([\p{L}][\p{L}'’\-\s]{2,60}?)(?=\s+(?:ville|city|mdina|مدينة|numero|tel|phone|رقم)|$)/iu)
+    if (multiName?.[1] && /\b(?:ville|city|mdina|مدينة|numero|tel)\b/i.test(raw)) {
       const name = parseNameValue(multiName[1])
       if (name) {
         fields.full_name = name
@@ -274,8 +322,8 @@ function detectCorrectionIntent(text, options = {}) {
     }
   }
   if (!fields.city) {
-    const multiCity = raw.match(/(?:ville|city|مدينة)\s+([\p{L}][\p{L}'’\-\s]{2,40})$/iu)
-    if (multiCity?.[1] && fields.full_name) {
+    const multiCity = raw.match(/(?:ville|city|mdina|lmdina|مدينة)\s+([\p{L}][\p{L}'’\-\s]{2,40})$/iu)
+    if (multiCity?.[1] && (fields.full_name || /\b(?:nom|smiya|smiti)\b/i.test(raw))) {
       const city = parseCityValue(multiCity[1])
       if (city) {
         fields.city = city
@@ -285,20 +333,119 @@ function detectCorrectionIntent(text, options = {}) {
   }
 
   const isCorrection = changedFields.length > 0
-  return {
+  const result = {
     isCorrection,
     fields,
     cleared,
     changedFields,
   }
+  if (invalidPhoneAttempt) {
+    result.invalidPhone = true
+    result.isCorrection = true
+    if (!changedFields.includes('phone_number')) changedFields.push('phone_number')
+    result.changedFields = changedFields
+  }
+  return result
+}
+
+/**
+ * Drop rejected contrast tails so "ghda machi lyoum" → "ghda", "14h machi 11h" → "14h".
+ */
+function stripRejectedContrastTail(text) {
+  let raw = String(text || '').trim()
+  if (!raw) return raw
+  raw = raw
+    .replace(/\bmachi\s+[\p{L}\d:hH]+(?:\s*h(?:\s*\d{2})?)?/giu, ' ')
+    .replace(/\bpas\s+[\p{L}\d:hH]+(?:\s*h(?:\s*\d{2})?)?/giu, ' ')
+    .replace(/\bماشي\s+[\u0600-\u06FF\d:hH]+/gu, ' ')
+    .replace(/\s+,/g, ',')
+    .replace(/^[,\s]+|[,\s]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return raw || String(text || '').trim()
+}
+
+/**
+ * Contrast city extraction using optional draft.city as the rejected value.
+ * @param {string} text
+ * @param {{ city?: string|null }|null} [draft]
+ * @returns {string|null}
+ */
+function extractContrastCity(text, draft = null) {
+  const raw = String(text || '').trim()
+  if (!raw) return null
+
+  const patterns = [
+    /^([\p{L}][\p{L}'’\-\s]{1,40})\s+machi\s+([\p{L}][\p{L}'’\-\s]{1,40})$/iu,
+    /^machi\s+([\p{L}][\p{L}'’\-\s]{1,40})\s*[,:]?\s*([\p{L}][\p{L}'’\-\s]{1,40})$/iu,
+    /(?:c['’]est|cest)\s+([\p{L}][\p{L}'’\-\s]{1,40})\s+pas\s+([\p{L}][\p{L}'’\-\s]{1,40})$/iu,
+    /(?:pas|non)\s+([\p{L}][\p{L}'’\-\s]{1,40})\s*[,:]?\s*(?:c['’]est\s+)?([\p{L}][\p{L}'’\-\s]{1,40})$/iu,
+    /^([\u0600-\u06FF][\u0600-\u06FF\s]{1,40})\s+ماشي\s+([\u0600-\u06FF][\u0600-\u06FF\s]{1,40})$/u,
+    /^ماشي\s+([\u0600-\u06FF][\u0600-\u06FF\s]{1,40})\s*[,،]?\s*([\u0600-\u06FF][\u0600-\u06FF\s]{1,40})$/u,
+  ]
+
+  const draftCity = draft?.city ? parseCityValue(draft.city) : null
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern)
+    if (!match?.[1] || !match?.[2]) continue
+    const a = parseCityValue(match[1])
+    const b = parseCityValue(match[2])
+    if (!a && !b) continue
+    if (draftCity) {
+      if (a === draftCity && b && b !== draftCity) return b
+      if (b === draftCity && a && a !== draftCity) return a
+    }
+    // "X machi Y" → keep X (new). "machi Y, X" → keep X (second group as new when first is rejected)
+    if (/^machi\b|^pas\b|^non\b|^ماشي/i.test(raw.trim())) {
+      if (b) return b
+      if (a) return a
+    }
+    if (a && b && a !== b) return a
+    if (a) return a
+    if (b) return b
+  }
+  return null
+}
+
+/**
+ * Patient wants to correct something but did not specify which field / value.
+ */
+function detectGeneralCorrectionRequest(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return false
+  const n = normalizeText(raw)
+  if (detectCorrectionIntent(raw).isCorrection) return false
+  if (parseNameValue(raw) || parsePhoneValue(raw) || parseCityValue(raw)) return false
+
+  return (
+    /\b(?:bghit|brit)\s+(?:ns7e7|nsa7a7|nbdl|nbadel|nsahah)\b/i.test(n)
+    || /\b(?:je\s+veux|je\s+souhaite)\s+(?:corriger|modifier|changer)\b/i.test(n)
+    || /\b(?:il\s+y\s+a|y\s+a)\s+(?:une?\s+)?(?:info|information|erreur|donn[eé]e)\b.*\b(?:fausse|incorrecte|erreur|trompe)/i.test(n)
+    || /\b(?:information|donn[eé]e|ma3louma|lma3louma).{0,20}(?:ghalta|fausse|incorrecte|faux)\b/i.test(n)
+    || /\b(?:kayna|kayn)\s+(?:wahed\s+)?(?:l)?ma3louma\s+ghalta\b/i.test(n)
+    || /\b(?:had\s+)?(?:l)?ma3louma\s+ghalta\b/i.test(n)
+    || /\bmachi\s+haka\b/i.test(n)
+    || /\bje\s+me\s+suis\s+tromp/i.test(n)
+    || /\bce\s+n['’]est\s+pas\s+correct\b/i.test(n)
+    || /كاين(ة)?\s*(شي\s*)?(معلومة|خطأ)/u.test(raw)
+    || /بغيت\s*(نصحح|نبدل)\s*(معلومة|المعلومات)?/u.test(raw)
+    || /هاد\s*المعلومة\s*غالطة/u.test(raw)
+    || /المعلومات\s*فيها\s*خطأ/u.test(raw)
+  )
 }
 
 /**
  * Build a lead patch from a correction result. Never touches unrelated fields.
+ * Never clears a valid phone when the new value is invalid.
  */
 function buildCorrectionPatch(correction) {
   const patch = {}
   if (!correction?.isCorrection) return patch
+  if (correction.invalidPhone && !correction.fields?.phone_number) {
+    // Keep existing phone; caller must re-ask for a valid number.
+    return patch
+  }
 
   if (correction.fields.full_name) patch.full_name = correction.fields.full_name
   if (correction.fields.phone_number) patch.phone_number = correction.fields.phone_number
@@ -369,6 +516,8 @@ module.exports = {
   detectCorrectionIntent,
   buildCorrectionPatch,
   detectInlineNameCorrection,
+  detectGeneralCorrectionRequest,
+  extractContrastCity,
   parseNameValue,
   parsePhoneValue,
   parseCityValue,

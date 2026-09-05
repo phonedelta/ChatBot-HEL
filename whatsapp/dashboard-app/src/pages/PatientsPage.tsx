@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   MessageCircle,
@@ -23,6 +24,7 @@ import {
   isSafePhone,
   statusTone,
 } from '@/lib/format'
+import { getAppPortalRoot } from '@/lib/portal-root'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Field, Input } from '@/components/ui/Input'
@@ -31,6 +33,39 @@ import { NewAppointmentModal } from '@/components/smart/NewAppointmentModal'
 import { usePermissions } from '@/hooks/usePermissions'
 import { PERMISSIONS } from '@/lib/permissions'
 import { Skeleton } from '@/components/ui/Skeleton'
+
+function getAppZoomFactor(): number {
+  const raw = document.documentElement.style.getPropertyValue('--app-zoom-factor')
+  const n = Number(raw)
+  if (Number.isFinite(n) && n > 0) return n
+  const root = document.getElementById('root')
+  if (root) {
+    const z = Number.parseFloat(getComputedStyle(root).zoom)
+    if (Number.isFinite(z) && z > 0) return z
+  }
+  return 1
+}
+
+function computeRowMenuPos(btn: HTMLElement) {
+  const rect = btn.getBoundingClientRect()
+  const z = getAppZoomFactor()
+  const menuWidth = 192
+  const menuHeight = 140
+  const gap = 6
+  const spaceBelow = window.innerHeight - rect.bottom
+  const openUp = spaceBelow < menuHeight + gap
+  const topVisual = openUp ? Math.max(8, rect.top - menuHeight - gap) : rect.bottom + gap
+  let leftVisual = rect.right - menuWidth
+  if (leftVisual < 8) leftVisual = 8
+  if (leftVisual + menuWidth > window.innerWidth - 8) {
+    leftVisual = Math.max(8, window.innerWidth - menuWidth - 8)
+  }
+  return {
+    top: topVisual / z,
+    left: leftVisual / z,
+    width: menuWidth / z,
+  }
+}
 
 type NextAction = {
   type: string
@@ -172,6 +207,9 @@ export function PatientsPage() {
   const [contextLoading, setContextLoading] = useState(false)
   const [contextError, setContextError] = useState('')
   const [menuId, setMenuId] = useState<number | null>(null)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null)
+  const menuBtnRef = useRef<HTMLButtonElement | null>(null)
+  const menuPanelRef = useRef<HTMLDivElement | null>(null)
 
   const [newPatientOpen, setNewPatientOpen] = useState(false)
   const [apptOpen, setApptOpen] = useState(false)
@@ -231,6 +269,69 @@ export function PatientsPage() {
     return () => window.clearTimeout(t)
   }, [toast])
 
+  useLayoutEffect(() => {
+    if (menuId == null) {
+      setMenuPos(null)
+      return
+    }
+    const btn = menuBtnRef.current
+    if (!btn) return
+    setMenuPos(computeRowMenuPos(btn))
+  }, [menuId])
+
+  useEffect(() => {
+    if (menuId == null) return
+
+    function closeMenu() {
+      setMenuId(null)
+      setMenuPos(null)
+      menuBtnRef.current = null
+    }
+
+    function onPointerDown(e: PointerEvent) {
+      const t = e.target as Node
+      if (menuBtnRef.current?.contains(t) || menuPanelRef.current?.contains(t)) return
+      closeMenu()
+    }
+
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') closeMenu()
+    }
+
+    function onReposition() {
+      if (menuBtnRef.current) setMenuPos(computeRowMenuPos(menuBtnRef.current))
+    }
+
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onReposition)
+    window.addEventListener('scroll', onReposition, true)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', onReposition)
+      window.removeEventListener('scroll', onReposition, true)
+    }
+  }, [menuId])
+
+  function toggleRowMenu(rowId: number, btn: HTMLButtonElement) {
+    if (menuId === rowId) {
+      setMenuId(null)
+      setMenuPos(null)
+      menuBtnRef.current = null
+      return
+    }
+    menuBtnRef.current = btn
+    setMenuId(rowId)
+    setMenuPos(computeRowMenuPos(btn))
+  }
+
+  function closeRowMenu() {
+    setMenuId(null)
+    setMenuPos(null)
+    menuBtnRef.current = null
+  }
+
   const loadContext = useCallback(async (id: number) => {
     const reqId = ++contextReqRef.current
     setContextLoading(true)
@@ -274,7 +375,7 @@ export function PatientsPage() {
     const params = new URLSearchParams(searchParams)
     params.set('patient', String(id))
     setSearchParams(params, { replace: true })
-    setMenuId(null)
+    closeRowMenu()
   }
 
   function closePatientModal() {
@@ -315,7 +416,7 @@ export function PatientsPage() {
       city: row?.city || fromCtx?.city || '',
     })
     setApptOpen(true)
-    setMenuId(null)
+    closeRowMenu()
   }
 
   async function cancelAppointment(appointmentId?: number | null) {
@@ -578,42 +679,13 @@ export function PatientsPage() {
                       <button
                         type="button"
                         title="Plus"
-                        onClick={() => setMenuId(menuId === row.id ? null : row.id)}
+                        aria-haspopup="menu"
+                        aria-expanded={menuId === row.id}
+                        onClick={(e) => toggleRowMenu(row.id, e.currentTarget)}
                         className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-bg hover:text-navy"
                       >
                         <MoreHorizontal className="h-4 w-4" />
                       </button>
-                      {menuId === row.id ? (
-                        <div className="absolute right-0 top-9 z-20 w-48 rounded-xl border border-border bg-white py-1 shadow-soft">
-                          <button
-                            type="button"
-                            className="block w-full px-3 py-2 text-left text-sm text-navy hover:bg-bg"
-                            onClick={() => openCreateAppt(row)}
-                          >
-                            Créer un rendez-vous
-                          </button>
-                          <button
-                            type="button"
-                            className="block w-full px-3 py-2 text-left text-sm text-navy hover:bg-bg"
-                            onClick={() => {
-                              navigate(`/agenda?patientId=${row.id}`)
-                              setMenuId(null)
-                            }}
-                          >
-                            Voir les rendez-vous
-                          </button>
-                          <button
-                            type="button"
-                            className="block w-full px-3 py-2 text-left text-sm text-navy hover:bg-bg"
-                            onClick={() => {
-                              openMessages(row)
-                              setMenuId(null)
-                            }}
-                          >
-                            Ouvrir dans Messages
-                          </button>
-                        </div>
-                      ) : null}
                     </div>
                   </div>
 
@@ -712,6 +784,60 @@ export function PatientsPage() {
           </div>
         ) : null}
       </div>
+
+      {menuId != null && menuPos
+        ? createPortal(
+            <div
+              ref={menuPanelRef}
+              role="menu"
+              aria-label="Actions patient"
+              style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
+              className="fixed z-[10050] rounded-xl border border-border bg-white py-1 shadow-soft"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {(() => {
+                const menuRow = rows.find((r) => r.id === menuId) || null
+                if (!menuRow) return null
+                return (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="block w-full px-3 py-2.5 text-left text-sm text-navy hover:bg-bg"
+                      onClick={() => openCreateAppt(menuRow)}
+                    >
+                      Créer un rendez-vous
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="block w-full px-3 py-2.5 text-left text-sm text-navy hover:bg-bg"
+                      onClick={() => {
+                        navigate(`/agenda?patientId=${menuRow.id}`)
+                        closeRowMenu()
+                      }}
+                    >
+                      Voir les rendez-vous
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="block w-full px-3 py-2.5 text-left text-sm text-navy hover:bg-bg"
+                      onClick={() => {
+                        openMessages(menuRow)
+                        closeRowMenu()
+                      }}
+                    >
+                      Ouvrir dans Messages
+                    </button>
+                  </>
+                )
+              })()}
+            </div>,
+            getAppPortalRoot(),
+          )
+        : null}
 
       <PatientDetailModal
         open={Boolean(selectedId)}

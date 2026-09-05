@@ -90,8 +90,6 @@ const PERIODS = [
 
 const TYPE_FILTERS = [
   { id: 'all', label: 'Toutes' },
-  { id: 'ai', label: 'Assistant IA' },
-  { id: 'human', label: 'Équipe' },
   { id: 'appointment', label: 'Rendez-vous' },
   { id: 'followup', label: 'Relances' },
   { id: 'handoff', label: 'Handoffs' },
@@ -307,6 +305,20 @@ export function HistoryPage() {
     }
   }, [searchParams, days, typeFilter, actorFilter, page])
 
+  // Clear obsolete AI actor / type filters from URL bookmarks
+  useEffect(() => {
+    const type = searchParams.get('type')
+    const actor = searchParams.get('actor')
+    if (type === 'ai' || type === 'human' || actor === 'assistant_ai' || actor === 'ai') {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev)
+        if (type === 'ai' || type === 'human') next.delete('type')
+        if (actor === 'assistant_ai' || actor === 'ai') next.delete('actor')
+        return next
+      }, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
+
   useEffect(() => {
     api<{ ok: boolean; groups: ActorFilterGroup[] }>('/dashboard/api/history/actors')
       .then((res) => setActorGroups(res.groups || []))
@@ -367,7 +379,7 @@ export function HistoryPage() {
     <div className="history-page space-y-5 animate-[fadeIn_280ms_ease] pb-8">
       <PageHeader
         title={pageTitle}
-        subtitle="Journal d’audit des actions du cabinet — comptes dashboard et Assistant IA."
+        subtitle="Journal d’audit des actions effectuées par l’équipe du cabinet."
         actions={(
           <Button variant="secondary" size="sm" onClick={() => load(true)} disabled={loading}>
             <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
@@ -377,10 +389,9 @@ export function HistoryPage() {
       />
 
       {/* Résumé */}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 print:hidden">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 print:hidden">
         <SummaryCard label="Actions aujourd’hui" value={statValue(data?.summary?.today?.total)} />
-        <SummaryCard label="Équipe" value={statValue(data?.summary?.today?.human)} />
-        <SummaryCard label="Assistant IA" value={statValue(data?.summary?.today?.ai)} tone="primary" />
+        <SummaryCard label="Sur la période" value={statValue(data?.summary?.period?.total)} tone="primary" />
         <SummaryCard label="Erreurs" value={statValue(data?.summary?.errors)} tone="danger" />
       </div>
 

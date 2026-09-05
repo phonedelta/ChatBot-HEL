@@ -2505,6 +2505,8 @@ function createSmartCrm(db, crmRepo = null) {
     cancelAppointmentCore: (appointmentId, opts = {}) => (
       appointmentConfirmation.cancelAppointmentFromConfirmation(appointmentId, opts)
     ),
+    getSendWhatsAppText: () => helpersSendRef.fn,
+    trackWhatsAppTurn,
   })
 
   const availabilityFlow = createAvailabilityFlow(db, {
@@ -2574,6 +2576,8 @@ function createSmartCrm(db, crmRepo = null) {
     handleInboundAvailability: (...args) => availabilityFlow.handleInboundAvailability(...args),
     getBookableSlotsForDate: (...args) => availabilityFlow.getBookableSlotsForDate(...args),
     cancelAppointment: (...args) => whatsappCancel.executeCancel(...args),
+    cancelAppointmentAndNotify: (...args) => whatsappCancel.executeCancelAndNotify(...args),
+    notifyPatientStaffCancellation: (...args) => whatsappCancel.notifyPatientOfStaffCancellation(...args),
     resolveConversationRouting: (chatKey) => {
       const lead = crmRepo?.getLead?.(chatKey) || null
       const availabilityState = availabilityFlow.getState?.(chatKey) || null

@@ -405,17 +405,22 @@ async function run() {
   const crm4 = createCrmService({ dbPath: tmp4 })
   crm4.smart.setAppointmentConfirmationSender(async ({ chatId }) => ({ messageId: 'x', chatId }))
   const shared = weekdayFuture(2, '12:00')
+  const slotA = weekdayFuture(8, '15:00')
+  let slotB = weekdayFuture(9, '15:30')
+  if (slotA.date === slotB.date && slotA.time === slotB.time) {
+    slotB = weekdayFuture(11, '10:00')
+  }
   const aA = seedAppointment(crm4, {
     name: 'Patient A',
     phone: '+212641111111',
     chat: '212641111111@c.us',
-    slot: weekdayFuture(8, '15:00'),
+    slot: slotA,
   })
   const aB = seedAppointment(crm4, {
     name: 'Patient B',
     phone: '+212642222222',
     chat: '212642222222@c.us',
-    slot: weekdayFuture(9, '15:00'),
+    slot: slotB,
   })
   await crm4.smart.createSlotProposal({
     customerId: aA.customerId,
@@ -462,7 +467,151 @@ async function run() {
     assert.ok(!/compatibles?/i.test(board.banner.message?.detail || ''))
   }
 
-  for (const p of [tmp, tmp2, tmp3, tmp4, tmpBug, tmpArabizi, tmpShared, tmpRestart]) {
+  // --- Direct move edge cases (Agenda free-slot → move) ---
+  const { getAuthenticatedActor } = require('../src/crm/smart/activity-actors')
+  const { isSlotFree } = require('../src/crm/appointment-slots')
+  const tmpMove = path.join(os.tmpdir(), `hel-slot-move-edges-${Date.now()}.sqlite`)
+  const crmMove = createCrmService({ dbPath: tmpMove })
+
+  function weekdayMonFri(daysAhead, time) {
+    for (let i = daysAhead; i < daysAhead + 14; i += 1) {
+      const d = new Date()
+      d.setDate(d.getDate() + i)
+      const day = d.getDay()
+      if (day === 0 || day === 6) continue
+      const yyyy = d.getFullYear()
+      const mm = String(d.getMonth() + 1).padStart(2, '0')
+      const dd = String(d.getDate()).padStart(2, '0')
+      return { date: `${yyyy}-${mm}-${dd}`, time }
+    }
+    throw new Error('no weekday Mon-Fri')
+  }
+
+  const moveFrom = weekdayMonFri(5, '14:00')
+  const moveTo = weekdayMonFri(5, '11:00')
+  assert.strictEqual(moveFrom.date, moveTo.date, 'test slots should share a weekday')
+  assert.notStrictEqual(moveFrom.time, moveTo.time)
+
+  const seeded = seedAppointment(crmMove, {
+    name: 'Salim Zouhairi',
+    phone: '+212655566677',
+    chat: '212655566677@c.us',
+    slot: moveFrom,
+    status: 'confirmed',
+  })
+  crmMove.db.prepare(`
+    UPDATE appointments SET appointment_type = 'Détartrage' WHERE id = ?
+  `).run(seeded.appointmentId)
+
+  const before = crmMove.db.prepare('SELECT * FROM appointments WHERE id = ?').get(seeded.appointmentId)
+  const adminActor = getAuthenticatedActor({
+    id: 42,
+    displayName: 'Admin',
+    role: 'admin',
+    username: 'admin',
+  })
+
+  // Same slot → no-op error
+  try {
+    crmMove.smart.moveAppointmentDirect({
+      appointmentId: seeded.appointmentId,
+      slotDate: moveFrom.date,
+      slotTime: moveFrom.time,
+      actor: adminActor,
+    })
+    assert.fail('same slot should fail')
+  } catch (error) {
+    assert.strictEqual(error.code, 'SAME_SLOT')
+  }
+
+  // Cancelled cannot move
+  const cancelledSlot = weekdayMonFri(9, '10:00')
+  const cancelled = seedAppointment(crmMove, {
+    name: 'Annule Test',
+    phone: '+212655500001',
+    chat: '212655500001@c.us',
+    slot: cancelledSlot,
+    status: 'cancelled',
+  })
+  try {
+    crmMove.smart.moveAppointmentDirect({
+      appointmentId: cancelled.appointmentId,
+      slotDate: moveTo.date,
+      slotTime: moveTo.time,
+      actor: adminActor,
+    })
+    assert.fail('cancelled should not move')
+  } catch (error) {
+    assert.strictEqual(error.code, 'INACTIVE')
+  }
+
+  // Successful move
+  const movedOk = crmMove.smart.moveAppointmentDirect({
+    appointmentId: seeded.appointmentId,
+    slotDate: moveTo.date,
+    slotTime: moveTo.time,
+    actor: adminActor,
+  })
+  assert.strictEqual(movedOk.appointment.appointment_date, moveTo.date)
+  assert.strictEqual(String(movedOk.appointment.appointment_time).slice(0, 5), moveTo.time)
+  assert.strictEqual(movedOk.appointment.customer_id, before.customer_id)
+  assert.strictEqual(movedOk.appointment.appointment_type, 'Détartrage')
+  assert.strictEqual(movedOk.appointment.status, 'non_confirme')
+  assert.strictEqual(movedOk.released_slot.slot_date, moveFrom.date)
+  assert.strictEqual(movedOk.released_slot.slot_time, moveFrom.time)
+
+  assert.ok(
+    isSlotFree(crmMove.db, moveFrom.date, moveFrom.time, { durationMinutes: 30 }),
+    'old slot must be free after move',
+  )
+  assert.ok(
+    !isSlotFree(crmMove.db, moveTo.date, moveTo.time, { durationMinutes: 30 }),
+    'new slot must be occupied after move',
+  )
+
+  // Slot taken conflict
+  const blockerSlot = weekdayMonFri(10, '15:30')
+  const blocker = seedAppointment(crmMove, {
+    name: 'Bloqueur',
+    phone: '+212655500002',
+    chat: '212655500002@c.us',
+    slot: blockerSlot,
+    status: 'confirmed',
+  })
+  try {
+    crmMove.smart.moveAppointmentDirect({
+      appointmentId: blocker.appointmentId,
+      slotDate: moveTo.date,
+      slotTime: moveTo.time,
+      actor: adminActor,
+    })
+    assert.fail('occupied slot should fail')
+  } catch (error) {
+    assert.strictEqual(error.code, 'SLOT_TAKEN')
+  }
+  const blockerAfter = crmMove.db.prepare('SELECT * FROM appointments WHERE id = ?').get(blocker.appointmentId)
+  assert.strictEqual(blockerAfter.appointment_date, blockerSlot.date)
+  assert.strictEqual(String(blockerAfter.appointment_time).slice(0, 5), blockerSlot.time)
+
+  // History mirrors dashboard actor
+  const hist = crmMove.smart.listActivityHistory({ days: 30, humansOnly: true })
+  const moveEv = hist.items.find((i) => (
+    Number(i.appointment_id) === Number(seeded.appointmentId)
+    && (i.event_type === 'appointment_rescheduled' || /déplacé/i.test(i.title || ''))
+  ))
+  assert.ok(moveEv, 'human history must include move')
+  assert.strictEqual(moveEv.actor?.type || moveEv.executedBy?.type, 'dashboard_user')
+  assert.ok(
+    moveEv.executedBy?.displayName === 'Admin'
+      || moveEv.actor?.displayName === 'Admin',
+    'actor must be Admin from session actor object',
+  )
+
+  // Search excludes cancelled
+  const searchHits = crmMove.smart.searchPatientsForSlot('Annule', { limit: 10 })
+  assert.ok(searchHits.every((h) => !h.active_appointment || h.active_appointment.status !== 'cancelled'))
+
+  for (const p of [tmp, tmp2, tmp3, tmp4, tmpBug, tmpArabizi, tmpShared, tmpRestart, tmpMove]) {
     try { fs.unlinkSync(p) } catch { /* ignore */ }
     try { fs.unlinkSync(`${p}-wal`) } catch { /* ignore */ }
     try { fs.unlinkSync(`${p}-shm`) } catch { /* ignore */ }
