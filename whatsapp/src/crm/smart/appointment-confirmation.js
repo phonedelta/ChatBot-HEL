@@ -889,16 +889,40 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
       conversation_id: conversationId,
       language,
     })
+    const appt = loadAppointmentBundle(appointmentId)
     if (addTimelineEvent) {
       try {
         addTimelineEvent({
-          customer_id: req?.customer_id || null,
+          customer_id: req?.customer_id || appt?.customer_id || null,
           appointment_id: appointmentId,
           conversation_id: conversationId,
           event_type: 'APPOINTMENT_CREATED',
           title: 'Rendez-vous créé',
           detail: 'Statut : À confirmer',
           actor_type: 'system',
+        })
+      } catch { /* optional */ }
+    }
+    // Dashboard bell — staff must see new WhatsApp bookings immediately
+    if (createNotification && appt) {
+      try {
+        const time = String(appt.appointment_time || '').slice(0, 5)
+        const dateLabel = formatDateDisplay(appt.appointment_date)
+        createNotification({
+          type: 'appointment_created',
+          title: 'Nouveau rendez-vous WhatsApp',
+          body: `${appt.full_name || 'Patient'} · ${dateLabel} ${time}`,
+          link_path: '/agenda',
+          appointment_id: Number(appointmentId),
+          slot_date: appt.appointment_date || null,
+          slot_time: time || null,
+          unique_key: `appointment_created:wa:${Number(appointmentId)}`,
+          source_event: 'whatsapp_booking',
+          metadata: {
+            customer_id: appt.customer_id || null,
+            origin: 'whatsapp',
+            status: appt.status || 'non_confirme',
+          },
         })
       } catch { /* optional */ }
     }

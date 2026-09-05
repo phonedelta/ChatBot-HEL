@@ -40,6 +40,14 @@ async function run() {
   })
   assert.strictEqual(n, null)
 
+  assert.strictEqual(crm.smart.getNotificationsSettings().appointmentCreated, true)
+  crm.smart.updateNotificationsSettings({ appointmentCreated: false })
+  assert.strictEqual(crm.smart.getNotificationsSettings().appointmentCreated, false)
+  assert.strictEqual(
+    crm.smart.createNotification({ type: 'appointment_created', title: 'Nouveau RDV' }),
+    null,
+  )
+
   crm.smart.updateAutomationsSettings({ masterEnabled: false })
   assert.strictEqual(crm.smart.getAutomationsSettings().masterEnabled, false)
 

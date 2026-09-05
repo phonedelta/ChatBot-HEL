@@ -27,6 +27,8 @@ export const NOTIFICATION_TYPE_SETTINGS_KEY: Partial<
   handoff_to_human: 'handoff',
   handoff: 'handoff',
   conversation_handoff: 'handoff',
+  appointment_created: 'appointmentCreated',
+  new_appointment: 'appointmentCreated',
   appointment_cancelled: 'appointmentCancelled',
   confirmation_call: 'appointmentUnconfirmed',
   confirmation_sent: 'appointmentUnconfirmed',

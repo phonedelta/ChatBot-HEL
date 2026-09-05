@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   BellRing,
+  CalendarPlus,
   CalendarX,
   MessageCircle,
   PlugZap,
@@ -45,6 +46,12 @@ const NOTIFICATION_ITEMS: {
     icon: UserX,
     title: 'Patient sans réponse',
     description: 'Notifier après les relances prévues sans réponse.',
+  },
+  {
+    key: 'appointmentCreated',
+    icon: CalendarPlus,
+    title: 'Nouveau rendez-vous WhatsApp',
+    description: 'Notifier lorsqu’un patient réserve un rendez-vous via WhatsApp.',
   },
   {
     key: 'appointmentCancelled',

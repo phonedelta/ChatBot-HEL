@@ -46,6 +46,7 @@ export type NotificationsSettings = {
   soundEnabled: boolean
   newPatientMessage: boolean
   patientNoResponse: boolean
+  appointmentCreated: boolean
   appointmentCancelled: boolean
   appointmentUnconfirmed: boolean
   slotReleased: boolean

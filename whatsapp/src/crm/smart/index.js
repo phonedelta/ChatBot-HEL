@@ -1913,6 +1913,8 @@ function createSmartCrm(db, crmRepo = null) {
   }
 
   const USER_BELL_TYPE_LABELS = {
+    appointment_created: 'Nouveau rendez-vous',
+    new_appointment: 'Nouveau rendez-vous',
     slot_released: 'Créneau disponible',
     slot_available_after_cancellation: 'Créneau disponible',
     confirmation_sent: 'Confirmation envoyée',
