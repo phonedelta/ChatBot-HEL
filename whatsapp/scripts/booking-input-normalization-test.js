@@ -19,6 +19,7 @@ const {
   detectCorrectionIntent,
   detectInlineNameCorrection,
 } = require('../src/crm/booking-corrections')
+const { extractCustomerSignals } = require('../src/crm/extract')
 const {
   unclearSummaryClarifyMessage,
   askFullNameAfterPartialCorrection,
@@ -39,6 +40,25 @@ function assertTime(input, expected) {
 
 async function run() {
   let passed = 0
+
+  // --- Bulk Darija latin: exact production message ---
+  const bulkMsg = 'Ok bghit ndir ta9wim f nhar 07/09 11:30 smiti Salim Zouhairi w sakn f Casa nemra dial tele : 0602269407'
+  const bulkSig = extractCustomerSignals(bulkMsg, { now: new Date('2026-09-05T10:00:00') })
+  assert.strictEqual(bulkSig.full_name, 'Salim Zouhairi', 'bulk name')
+  assert.strictEqual(bulkSig.city, 'Casablanca', 'bulk city sakn f Casa')
+  assert.ok(bulkSig.phone_number && /602269407/.test(bulkSig.phone_number), 'bulk phone')
+  assert.strictEqual(bulkSig.problem, 'Orthodontie', 'bulk ta9wim → Orthodontie')
+  assert.strictEqual(bulkSig.appointment_date, '2026-09-07', 'bulk date 07/09')
+  assert.strictEqual(bulkSig.appointment_time, '11:30', 'bulk time')
+  assert.strictEqual(detectCorrectionIntent(bulkMsg).isCorrection, false, 'bulk must not be correction')
+  passed += 7
+
+  assert.strictEqual(extractCustomerSignals('sakn f Casa').city, 'Casablanca')
+  assert.strictEqual(extractCustomerSignals('smiti Salim Zouhairi').full_name, 'Salim Zouhairi')
+  assert.ok(/602269407/.test(extractCustomerSignals('nemra dial tele : 0602269407').phone_number || ''))
+  assert.strictEqual(extractCustomerSignals('bghit ndir ta9wim').problem, 'Orthodontie')
+  assert.strictEqual(extractCustomerSignals('Ta9wim').problem, 'Orthodontie')
+  passed += 5
 
   // --- Time normalizer ---
   for (const [raw, expected] of [
@@ -284,6 +304,56 @@ async function run() {
   })
   assert.ok(/تلغي|annul/i.test(turn.forceReply || ''), turn.forceReply)
   assert.strictEqual(turn.lead.awaiting_field, 'draft_cancel_confirm')
+  passed += 2
+
+  // --- Exact production bulk message through workflow ---
+  const chatBulk = '212677700903@c.us'
+  const convBulk = `main:${chatBulk}`
+  turn = await crm.processCrmTurn({
+    conversationId: convBulk,
+    chatId: chatBulk,
+    userText: 'Bghit rendez vous',
+    languageHint: 'darija',
+  })
+  turn = await crm.processCrmTurn({
+    conversationId: convBulk,
+    chatId: chatBulk,
+    userText: bulkMsg,
+    languageHint: 'darija',
+  })
+  assert.strictEqual(turn.lead.full_name, 'Salim Zouhairi', turn.lead.full_name)
+  assert.strictEqual(turn.lead.city, 'Casablanca', turn.lead.city)
+  assert.ok(turn.lead.phone_number && /602269407/.test(turn.lead.phone_number))
+  assert.strictEqual(turn.lead.problem, 'Orthodontie')
+  assert.strictEqual(turn.lead.appointment_date, '2026-09-07')
+  assert.strictEqual(turn.lead.appointment_time, '11:30')
+  assert.ok(
+    turn.lead.stage === 'confirmation' || turn.lead.awaiting_field === 'slot_alternative',
+    `expected confirmation or alternatives, got stage=${turn.lead.stage} awaiting=${turn.lead.awaiting_field}`,
+  )
+  const bulkReply = (turn.replies || [turn.forceReply]).filter(Boolean).join(' ')
+  assert.ok(!/باقي خاصني|il me manque|still need/i.test(bulkReply), 'must not re-ask missing fields')
+  assert.ok(/ملخص|récapitulatif|Résumé|واش هاد المعلومات|ces informations/i.test(bulkReply), bulkReply.slice(0, 200))
+  passed += 8
+
+  // Ta9wim alone while collecting must set Orthodontie (not services catalogue)
+  const chatTa9 = '212677700904@c.us'
+  turn = await crm.processCrmTurn({
+    conversationId: `main:${chatTa9}`,
+    chatId: chatTa9,
+    userText: 'je veux un rendez-vous',
+    languageHint: 'fr',
+  })
+  turn = await crm.processCrmTurn({
+    conversationId: `main:${chatTa9}`,
+    chatId: chatTa9,
+    userText: 'Ta9wim',
+    languageHint: 'darija',
+  })
+  assert.strictEqual(turn.lead.problem, 'Orthodontie')
+  assert.ok(!/services disponibles|الخدمات المتوفرة/i.test(
+    (turn.replies || [turn.forceReply]).join(' '),
+  ))
   passed += 2
 
   try { fs.unlinkSync(dbPath) } catch { /* */ }

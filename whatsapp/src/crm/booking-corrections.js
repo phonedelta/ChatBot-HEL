@@ -8,7 +8,7 @@ const { stripPersonNameLabels } = require('./name-validator')
 const { toE164, isValidPhone } = require('./phone')
 const { resolveMoroccanCity } = require('./morocco-cities')
 const { resolveService } = require('./services')
-const { extractAppointment, resolveMotifPair } = require('./extract')
+const { extractAppointment, resolveMotifPair, extractCustomerSignals } = require('./extract')
 
 function normalizeText(value) {
   return String(value || '')
@@ -16,6 +16,41 @@ function normalizeText(value) {
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .trim()
+}
+
+function countFilledBookingFields(signals) {
+  let n = 0
+  if (signals?.full_name) n += 1
+  if (signals?.phone_number) n += 1
+  if (signals?.city) n += 1
+  if (signals?.problem) n += 1
+  if (signals?.appointment_date || signals?.appointment_time) n += 1
+  return n
+}
+
+/**
+ * Multi-field booking payload (one message with several CRM fields).
+ * Must NOT be treated as a targeted correction — that would drop unlisted fields.
+ */
+function looksLikeBulkBookingPayload(text, options = {}) {
+  const raw = String(text || '').trim()
+  if (!raw) return false
+  // Explicit correction verbs → keep correction path
+  if (/\b(?:changer|corriger|modifier|bdel|nbdl|nbadel|finalement|plutot|plutôt)\b/i.test(raw)) {
+    return false
+  }
+  if (/\b(?:machi|ماشي)\b/i.test(raw) && /\b(?:bghit|probl|motif|ville|nom|tel|num)/i.test(raw)) {
+    return false
+  }
+  try {
+    const signals = extractCustomerSignals(raw, {
+      now: options.now || new Date(),
+      conservative: false,
+    })
+    return countFilledBookingFields(signals) >= 3
+  } catch {
+    return false
+  }
 }
 
 function clipTrailingJunk(value) {
@@ -333,6 +368,15 @@ function detectCorrectionIntent(text, options = {}) {
   }
 
   const isCorrection = changedFields.length > 0
+  // Bulk booking forms (name+phone+date+…) must go through extract/merge, not correction patch.
+  if (isCorrection && looksLikeBulkBookingPayload(raw, options)) {
+    return {
+      isCorrection: false,
+      fields: {},
+      cleared: {},
+      changedFields: [],
+    }
+  }
   const result = {
     isCorrection,
     fields,
@@ -517,6 +561,7 @@ module.exports = {
   buildCorrectionPatch,
   detectInlineNameCorrection,
   detectGeneralCorrectionRequest,
+  looksLikeBulkBookingPayload,
   extractContrastCity,
   parseNameValue,
   parsePhoneValue,

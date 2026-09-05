@@ -1523,7 +1523,41 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
 
     if (!isConfirmReply && inBooking) {
       const correction = detectCorrectionIntent(userText, { now: new Date(), draft: lead })
-      if (process.env.CRM_DEBUG_BOOKING === '1' && correction.isCorrection) {
+      const signalFieldCount = [
+        signals.full_name,
+        signals.phone_number,
+        signals.city,
+        signals.problem,
+        signals.appointment_date || signals.appointment_time,
+      ].filter(Boolean).length
+      const correctionFieldCount = Array.isArray(correction.changedFields)
+        ? correction.changedFields.length
+        : 0
+      // Prefer bulk extract/merge when the message carries more CRM fields than the
+      // correction detector captured (avoids dropping name/city/motif).
+      const preferBulkOverCorrection = correction.isCorrection
+        && (lead.awaiting_field === 'bulk' || lead.stage === 'awaiting_form' || lead.stage === 'crm_collection')
+        && signalFieldCount >= 3
+        && signalFieldCount > correctionFieldCount
+
+      if (process.env.CRM_DEBUG_BOOKING === '1') {
+        console.log('[booking-bulk-extract]', {
+          input: String(userText || '').slice(0, 180),
+          extracted: {
+            fullName: signals.full_name || null,
+            city: signals.city || null,
+            phone: signals.phone_number || null,
+            reason: signals.problem || null,
+            date: signals.appointment_date || null,
+            time: signals.appointment_time || null,
+          },
+          correction: correction.isCorrection
+            ? { fields: correction.changedFields, preferBulkOverCorrection }
+            : false,
+        })
+      }
+
+      if (process.env.CRM_DEBUG_BOOKING === '1' && correction.isCorrection && !preferBulkOverCorrection) {
         console.log('[booking-correction]', {
           state: lead.stage,
           awaitingField: lead.awaiting_field,
@@ -1532,7 +1566,7 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
           invalidPhone: Boolean(correction.invalidPhone),
         })
       }
-      if (correction.invalidPhone && !correction.fields?.phone_number) {
+      if (correction.invalidPhone && !correction.fields?.phone_number && !preferBulkOverCorrection) {
         repo.logConversation({
           conversation_id: conversationId,
           whatsapp_chat_id: input.chatId || null,
@@ -1543,7 +1577,7 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
         })
         return finalizeTurn(lead, fieldCorrectionRetry('phone_number', lang), true, null, signals)
       }
-      if (correction.isCorrection) {
+      if (correction.isCorrection && !preferBulkOverCorrection) {
         const beforeLead = { ...lead }
         const patch = buildCorrectionPatch(correction)
         if (language) patch.language = language

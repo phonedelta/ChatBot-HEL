@@ -348,7 +348,7 @@ function patientStatesOwnCity(text) {
   if (extractLabeledValue(raw, LABEL_CITY)) return true
   const n = normalizeText(raw)
   if (/\b(je (suis|habite|vis|viens)|j habite|jhabite|ma ville)\b/.test(n)) return true
-  if (/\b(ana (men|mn|min|f|fi|kayn|kayna|saken|sakna|kan3ich|3ayech)|saken|sakna|kanskn|mdinti|ville dyali)\b/.test(n)) {
+  if (/\b(ana (men|mn|min|f|fi|kayn|kayna|saken|sakna|sakn|sakena|kan3ich|3ayech)|saken|sakna|sakn|sakena|kanskn|mdinti|ville dyali)\b/.test(n)) {
     return true
   }
   if (/أنا\s*(من|ف|في|ساكن|ساكنة)|كانسكن|ساكن|كنعيش|مدينتي/.test(raw)) return true
@@ -413,9 +413,10 @@ function extractPersonalCity(text) {
 
   const patterns = [
     /(?:ana\s+(?:kayn|kayna)\s+(?:f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
-    /(?:ana\s+(?:saken|sakna|kan3ich|3ayech)\s+(?:f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /(?:ana\s+(?:saken|sakna|sakn|sakena|kan3ich|3ayech)\s+(?:f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
     /(?:ana\s+(?:men|mn|min|f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
-    /(?:(?:saken|sakna|kanskn|kan3ich)\s+(?:f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /(?:(?:saken|sakna|sakn|sakena|kanskn|kan3ich)\s+(?:f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
+    /(?:(?:saken|sakna|sakn|sakena)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
     /(?:(?:howa|howwa|hiya|hta\s+howa)\s+(?:mn|men|min|f|fi)\s+)([\p{L}][\p{L}\s'-]{1,40})/iu,
     /(?:\b(?:mn|men|min)\s+)([\p{L}][\p{L}']{2,40})(?=\s|$)/iu,
     /(?:mdinti|ville\s+dyali)\s*[:\s]+([\p{L}][\p{L}\s'-]{1,40})/iu,
@@ -443,7 +444,7 @@ function clipNameCandidate(value) {
   let s = String(value || '').trim()
   if (!s) return ''
   const stop = s.search(
-    /\s+(?:3ando|3ndi|3andha|3endi|3endo|bghit|bgha|baghi|bagha|baghya|ydir|ndir|ndiro|kaydir|tabyid|tabyit|tbyid|blanch|appareil|apareil|kayn|mochkil|mochkel|darssa|darsa|derssa|drssa|rendez|rdv|w\s+khass|hta|howwa|howa\s+mn|و|موعد|عندو|عنده|عندها|ando|khassha|t7ayd|بغا|باغي|بغيت|يدير)\b/i,
+    /\s+(?:3ando|3ndi|3andha|3endi|3endo|bghit|bgha|baghi|bagha|baghya|ydir|ndir|ndiro|kaydir|tabyid|tabyit|tbyid|blanch|appareil|apareil|kayn|mochkil|mochkel|darssa|darsa|derssa|drssa|rendez|rdv|w\s+khass|hta|howwa|howa\s+mn|w\s+sakn|w\s+saken|w\s+sakna|sakn\s+f|saken\s+f|nemra|nimra|numero|tel(?:ephone)?|tele|nhar|sa3a|lwa9t|و|موعد|عندو|عنده|عندها|ando|khassha|t7ayd|بغا|باغي|بغيت|يدير)\b/i,
   )
   if (stop > 0) s = s.slice(0, stop)
   s = s.replace(/[,:;.\-–—]+$/g, '').trim()
