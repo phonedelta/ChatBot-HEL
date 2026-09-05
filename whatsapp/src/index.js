@@ -1,4 +1,15 @@
-require('dotenv').config({ override: true })
+require('dotenv').config({
+  // On Railway/Docker, never let a stray .env override platform/Dockerfile ENV
+  // (e.g. Windows Chrome path overriding /usr/bin/chromium).
+  override: !(
+    process.env.RAILWAY_ENVIRONMENT
+    || process.env.RAILWAY_SERVICE_ID
+    || process.env.RAILWAY_PROJECT_ID
+    || process.env.FLY_APP_NAME
+    || process.env.RENDER
+    || process.env.NODE_ENV === 'production'
+  ),
+})
 
 const express = require('express')
 const axios = require('axios')
@@ -37,6 +48,7 @@ const { openCrmDatabase } = require('./crm/db')
 const { getAuthenticatedActor } = require('./crm/smart/activity-actors')
 const { formatKnowledgeItemsForPrompt } = require('./crm/smart/knowledge-prompt')
 const { formatPublicServicesKnowledge } = require('./crm/services')
+const { resolvePuppeteerExecutablePath } = require('./puppeteer-executable')
 const {
   classifyJid,
   sanitizeAccountPhone,
@@ -3694,57 +3706,6 @@ async function waitForInstanceReady(record, waitMs = Math.max(instancePingTimeou
   const error = new Error(`Instance is not ready (${record?.state || 'missing'})`)
   error.code = 'INSTANCE_NOT_READY'
   throw error
-}
-
-function resolvePuppeteerExecutablePath() {
-  const configuredPath = String(
-    process.env.PUPPETEER_EXECUTABLE_PATH
-    || process.env.CHROME_BIN
-    || '',
-  ).trim()
-  if (configuredPath) {
-    const resolvedConfiguredPath = path.isAbsolute(configuredPath)
-      ? configuredPath
-      : path.resolve(configuredPath)
-
-    if (fs.existsSync(resolvedConfiguredPath)) {
-      return resolvedConfiguredPath
-    }
-
-    console.warn('[iadis-wa] configured PUPPETEER_EXECUTABLE_PATH was not found, trying local browser fallbacks', {
-      configured_path: resolvedConfiguredPath,
-    })
-  }
-
-  if (process.platform === 'win32') {
-    const candidates = [
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    ]
-
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        return candidate
-      }
-    }
-  } else {
-    const candidates = [
-      '/usr/bin/chromium',
-      '/usr/bin/chromium-browser',
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable',
-    ]
-
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        return candidate
-      }
-    }
-  }
-
-  return ''
 }
 
 function buildClient(instanceId) {

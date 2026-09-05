@@ -79,6 +79,7 @@
     "test:staff-cancel-whatsapp-notify": "node scripts/staff-cancel-whatsapp-notify-test.js",
     "test:staff-confirm-whatsapp-notify": "node scripts/staff-confirm-whatsapp-notify-test.js",
     "test:whatsapp-booking-notification": "node scripts/whatsapp-booking-notification-test.js",
+    "test:puppeteer-executable": "node scripts/puppeteer-executable-test.js",
     "test:whatsapp-cancel-single-appointment": "node scripts/whatsapp-cancel-test.js",
     "test:whatsapp-cancel-multiple-appointments": "node scripts/whatsapp-cancel-test.js",
     "test:whatsapp-cancel-multiple-patients": "node scripts/whatsapp-cancel-test.js",
