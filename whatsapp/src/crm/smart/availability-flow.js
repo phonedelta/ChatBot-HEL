@@ -50,9 +50,13 @@ const AVAILABILITY_PHRASES = [
   /créneaux?\s+disponibles?/i,
   /rendez[- ]?vous\s+disponibles?/i,
   /wash\s+.+\s+disponible/i,
+  /3tini\s+(l\s+)?(mawa3id|maw3id|creneaux?|créneaux?).{0,40}(motaha|moutaha|dispo|disponible|khawya)/i,
+  /mawa3id\s+li\s+(motaha|moutaha|dispo|disponible)/i,
+  /ach\s+men\s+sa3a\s+khawya/i,
   /واش\s+.+\s+متوفر/i,
   /واش\s+كاين\s+شي\s+(موعد|بلاصة)/i,
-  /المواعيد\s+المتوفرة/i,
+  /المواعيد\s+(المتوفرة|المتاحة)/i,
+  /الأوقات\s+المتاحة/i,
   /شنو\s+كاين\s+من\s+موعد/i,
   /شنو\s+(المواعيد|الكريو|الكريوهات)\s+(المتوفرة|لي\s+كاينين)/i,
   /disponibilites?\s*\?/i,
@@ -72,7 +76,13 @@ function stripInstance(chatKey) {
 }
 
 function looksLikeMyAppointments(text) {
-  return MY_APPOINTMENTS_RE.test(String(text || ''))
+  const raw = String(text || '')
+  // "nom dyali adam" is a name correction, not "mes rendez-vous"
+  if (/\b(nom\s+dyali|smiti|smyti|smiya|je\s+m['’]appelle)\b/i.test(raw)
+    && !/\b(rdv|rendez|موعد|maw3id|mawa3id)\b/i.test(raw)) {
+    return false
+  }
+  return MY_APPOINTMENTS_RE.test(raw)
 }
 
 function detectAvailabilityIntent(text) {
@@ -85,9 +95,9 @@ function detectAvailabilityIntent(text) {
     if (re.test(raw)) return { matched: true, confidence: 0.94, matchedBy: String(re) }
   }
   const n = raw.toLowerCase()
-  const hasDispo = /\b(disponible|disponibles|disponibilite|disponibilité|dispo|متوفر|متوفرة)\b/i.test(raw)
-  const hasSlotWord = /\b(rendez[- ]?vous|rdv|creneau|créneau|creneaux|créneaux|horaire|horaires|موعد|مواعيد|ساعة|سوايع)\b/i.test(raw)
-  const hasAsk = /\b(chno|wach|wash|quels?|quelles?|bghit\s+nchof|voir|شحال|شنو|واش)\b/i.test(n)
+  const hasDispo = /\b(disponible|disponibles|disponibilite|disponibilité|dispo|متوفر|متوفرة|motaha|moutaha|mawjoda|mawjuda|khawya|khawi)\b/i.test(raw)
+  const hasSlotWord = /\b(rendez[- ]?vous|rdv|creneau|créneau|creneaux|créneaux|horaire|horaires|موعد|مواعيد|mawa3id|maw3id|ساعة|سوايع)\b/i.test(raw)
+  const hasAsk = /\b(chno|wach|wash|quels?|quelles?|bghit\s+nchof|voir|3tini|atini|شحال|شنو|واش|عطيني)\b/i.test(n)
   const hasPlace = /\b(blassa|بلاصة|créneau|creneau)\b/i.test(raw)
   const hasRelativeDay = /\b(ghdda|ghedda|gheda|lyoum|lyom|demain|aujourd|سبت|sebt)\b/i.test(n)
   if (hasDispo && (hasSlotWord || hasAsk)) {

@@ -76,7 +76,8 @@ function serializeCorrectionState(state) {
 }
 
 /**
- * Strict YES for final booking create — excludes ok / wakha / mzyan / d'accord alone.
+ * Strict YES for final booking create — excludes bare ok / wakha / mzyan alone.
+ * Compound Darija affirmations like "na3am kolchi shih" are accepted.
  */
 function isStrictBookingConfirmYes(text) {
   const raw = String(text || '').trim()
@@ -89,8 +90,18 @@ function isStrictBookingConfirmYes(text) {
   if (/^je\s+confirme(\s+(le\s+)?(rendez|rdv|demande))?$/i.test(n)) return true
   if (/^(نعم+|ايه|أيوه|ايوه)$/u.test(n)) return true
   if (/^(ايوا|أيوا|إيوا)\s*(نعم)?$/u.test(n)) return true
+  if (/^(na3am|naam)$/i.test(n)) return true
   if (/نأكد|ناكد|confirmi/i.test(n) && !/لا|non|ما\s/.test(n)) return true
   if (/^(آه|اه)\s*(نأكد|ناكد|نعم)?$/u.test(n)) return true
+  // Explicit "everything is correct" affirmations (Darija / FR / AR)
+  if (/^(?:(?:na3am|naam|oui|yes|wakha|waha|اه|آه|نعم)\s+)?(?:kolchi|kol\s*chi|tout)\s+(?:shih|s7i7|s7ih|sahih|mzyan|mzian|correct|bon|صحيح|مزيان)$/i.test(n)) {
+    return true
+  }
+  if (/^(?:oui|yes)\s+(?:tout\s+(?:est\s+)?(?:correct|bon)|cest\s+bon|c['’]est\s+bon)$/i.test(n)) {
+    return true
+  }
+  if (/^(?:كلشي|كل\s*شي)\s+(?:صحيح|مزيان)$/u.test(n)) return true
+  if (/^(?:نعم|اه|آه)\s+(?:كلشي|كل\s*شي)\s+(?:صحيح|مزيان)$/u.test(n)) return true
   return false
 }
 

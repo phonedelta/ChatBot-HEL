@@ -32,11 +32,33 @@ function countFilledBookingFields(signals) {
  * Multi-field booking payload (one message with several CRM fields).
  * Must NOT be treated as a targeted correction — that would drop unlisted fields.
  */
+const CORRECTION_VERB = String.raw`(?:changer|corriger|modifier|bdel|bdal|bdell|bddl|bdl|nbdl|nbdel|nbadel|nbddl|ghyr|ghayer|ns7e7|nsa7a7|nsahah)`
+
+function looksLikeAvailabilityAsk(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return false
+  if (/\b(?:motaha|moutaha|mawjoda|mawjuda|mawjoudin|khawya|khawi)\b/i.test(raw)
+    && /\b(?:mawa3id|maw3id|ma3id|rdv|rendez|creneau|créneau|sa3a|horaire)\b/i.test(raw)) {
+    return true
+  }
+  if (/\b(?:3tini|atini|sift)\b.+\b(?:mawa3id|maw3id|creneau|créneau|motaha|dispo|disponible)/i.test(raw)) {
+    return true
+  }
+  if (/\b(?:creneaux?|créneaux?|horaires?|mawa3id)\s+(?:disponibles?|libres?|khawyin?)\b/i.test(raw)) {
+    return true
+  }
+  if (/المواعيد\s+(?:المتاحة|المتوفرة)/u.test(raw) || /الأوقات\s+المتاحة/u.test(raw)) {
+    return true
+  }
+  return false
+}
+
 function looksLikeBulkBookingPayload(text, options = {}) {
   const raw = String(text || '').trim()
   if (!raw) return false
   // Explicit correction verbs → keep correction path
-  if (/\b(?:changer|corriger|modifier|bdel|nbdl|nbadel|finalement|plutot|plutôt)\b/i.test(raw)) {
+  if (new RegExp(String.raw`\b${CORRECTION_VERB}\b`, 'i').test(raw)
+    || /\b(?:finalement|plutot|plutôt)\b/i.test(raw)) {
     return false
   }
   if (/\b(?:machi|ماشي)\b/i.test(raw) && /\b(?:bghit|probl|motif|ville|nom|tel|num)/i.test(raw)) {
@@ -65,8 +87,12 @@ function clipTrailingJunk(value) {
 function parseNameValue(rawValue) {
   let candidate = stripPersonNameLabels(clipTrailingJunk(rawValue))
   candidate = candidate
+    .replace(/^(?:ana\s+)?(?:smiti|smyti|smiyti|smiya|ismi)\s+/i, '')
+    .replace(/^(?:nom\s+dyali|lism\s+dyali|smya\s+dyali)\s+/i, '')
     .replace(/^(?:est|c['’]est|howa|hiya|howwa|kayn|cest)\s+/i, '')
     .replace(/^(?:l['’]|le|la|el)\s+/i, '')
+    .replace(/\b(?:ana|smiti|smyti|smiyti|smiya|ismi)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
     .trim()
   candidate = stripPersonNameLabels(candidate)
   // Arabic: "لياسين" → "ياسين" after بدل الاسم ل…
@@ -173,11 +199,18 @@ function detectCorrectionIntent(text, options = {}) {
   // --- Name corrections with value ---
   // Captures stop at end-of-line so a bulk booking form is NOT treated as a correction.
   const namePatterns = [
-    /(?:changer|corriger|modifier|bdel|bdl|nbdl)\s+(?:le\s+)?(?:nom(?:\s+complet)?|smiya|smiyto|smito|smiti|smyti|smiyti|اسم(?:\s+الكامل)?)\s*(?:l|li|en|à|a|ل)?\s*[:\-–]?\s*([^\n\r]+)/iu,
+    new RegExp(
+      String.raw`${CORRECTION_VERB}\s+(?:le\s+)?(?:nom(?:\s+complet)?|smiya|smiyto|smito|smiti|smyti|smiyti|اسم(?:\s+الكامل)?)\s*(?:ana\s+)?(?:smiti|smyti|smiyti|ismi)?\s*(?:(?:l|li|en|à|a|ل)\s+|[:\-–]\s*)?([^\n\r]+)`,
+      'iu',
+    ),
     /(?:changer|corriger)\s+smiya\s*[:\-–]?\s*([^\n\r]+)/iu,
-    /(?:bdel|bdl|nbdl)\s+smiya\s+(?:l|li|ل)?\s*([^\n\r]+)/iu,
+    new RegExp(
+      String.raw`${CORRECTION_VERB}\s+smiya\s+(?:ana\s+)?(?:smiti|smyti|smiyti|ismi)?\s*(?:(?:l|li|ل)\s+)?([^\n\r]+)`,
+      'iu',
+    ),
     /(?:la\s+)?smiya\s+(?:hiya|howa|kamla|correcte?|s7i7a)?\s*[:\-–]?\s*([^\n\r]+)/iu,
     /(?:^|\n)\s*(?:smiya|smiyto|smito|smitha|smita|smiti|smyti|smiyti|lism)\s+(?:dialo|dyalo|dialha|dyalha|dyali|howa|hiya)?\s*[:\-–]?\s*([^\n\r]+)/iu,
+    /(?:^|\n)\s*(?:nom|lism|smya)\s+dyali\s*[:\-–]?\s*([^\n\r]+)/iu,
     /(?:^|\n)\s*(?:je\s+m['’]appelle|ana\s+(?:smiti|smyti|smiya)?|ismi)\s+([^\n\r]+)/iu,
     /(?:^|\n)\s*(?:mon\s+)?nom(?:\s+complet)?\s+(?:est|c['’]est)\s+([^\n\r]+)/iu,
     /(?:^|\n)\s*(?:mon\s+)?nom(?:\s+complet)?\s*[:\-–]\s*([^\n\r]+)/iu,
@@ -189,12 +222,13 @@ function detectCorrectionIntent(text, options = {}) {
     /بدل\s+الاسم\s*(?:ل|الى|إلى)?\s*([^\n\r]+)/u,
   ]
 
+  let incompleteNameCandidate = null
   for (const pattern of namePatterns) {
     const match = raw.match(pattern)
     if (!match?.[1]) continue
     // Ignore labeled form lines that are part of a multi-field booking payload
     if (/\n/.test(raw) && /(?:t[ée]l|ville|probl[eè]me|rendez|موعد|مدينة)/i.test(raw)) {
-      const onlyNameLine = /^(?:smyti|smiti|smiya|je\s+m['’]appelle|mon\s+nom|اسمي|سميتي)/i.test(raw.trim())
+      const onlyNameLine = /^(?:smyti|smiti|smiya|nom\s+dyali|je\s+m['’]appelle|mon\s+nom|اسمي|سميتي)/i.test(raw.trim())
       if (!onlyNameLine && /^(?:nom|name)\s*[:\-–]/im.test(match[0])) {
         continue
       }
@@ -203,7 +237,17 @@ function detectCorrectionIntent(text, options = {}) {
     if (name) {
       fields.full_name = name
       mark('full_name')
+      incompleteNameCandidate = null
       break
+    }
+    const stripped = stripPersonNameLabels(clipTrailingJunk(match[1]))
+      .replace(/^(?:ana\s+)?(?:smiti|smyti|smiyti|smiya|ismi)\s+/i, '')
+      .replace(/\b(?:ana|smiti|smyti|smiyti|smiya)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    const parts = stripped.split(/\s+/).filter(Boolean)
+    if (parts.length === 1 && parts[0].length >= 2) {
+      incompleteNameCandidate = parts[0]
     }
   }
   // Explicit replacement wins over a bare "nom est faux"
@@ -213,7 +257,10 @@ function detectCorrectionIntent(text, options = {}) {
 
   // --- Phone ---
   const phonePatterns = [
-    /(?:changer|corriger|modifier|bdel|bdl|nbdl)\s+(?:le\s+)?(?:num[eé]ro|n[°o]|telephone|tel[eé]phone|tel|tele|phone|رقم(?:\s+الهاتف)?)\s*(?:l|li|en|à|a|ل)?\s*[:\-–]?\s*(.+)$/iu,
+    new RegExp(
+      String.raw`${CORRECTION_VERB}\s+(?:le\s+)?(?:num[eé]ro|n[°o]|telephone|tel[eé]phone|tel|tele|phone|رقم(?:\s+الهاتف)?)\s*(?:l|li|en|à|a|ل)?\s*[:\-–]?\s*(.+)`,
+      'iu',
+    ),
     /(?:le\s+)?bon\s+(?:num[eé]ro|telephone|tel)\s+(?:est|c['’]est)\s*(.+)$/iu,
     /(?:mon\s+)?(?:num[eé]ro|telephone|tel[eé]phone|tel|tele|phone)\s+(?:dyali|diali|howa|correcte?|est|c['’]est|plutot|plutôt)?\s*[:\-–]?\s*(.+)$/iu,
     /(?:r9m|nmr|num)\s+(?:dyali|telephone|tel)?\s*[:\-–]?\s*(.+)$/iu,
@@ -257,7 +304,10 @@ function detectCorrectionIntent(text, options = {}) {
 
   // --- City ---
   const cityPatterns = [
-    /(?:changer|corriger|modifier|bdel|bdl|nbdl)\s+(?:la\s+)?(?:ville|city|mdina|lmdina|mdinti|مدينة|المدينة)\s*(?:l|li|en|à|a|ل)?\s*[:\-–]?\s*(.+)$/iu,
+    new RegExp(
+      String.raw`${CORRECTION_VERB}\s+(?:la\s+)?(?:ville|city|mdina|lmdina|mdinti|مدينة|المدينة)\s*(?:l|li|en|à|a|ل)?\s*[:\-–]?\s*(.+)`,
+      'iu',
+    ),
     /(?:la\s+)?(?:ville|city)\s+(?:c['’]est|est|hiya|howa|correcte?|s7i7a|bonne)?\s*[:\-–]?\s*(.+)$/iu,
     /(?:ma\s+)?(?:ville|city)\s+(?:est|c['’]est)\s+(.+)$/iu,
     /(?:^|\n)\s*(?:ville|city)\s*[:\-–]?\s*(.+)$/iu,
@@ -294,7 +344,7 @@ function detectCorrectionIntent(text, options = {}) {
   const motifCorrection = (
     /\b(?:la\s+)?machi\b.+\b(?:bghit|3andi|probl[eè]me|mochkil|motif)\b/i.test(raw)
     || /\b(?:le\s+)?(?:probl[eè]me|motif|mouchkil|lmochkil|sbab)\s+(?:c['’]?est|huwa|howa|s7i7)\b/i.test(raw)
-    || /\b(?:changer|corriger|modifier|bdel|nbdl)\s+(?:le\s+)?(?:probl[eè]me|motif|service|lmochkil|mouchkil)\b/i.test(n)
+    || new RegExp(String.raw`${CORRECTION_VERB}\s+(?:le\s+)?(?:probl[eè]me|motif|service|lmochkil|mouchkil)`, 'i').test(n)
     || /المشكل\s*(?:الحقيقي)?\s*هو/.test(raw)
     || /(?:السبب|المشكل)\s*(?:هو|:)/.test(raw)
     || /\b(?:3ndi|3andi)\s+(?:wja3|sen|snan|dent)\b/i.test(n)
@@ -306,7 +356,10 @@ function detectCorrectionIntent(text, options = {}) {
     if (afterMachi?.[1]) motifText = afterMachi[1]
     const afterEst = raw.match(/(?:probl[eè]me\s+c['’]?est|motif\s+c['’]?est|lmochkil\s+(?:huwa|howa)|المشكل\s*(?:الحقيقي)?\s*هو|السبب\s*هو)\s*(.+)$/i)
     if (afterEst?.[1]) motifText = afterEst[1]
-    const afterChanger = raw.match(/(?:changer|corriger|modifier|bdel|nbdl)\s+(?:le\s+)?(?:probl[eè]me|motif|service|lmochkil|mouchkil)\s*(?:l|li|en|à|a|ل)?\s*[:\-–]?\s*(.+)$/i)
+    const afterChanger = raw.match(new RegExp(
+      String.raw`${CORRECTION_VERB}\s+(?:le\s+)?(?:probl[eè]me|motif|service|lmochkil|mouchkil)\s*(?:l|li|en|à|a|ل)?\s*[:\-–]?\s*(.+)`,
+      'i',
+    ))
     if (afterChanger?.[1]) motifText = afterChanger[1]
 
     const motif = parseMotifValue(motifText)
@@ -322,8 +375,9 @@ function detectCorrectionIntent(text, options = {}) {
   }
 
   // --- Date / time ---
-  const slotCorrection = (
-    /\b(?:changer|corriger|bdel|nbdl|finalement|plutot|plutôt|bghit\s+nbdl)\b/i.test(raw)
+  // Availability asks ("3tini l mawa3id li motaha") must NOT become slot corrections.
+  const slotCorrection = !looksLikeAvailabilityAsk(raw) && (
+    new RegExp(String.raw`\b${CORRECTION_VERB}\b|\b(?:finalement|plutot|plutôt|bghit\s+nbdl)\b`, 'i').test(raw)
     || /\b(?:date|heure|jour|nhar|sa3a|saa|wa9t|lwa9t|lwe9t|موعد|ساعة|وقت|نهار|تاريخ)\b/i.test(n)
     || /\b(?:ghda|gheda|ghdda|ghedda|lyoum|lyom|demain|aujourdhui|aujourd)\b/i.test(n)
     || /^(?:m3a|مع|à)\s*\d{1,2}/i.test(raw.trim())
@@ -382,6 +436,13 @@ function detectCorrectionIntent(text, options = {}) {
     fields,
     cleared,
     changedFields,
+  }
+  if (!fields.full_name && incompleteNameCandidate) {
+    result.incompleteName = true
+    result.nameCandidate = incompleteNameCandidate
+    result.isCorrection = true
+    if (!changedFields.includes('full_name')) changedFields.push('full_name')
+    result.changedFields = changedFields
   }
   if (invalidPhoneAttempt) {
     result.invalidPhone = true
@@ -533,16 +594,30 @@ function detectInlineNameCorrection(text) {
   const raw = String(text || '').trim()
   if (!raw) return { type: 'none' }
 
-  const intro = raw.match(
-    /^(?:smyti|smiti|smiya|smiyto|smito|smiyti|ismi|ana(?:\s+(?:smiti|smyti|smiya))?|je\s+m['’]appelle|mon\s+nom(?:\s+complet)?(?:\s+(?:est|c['’]est))?|moi\s+c['’]est|اسمي|سميتي|الاسم\s+ديالي)\s*[:\-–]?\s*(.+)$/iu,
-  )
+  const introPatterns = [
+    new RegExp(
+      String.raw`^(?:${CORRECTION_VERB}\s+)?(?:smyti|smiti|smiya|smiyto|smito|smiyti|ismi|ana(?:\s+(?:smiti|smyti|smiya))?|nom\s+dyali|lism\s+dyali|smya\s+dyali|je\s+m['’]appelle|mon\s+nom(?:\s+complet)?(?:\s+(?:est|c['’]est))?|moi\s+c['’]est|اسمي|سميتي|الاسم\s+ديالي)\s*[:\-–]?\s*(.+)$`,
+      'iu',
+    ),
+    new RegExp(
+      String.raw`^${CORRECTION_VERB}\s+(?:le\s+)?(?:nom(?:\s+complet)?|smiya|smito|smiti)\s+(?:ana\s+)?(?:smiti|smyti|smiyti|ismi)?\s*[:\-–]?\s*(.+)$`,
+      'iu',
+    ),
+  ]
+  let intro = null
+  for (const pattern of introPatterns) {
+    intro = raw.match(pattern)
+    if (intro?.[1]) break
+  }
   if (!intro?.[1]) {
-    // "Mon nom c'est X" already covered; bare "nom: X" handled by detectCorrectionIntent
     return { type: 'none' }
   }
 
   const candidate = stripPersonNameLabels(clipTrailingJunk(intro[1]))
+    .replace(/^(?:ana\s+)?(?:smiti|smyti|smiyti|smiya|ismi)\s+/i, '')
     .replace(/^(?:est|c['’]est|howa|hiya)\s+/i, '')
+    .replace(/\b(?:ana|smiti|smyti|smiyti|smiya)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
     .trim()
   if (!candidate) return { type: 'none' }
 
@@ -562,6 +637,7 @@ module.exports = {
   detectInlineNameCorrection,
   detectGeneralCorrectionRequest,
   looksLikeBulkBookingPayload,
+  looksLikeAvailabilityAsk,
   extractContrastCity,
   parseNameValue,
   parsePhoneValue,

@@ -1577,6 +1577,13 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
         })
         return finalizeTurn(lead, fieldCorrectionRetry('phone_number', lang), true, null, signals)
       }
+      if (correction.incompleteName && !correction.fields?.full_name && !preferBulkOverCorrection) {
+        const replies = buildBookingCollectionReplies(lead, lang, {
+          missing: Array.from(new Set([...(checkCustomerData(lead).missing || []), 'full_name'])),
+          rejectedName: true,
+        })
+        return finalizeTurn(lead, replies[0] || askFullNameAfterPartialCorrection(lang), true, null, signals, replies)
+      }
       if (correction.isCorrection && !preferBulkOverCorrection) {
         const beforeLead = { ...lead }
         const patch = buildCorrectionPatch(correction)
@@ -2089,6 +2096,14 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
     }
     if (correction.invalidPhone && !correction.fields?.phone_number) {
       return finalizeTurn(lead, fieldCorrectionRetry('phone_number', language), true, null, signals)
+    }
+    if (correction.incompleteName && !correction.fields?.full_name) {
+      const updated = repo.upsertLead(conversationId, {
+        stage: 'confirmation',
+        awaiting_field: 'field_correction',
+        correction_json: serializeCorrectionState({ fields: ['full_name'], index: 0 }),
+      })
+      return finalizeTurn(updated, askFullNameAfterPartialCorrection(language), true, null, signals)
     }
     if (correction.isCorrection) {
       const patch = buildCorrectionPatch(correction)

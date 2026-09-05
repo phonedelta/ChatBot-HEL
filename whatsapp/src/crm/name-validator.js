@@ -33,7 +33,7 @@ const RELATION_TOKENS = new Set([
 const NAME_COMMAND_TOKENS = new Set([
   'smiya', 'smiyti', 'smito', 'smiyto', 'smitha', 'smita', 'smiti', 'ismi',
   'dialo', 'dyalo', 'dialha', 'dyalha', 'dyal', 'dial',
-  'changer', 'corriger', 'corrige', 'modifier', 'bdel', 'bdl', 'nom', 'name',
+  'changer', 'corriger', 'corrige', 'modifier', 'bdel', 'bdal', 'bdell', 'bddl', 'bdl', 'nom', 'name',
   'bgha', 'baghi', 'bagha', 'baghya', 'ydir', 'ndir', 'ndiro', 'kaydir',
   'howa', 'hiya', 'howwa', 'kamla', 'correct', 'correcte', 'faux', 'fausse',
   'ville', 'city', 'phone', 'telephone', 'numero', 'tel', 'rdv', 'rendez',
@@ -84,8 +84,9 @@ function stripPersonNameLabels(value) {
     /^(?:le\s+)?nom(?:\s+complet)?\s*[:\-–]\s*/i,
     /^(?:name|full\s*name)\s*[:\-–]?\s+/i,
     /^(?:smiya|smito|smiyto|smitha|smita|smiti|smyti|smiyti|smiyiti)(?:\s+(?:dialo|dyalo|dialha|dyalha|howa|hiya))?\s*[:\-–]?\s+/i,
-    /^(?:changer|corriger|modifier|bdel|bdl)\s+(?:le\s+)?(?:nom|smiya)\s*[:\-–]?\s*/i,
-    /^(?:je m['’]appelle|mon nom(?:\s+complet)?(?:\s+(?:est|c['’]est))?|moi c['’]est|ismi|اسمي|سميتي)\s+/i,
+    /^(?:changer|corriger|modifier|bdel|bdal|bdell|bddl|bdl)\s+(?:le\s+)?(?:nom|smiya)\s*[:\-–]?\s*/i,
+    /^(?:je m['’]appelle|mon nom(?:\s+complet)?(?:\s+(?:est|c['’]est))?|moi c['’]est|ismi|اسمي|سميتي|nom\s+dyali|lism\s+dyali)\s+/i,
+    /^(?:ana\s+)?(?:smiti|smyti|smiyti|smiya)\s+/i,
     /^(?:الاسم(?:\s+الكامل)?|السمية|اسم)\s*[:\-–]?\s+/u,
     /^ل(?=[\u0600-\u06FF])/u,
   ]

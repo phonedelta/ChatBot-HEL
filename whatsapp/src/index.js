@@ -1401,6 +1401,67 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       resetNluUnclearCount(key)
     }
 
+    // FAQ interrupt during active booking — answer location/hours without clearing draft
+    const leadPeekFaq = crm?.repo?.getLead?.(key) || null
+    const bookingDraftActive = leadPeekFaq
+      && ['awaiting_form', 'crm_collection', 'confirmation', 'awaiting_patient'].includes(String(leadPeekFaq.stage || ''))
+    const faqIntent = String(router.intent || '').toUpperCase()
+    const faqConf = Number(router.intentConfidence || 0)
+    if (
+      bookingDraftActive
+      && !isVoice
+      && faqConf >= 0.7
+      && (faqIntent === 'ASK_LOCATION' || faqIntent === 'ASK_OPENING_HOURS')
+      && !hasPriorityOverBooking(routingState)
+    ) {
+      let faqReply = null
+      try {
+        const { HEL_CLINIC } = require('./crm/smart/defaults')
+        const lang = languageHint === 'darija' || languageHint === 'ar' ? 'darija' : 'fr'
+        if (faqIntent === 'ASK_LOCATION') {
+          faqReply = lang === 'darija'
+            ? `العنوان ديالنا:\n${HEL_CLINIC.address}\n\nنقدروا نكمّلو الحجز ديالك منين تكون واجد.`
+            : `Notre adresse :\n${HEL_CLINIC.address}\n\nNous pouvons reprendre votre prise de rendez-vous quand vous voulez.`
+        } else if (faqIntent === 'ASK_OPENING_HOURS') {
+          faqReply = lang === 'darija'
+            ? 'كنخدمو من الإثنين للسبت (الصباح والعشية حسب اليوم).\n\nنقدروا نكمّلو الحجز ديالك منين تكون واجد.'
+            : 'Nous sommes ouverts du lundi au samedi (matin et après-midi selon le jour).\n\nNous pouvons reprendre votre prise de rendez-vous quand vous voulez.'
+        }
+      } catch {
+        faqReply = null
+      }
+      if (faqReply) {
+        try {
+          crm.smart?.trackWhatsAppTurn?.({
+            chatId: options.chatId || key,
+            conversationId: key,
+            outboundText: faqReply,
+            outboundAuthor: 'ai',
+            contactName: options.contactName || null,
+          })
+        } catch (trackError) {
+          console.warn('[iadis-wa] smart track failed', trackError.message || trackError)
+        }
+        setAiConversationHistory(key, [
+          ...history,
+          { role: 'user', content: isVoice && cleanPatientText ? `[vocal] ${cleanPatientText}` : content },
+          { role: 'assistant', content: faqReply },
+        ])
+        return {
+          reply: faqReply,
+          reason: 'booking_faq_interrupt',
+          model: openAiModel,
+          language_hint: languageHint,
+          is_voice: isVoice,
+          intent: faqIntent,
+          intent_confidence: faqConf,
+          should_skip_llm: true,
+          router,
+          lead: leadPeekFaq,
+        }
+      }
+    }
+
     let crmTurn = null
     if (crm) {
       try {

@@ -9,8 +9,12 @@
 const CONFIRM_YES_PATTERNS = [
   /^(oui+|ouais|ok+|okay|yes|yep|daccord|je confirme|confirm[ée]?|cest bon|vas y)$/i,
   /^(نعم+|موافق|أكيد|اكيد|ايوا|أيوا|إيوا|واخا|تمام|صح|وا|ايه|آها)$/i,
-  /^(iwa|iyeh|iyah|iyeh+|iwa+|wakha|ah|aah|aaah|confirmi|confirm)$/i,
+  /^(iwa|iyeh|iyah|iyeh+|iwa+|wakha|waha|ah|aah|aaah|confirmi|confirm|na3am|naam)$/i,
   /^(إيوا\s*نعم|ايوا\s*نعم|n?ak?d(?:\s*lmo3id|\s*lmow3id)?)$/i,
+  /^(?:(?:na3am|naam|oui|yes|wakha|waha|اه|آه|نعم)\s+)?(?:kolchi|kol\s*chi|tout)\s+(?:shih|s7i7|s7ih|sahih|mzyan|mzian|correct|bon|صحيح|مزيان)$/i,
+  /^(?:oui|yes)\s+(?:tout\s+(?:est\s+)?(?:correct|bon)|cest\s+bon|c['’]est\s+bon)$/i,
+  /^(?:كلشي|كل\s*شي)\s+(?:صحيح|مزيان)$/u,
+  /^(?:نعم|اه|آه)\s+(?:كلشي|كل\s*شي)\s+(?:صحيح|مزيان)$/u,
 ]
 
 const CONFIRM_NO_PATTERNS = [
@@ -99,7 +103,7 @@ function isExactBinaryNoToken(normalized) {
 
 function isExactBinaryYesToken(normalized) {
   if (/^(la|laa|lla|la2|lah|non|no|nn|لا|لاء)$/.test(normalized)) return false
-  return /^(oui|ouais|ok|okay|yes|yep|wakha|iwa|iyeh|iyah|ah|aah|نعم|ايوا|أيوا|واخا|ايه|وا)$/.test(normalized)
+  return /^(oui|ouais|ok|okay|yes|yep|wakha|waha|iwa|iyeh|iyah|ah|aah|na3am|naam|نعم|ايوا|أيوا|واخا|ايه|وا)$/.test(normalized)
 }
 
 /** Common typos for "oui" in YES/NO contexts (slot proposal, confirmation). */

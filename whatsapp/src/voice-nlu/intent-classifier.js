@@ -147,6 +147,13 @@ const INTENT_DICTIONARY = {
       'quels sont les rendez-vous disponibles',
       'rendez vous disponibles',
       'horaires disponibles',
+      '3tini l mawa3id li motaha',
+      '3tini mawa3id li dispo',
+      '3tini les creneaux',
+      'ach men sa3a khawya',
+      'achmen wa9t disponible',
+      'المواعيد المتاحة',
+      'الأوقات المتاحة',
       'المواعيد المتوفرة',
       'شنو المواعيد المتوفرة',
       'شنو كاين من موعد',
@@ -155,7 +162,8 @@ const INTENT_DICTIONARY = {
     ],
     keywords: [
       'disponible', 'disponibles', 'disponibilite', 'disponibilité', 'dispo',
-      'متوفر', 'متوفرة', 'créneaux', 'creneaux', 'blassa',
+      'motaha', 'moutaha', 'mawjoda', 'mawjuda', 'khawya', 'khawi',
+      'متوفر', 'متوفرة', 'متاحة', 'créneaux', 'creneaux', 'blassa',
     ],
   },
   LIST_MY_APPOINTMENTS: {
@@ -194,9 +202,10 @@ const INTENT_DICTIONARY = {
   ASK_LOCATION: {
     phrases: [
       'fin kayn cabinet', 'fin kaynin', 'fin jay cabinet', '3tini localisation',
-      'ou se trouve', 'votre adresse', 'فين كاين', 'فين كاين المركز',
+      'sift liya localisation', 'localisation dyalkom', 'adresse dyalkom',
+      '3tini l adresse', 'ou se trouve', 'votre adresse', 'فين كاين', 'فين كاين المركز',
     ],
-    keywords: ['adresse', 'localisation', 'فين', 'parking', 'où'],
+    keywords: ['adresse', 'localisation', 'فين', 'parking', 'où', 'dyalkom'],
   },
   ASK_OPENING_HOURS: {
     phrases: [
@@ -339,12 +348,33 @@ function classifyIntent(rawText, options = {}) {
     return { intent: 'OTHER', confidence: 0, matched: null, matchType: null }
   }
 
+  // Football / sports chatter must never map to cabinet hours or booking
+  const sportsHay = `${rawNorm} ${text}`
+  if (/\b(la3ba|l3ba|lbarca|barca|match|football|\bfoot\b|real\s*madrid|كورة|مباراة|برشلونة)\b/i.test(sportsHay)) {
+    return {
+      intent: 'OTHER',
+      confidence: 0.92,
+      matched: 'sports_out_of_scope',
+      matchType: 'guard',
+      nlu: darija,
+    }
+  }
+
   /** @type {{ intent: string, confidence: number, matched: string|null, matchType: string|null }} */
   let best = { intent: 'OTHER', confidence: 0, matched: null, matchType: null }
 
   // Phrase-level concept rules (Darija Arabizi / AR / mixed)
   const conceptHit = classifyIntentFromConcepts(darija.concepts, darija.normalizedText)
   if (conceptHit && conceptHit.confidence >= 0.86) {
+    if (conceptHit.intent === 'OTHER' && /sports|out_of_scope/i.test(String(conceptHit.matched || ''))) {
+      return {
+        intent: 'OTHER',
+        confidence: conceptHit.confidence,
+        matched: conceptHit.matched,
+        matchType: 'darija_concepts',
+        nlu: darija,
+      }
+    }
     best = {
       intent: conceptHit.intent,
       confidence: conceptHit.confidence,
@@ -378,10 +408,13 @@ function classifyIntent(rawText, options = {}) {
 
       if (intentName === 'CHECK_APPOINTMENT_AVAILABILITY') {
         if (
-          /\b(disponible|disponibles|dispo|متوفر|متوفرة|blassa|kayn)\b/i.test(sourceText)
-          && /\b(rendez|rdv|موعد|créneau|creneau|horaire|سوايع|blassa|ghdda|lyoum)\b/i.test(sourceText)
+          /\b(disponible|disponibles|dispo|متوفر|متوفرة|blassa|kayn|motaha|moutaha|mawjoda|khawya)\b/i.test(sourceText)
+          && /\b(rendez|rdv|موعد|mawa3id|maw3id|créneau|creneau|horaire|سوايع|blassa|ghdda|lyoum|nhar)\b/i.test(sourceText)
         ) {
           confidence = Math.max(confidence, 0.92)
+        }
+        if (/\b(3tini|atini|sift).{0,40}\b(mawa3id|maw3id|creneau|motaha|dispo)/i.test(sourceText)) {
+          confidence = Math.max(confidence, 0.94)
         }
         if (/\bwash?\s+kayn\s+chi\b/i.test(sourceText) || /\bchno\s+kayn\b/i.test(sourceText)) {
           if (!/\bdyali\b/i.test(sourceText)) confidence = Math.max(confidence, 0.9)
@@ -392,13 +425,18 @@ function classifyIntent(rawText, options = {}) {
       }
 
       if (intentName === 'LIST_MY_APPOINTMENTS') {
-        if (/\b(dyali|mes\s+rendez|mes\s+rdv|مواعيدي|3ndi\s+chi\s+rdv)\b/i.test(sourceText)) {
+        if (/\b(nom\s+dyali|smiti|smyti|smiya|je\s+m['’]appelle)\b/i.test(sourceText)
+          && !/\b(rdv|rendez|موعد|maw3id|mawa3id)\b/i.test(sourceText)) {
+          confidence = 0
+        } else if (/\b(dyali|mes\s+rendez|mes\s+rdv|مواعيدي|3ndi\s+chi\s+rdv)\b/i.test(sourceText)) {
           confidence = Math.max(confidence, 0.93)
         }
       }
 
       if (intentName === 'BOOK_APPOINTMENT') {
-        if (/\b(bghit|brit|baghi|بغيت).{0,30}\b(rdv|rendez|موعد|nakhod)\b/i.test(sourceText)) {
+        if (/\b(motaha|moutaha|mawjoda|3tini\s+l?\s*mawa3id|creneaux?\s+disponib|mawa3id\s+li\s+(?:motaha|dispo))\b/i.test(sourceText)) {
+          confidence *= 0.15
+        } else if (/\b(bghit|brit|baghi|بغيت).{0,30}\b(rdv|rendez|موعد|nakhod|maw3id)\b/i.test(sourceText)) {
           confidence = Math.max(confidence, 0.93)
         }
       }
@@ -407,11 +445,18 @@ function classifyIntent(rawText, options = {}) {
         if (/\bfo9ach\b|\bkat7ell/i.test(sourceText) || /وقتاش|حالين/.test(sourceText)) {
           confidence = Math.max(confidence, 0.9)
         }
+        if (/\b(la3ba|lbarca|barca|match|football|كورة)\b/i.test(sourceText)) {
+          confidence = 0
+        }
       }
 
       if (intentName === 'ASK_LOCATION') {
         if (/\bfin\s+kayn/i.test(sourceText) || /فين\s*كاين/.test(sourceText)) {
           confidence = Math.max(confidence, 0.92)
+        }
+        if (/\b(localisation|adresse).{0,12}(dyalkom|dialkom|ديالكم)\b/i.test(sourceText)
+          || /\b(sift|3tini).{0,20}(localisation|adresse)\b/i.test(sourceText)) {
+          confidence = Math.max(confidence, 0.9)
         }
       }
 

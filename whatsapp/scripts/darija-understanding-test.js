@@ -141,7 +141,10 @@ const INTENT_CASES = [
   { text: 'chno les rdv disponibles', intent: 'CHECK_APPOINTMENT_AVAILABILITY' },
   { text: '3andkom chi rdv disponible', intent: 'CHECK_APPOINTMENT_AVAILABILITY' },
   { text: 'مواعيدي', intent: 'LIST_MY_APPOINTMENTS' },
-  { text: 'my appointments', intent: 'LIST_MY_APPOINTMENTS' },
+  { text: 'bghit maw3id nhar tlat 3tini l mawa3id li motaha dak nhar', intent: 'CHECK_APPOINTMENT_AVAILABILITY' },
+  { text: 'sift liya localisation dyalkom', intent: 'ASK_LOCATION' },
+  { text: '3tini l mawa3id li motaha', intent: 'CHECK_APPOINTMENT_AVAILABILITY' },
+  { text: 'imta la3ba lbarca', intent: 'OTHER' },
 ]
 
 function run() {
@@ -246,7 +249,10 @@ function run() {
     assert.strictEqual(parseBinaryConfirmation({ text: 'واخا' }).value, 'yes')
     assert.strictEqual(parseBinaryConfirmation({ text: 'لا' }).value, 'no')
     assert.strictEqual(parseYesNoReply('ah walakin bghit nbdl lwa9t').value, 'unknown')
-    passed += 8
+    assert.strictEqual(parseYesNoReply('na3am kolchi shih').value, 'yes')
+    assert.strictEqual(parseYesNoReply('kolchi mzyan').value, 'yes')
+    assert.strictEqual(parseBinaryConfirmation({ text: 'wakha kolchi shih' }).value, 'yes')
+    passed += 11
   } catch (err) {
     failures.push(`binary: ${err.message}`)
   }
@@ -293,7 +299,11 @@ function run() {
     assert.ok(detectAvailabilityIntent('wach kayn chi blassa ghdda').matched)
     assert.ok(detectAvailabilityIntent('chno kayn mn rendez-vous nhar 05/09').matched)
     assert.ok(!detectAvailabilityIntent('chno les rdv dyali').matched)
-    passed += 3
+    assert.ok(detectAvailabilityIntent('bghit maw3id nhar tlat 3tini l mawa3id li motaha dak nhar').matched)
+    assert.ok(!detectAvailabilityIntent('nom dyali adam mait').matched)
+    expectNotIntent('nom dyali adam mait', 'LIST_MY_APPOINTMENTS')
+    expectNotIntent('imta la3ba lbarca', 'ASK_OPENING_HOURS')
+    passed += 7
   } catch (err) {
     failures.push(`availDetect: ${err.message}`)
   }

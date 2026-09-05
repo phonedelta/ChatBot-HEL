@@ -14,6 +14,8 @@ const { validateFullName } = require('../src/crm/name-validator')
 const {
   detectCorrectionIntent,
   buildCorrectionPatch,
+  detectInlineNameCorrection,
+  looksLikeAvailabilityAsk,
 } = require('../src/crm/booking-corrections')
 const { createCrmService } = require('../src/crm')
 const { checkCustomerData } = require('../src/crm/checkCustomerData')
@@ -62,6 +64,22 @@ async function main() {
   const multi = detectCorrectionIntent('nom Yassine Zouhairi ville Kenitra')
   assert.strictEqual(multi.fields.full_name, 'Yassine Zouhairi')
   assert.strictEqual(multi.fields.city, 'Kénitra')
+
+  console.log('--- darija name corrections ---')
+  assert.strictEqual(
+    detectCorrectionIntent('bdell smiya ana smiti adam mait').fields.full_name,
+    'Adam Mait',
+  )
+  assert.strictEqual(
+    detectCorrectionIntent('nom dyali adam mait').fields.full_name,
+    'Adam Mait',
+  )
+  assert.ok(detectCorrectionIntent('bdal smiya smiti adam').incompleteName)
+  assert.strictEqual(detectCorrectionIntent('bdal smiya smiti adam').nameCandidate, 'adam')
+  assert.strictEqual(detectInlineNameCorrection('nom dyali adam').type, 'incomplete')
+  assert.strictEqual(detectInlineNameCorrection('bdell smiya ana smiti adam mait').fullName, 'Adam Mait')
+  assert.ok(looksLikeAvailabilityAsk('bghit maw3id nhar tlat 3tini l mawa3id li motaha dak nhar'))
+  assert.ok(!detectCorrectionIntent('bghit maw3id nhar tlat 3tini l mawa3id li motaha dak nhar').isCorrection)
 
   console.log('--- service immutable on name correction (workflow) ---')
   const tmp = path.join(os.tmpdir(), `hel-booking-corrections-${Date.now()}.sqlite`)

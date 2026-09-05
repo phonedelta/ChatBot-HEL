@@ -70,6 +70,9 @@ async function main() {
   console.log('--- unit parsers ---')
   assert.ok(isStrictBookingConfirmYes('oui'))
   assert.ok(isStrictBookingConfirmYes('نعم'))
+  assert.ok(isStrictBookingConfirmYes('na3am kolchi shih'))
+  assert.ok(isStrictBookingConfirmYes('kolchi mzyan'))
+  assert.ok(isStrictBookingConfirmYes('wakha kolchi shih'))
   assert.ok(!isStrictBookingConfirmYes('ok'))
   assert.ok(!isStrictBookingConfirmYes('wakha'))
   assert.ok(!isStrictBookingConfirmYes('mzyan'))
@@ -434,6 +437,62 @@ async function main() {
     assert.strictEqual(turn.forceReply, null)
     assert.ok(!turn.booking)
   }
+
+  console.log('--- TEST 24: darija inline name correction + confirmation yes ---')
+  const chat9 = '212612399909@c.us'
+  const conv9 = `main:${chat9}`
+  turn = await reachConfirmation(crm, conv9, chat9, {
+    phone: '0600000009',
+    name: 'Tini L Istimara',
+  })
+  const keptCity9 = turn.lead.city
+  const keptPhone9 = turn.lead.phone_number
+  turn = await crm.processCrmTurn({
+    conversationId: conv9,
+    chatId: chat9,
+    userText: 'bdell smiya ana smiti adam mait',
+    languageHint: 'darija',
+  })
+  assert.strictEqual(turn.lead.full_name, 'Adam Mait')
+  assert.strictEqual(turn.lead.city, keptCity9)
+  assert.strictEqual(turn.lead.phone_number, keptPhone9)
+  assert.strictEqual(turn.lead.stage, 'confirmation')
+  assert.match(allText(turn), /Adam Mait/)
+
+  turn = await crm.processCrmTurn({
+    conversationId: conv9,
+    chatId: chat9,
+    userText: 'nom dyali sara el amrani',
+    languageHint: 'darija',
+  })
+  assert.strictEqual(turn.lead.full_name, 'Sara El Amrani')
+
+  turn = await crm.processCrmTurn({
+    conversationId: conv9,
+    chatId: chat9,
+    userText: 'bdal smiya smiti adam',
+    languageHint: 'darija',
+  })
+  assert.notStrictEqual(turn.lead.full_name, 'Adam')
+  assert.match(allText(turn), /اسم|nom|complet|كامل/i)
+  assert.strictEqual(turn.lead.city, keptCity9)
+
+  turn = await crm.processCrmTurn({
+    conversationId: conv9,
+    chatId: chat9,
+    userText: 'Adam Mait',
+    languageHint: 'darija',
+  })
+  assert.strictEqual(turn.lead.full_name, 'Adam Mait')
+  assert.strictEqual(turn.lead.awaiting_field, 'confirmation')
+
+  turn = await crm.processCrmTurn({
+    conversationId: conv9,
+    chatId: chat9,
+    userText: 'na3am kolchi shih',
+    languageHint: 'darija',
+  })
+  assert.ok(turn.booking?.appointment?.id, `expected booking after na3am kolchi shih\n${allText(turn)}`)
 
   try {
     fs.rmSync(tmp, { force: true })

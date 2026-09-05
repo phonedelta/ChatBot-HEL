@@ -37,14 +37,18 @@ const CONCEPT_FORMS = {
   place_slot: ['blassa', 'blasa', 'بلاصة', 'بلاسا', 'créneau', 'creneau', 'creneaux', 'créneaux'],
   available: [
     'disponible', 'disponibles', 'disponibilite', 'disponibilité', 'dispo',
-    'متوفر', 'متوفرة', 'متوفرين',
+    'motaha', 'moutaha', 'mawjoda', 'mawjuda', 'mawjoudin', 'mawjoud',
+    'khawya', 'khawi', 'khawyin',
+    'متوفر', 'متوفرة', 'متوفرين', 'متاحة', 'متاح',
   ],
 
   // Appointment
   appointment: [
     'rdv', 'rendez-vous', 'rendez vous', 'rendezvou', 'randivo', 'appointment',
-    'mo3id', 'mow3id', 'maw3id', 'موعد', 'مواعيد',
+    'mo3id', 'mow3id', 'maw3id', 'mawa3id', 'mwa3id', 'ma3id', 'mou3id',
+    'موعد', 'مواعيد',
   ],
+  give: ['3tini', 'atini', 'sift', 'sifet', 'siftou', 'عطيني', 'صيفط'],
   my: ['dyali', 'diali', 'diyali', 'ديالي', 'mes'],
 
   // Time
@@ -58,7 +62,8 @@ const CONCEPT_FORMS = {
 
   // Affirmation / negation
   yes: [
-    'oui', 'ouais', 'yes', 'ah', 'aah', 'iyeh', 'iyah', 'iwa', 'wakha', 'safi',
+    'oui', 'ouais', 'yes', 'ah', 'aah', 'iyeh', 'iyah', 'iwa', 'wakha', 'waha', 'safi',
+    'na3am', 'naam', 'shih', 's7i7', 's7ih', 'mzyan', 'mzian',
     'نعم', 'ايوا', 'أيوا', 'واخا', 'ايه', 'آها', 'وا',
   ],
   no: ['non', 'no', 'la', 'lla', 'laa', 'lah', 'لا', 'لاء', 'ماشي'],
@@ -77,12 +82,24 @@ const CONCEPT_FORMS = {
 
   // Location / hours / price
   hours: ['horaire', 'horaires', 'wa9t', 'وقت', 'kat7ello', 'kat7elou', 'حالين'],
-  location: ['localisation', 'adresse', 'cabinet', 'clinique', 'parking'],
+  location: [
+    'localisation', 'adresse', 'cabinet', 'clinique', 'parking',
+    'dyalkom', 'dialkom', 'ديالكم',
+  ],
   price: ['prix', 'taman', 'ثمن', 'cout', 'coût', 'combien'],
 
   // Cancel / reschedule
   cancel: ['annuler', 'nalghi', 'nlghi', 'نلغي', 'cancel', 'الغ'],
-  reschedule: ['nbdl', 'nbddl', 'n7wel', 'نبدل', 'نحول', 'reporter', 'changer', 'reschedule'],
+  reschedule: [
+    'nbdl', 'nbddl', 'nbdel', 'bdel', 'bdal', 'bdell', 'bddl', 'n7wel',
+    'نبدل', 'نحول', 'reporter', 'changer', 'reschedule', 'ghyr', 'ghayer',
+  ],
+
+  // Out-of-scope sports (never map to cabinet hours)
+  sports: [
+    'la3ba', 'l3ba', 'match', 'football', 'foot', 'barca', 'lbarca', 'madrid',
+    'كورة', 'مباراة', 'برشلونة', 'البارصا',
+  ],
 }
 
 /** @type {Map<string, string>} form → concept */
