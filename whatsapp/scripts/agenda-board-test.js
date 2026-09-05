@@ -96,6 +96,43 @@ try {
 }
 assert.ok(blocked, 'cannot propose occupied slot')
 
+// --- Appointment Type display: Orthodontie without CJK parasites ---
+const { canonicalizeAppointmentTypeDisplay, repairCorruptedAppointmentTypeLabels } = require('../src/crm/services')
+assert.strictEqual(canonicalizeAppointmentTypeDisplay('Orthodontie'), 'Orthodontie')
+assert.strictEqual(canonicalizeAppointmentTypeDisplay('Orthodontie 久々精密固定'), 'Orthodontie')
+assert.ok(!String(canonicalizeAppointmentTypeDisplay('Orthodontie 久々精密固定')).includes('久'))
+assert.ok(!String(canonicalizeAppointmentTypeDisplay('Orthodontie 久々精密固定')).includes('精密'))
+assert.ok(!String(canonicalizeAppointmentTypeDisplay('Orthodontie 久々精密固定')).includes('固定'))
+assert.strictEqual(canonicalizeAppointmentTypeDisplay('Détartrage'), 'Détartrage')
+assert.strictEqual(canonicalizeAppointmentTypeDisplay('Détartrage 久々'), 'Détartrage')
+// Arabic motif must be preserved (no global Unicode strip)
+const arabicMotif = 'ألم في الأسنان'
+assert.strictEqual(canonicalizeAppointmentTypeDisplay(arabicMotif), arabicMotif)
+
+const orthoCust = db.prepare(`
+  INSERT INTO customers (full_name, phone_number, created_at)
+  VALUES ('Ortho Patient', '+212661000099', datetime('now'))
+`).run()
+const orthoAppt = db.prepare(`
+  INSERT INTO appointments (customer_id, appointment_date, appointment_time, status, appointment_type, duration_minutes, created_at)
+  VALUES (?, ?, '15:00', 'confirmed', ?, 30, datetime('now'))
+`).run(orthoCust.lastInsertRowid, dateIso, 'Orthodontie 久々精密固定')
+db.prepare(`
+  INSERT INTO dental_cases (customer_id, appointment_id, problem, description, urgency, created_at)
+  VALUES (?, ?, ?, ?, 'moyenne', datetime('now'))
+`).run(orthoCust.lastInsertRowid, orthoAppt.lastInsertRowid, 'Orthodontie 久々精密固定', 'Orthodontie 久々精密固定')
+
+const repaired = repairCorruptedAppointmentTypeLabels(db)
+assert.ok(repaired >= 1, 'corrupt Orthodontie rows repaired')
+const cleaned = db.prepare('SELECT appointment_type FROM appointments WHERE id = ?').get(orthoAppt.lastInsertRowid)
+assert.strictEqual(cleaned.appointment_type, 'Orthodontie')
+const cleanedCase = db.prepare('SELECT problem FROM dental_cases WHERE appointment_id = ?').get(orthoAppt.lastInsertRowid)
+assert.strictEqual(cleanedCase.problem, 'Orthodontie')
+
+const detail = smart.getAgendaAppointment(orthoAppt.lastInsertRowid)
+assert.strictEqual(detail.appointment_type, 'Orthodontie')
+assert.ok(!detail.appointment_type.includes('久'))
+
 console.log('agenda-board-test: OK')
 try { db.close() } catch { /* ignore */ }
 try { if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath) } catch { /* ignore */ }

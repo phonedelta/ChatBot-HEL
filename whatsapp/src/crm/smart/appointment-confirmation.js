@@ -9,6 +9,7 @@ const { formatPhoneDisplay } = require('../phone')
 const { formatDateDisplay, isDarija, formatDateTimeLocalized } = require('../messages')
 const { resolvePatientLanguageFromRow } = require('./resolve-patient-language')
 const { assistantAiActor } = require('./activity-actors')
+const { findContactByWhatsAppOrPhone } = require('../contact-patients')
 const {
   parseAppointmentSelection,
   toSelectionCandidate,
@@ -149,6 +150,50 @@ function confirmationAckMessage(appointment, language = 'fr') {
     ].join('\n')
   }
   return `Merci. Votre rendez-vous du ${date} à ${time} est maintenant confirmé.`
+}
+
+function firstNameFromFull(fullName) {
+  return String(fullName || '').trim().split(/\s+/).filter(Boolean)[0] || fullName || 'Patient'
+}
+
+function slotLabelForConfirm(date, time, language = 'fr') {
+  const d = formatDateDisplay(date)
+  const t = String(time || '').slice(0, 5)
+  if (isDarija(language)) return `${d} فـ ${t}`
+  return `${d} à ${t}`
+}
+
+/**
+ * WhatsApp message after staff manually confirms a non_confirme appointment.
+ */
+function msgStaffConfirmedPatient(item, language = 'fr') {
+  const when = slotLabelForConfirm(item.appointment_date, item.appointment_time, language)
+  const name = firstNameFromFull(item.full_name)
+  if (isDarija(language)) {
+    return [
+      `السلام عليكم ${name}،`,
+      '',
+      `الموعد ديالكم نهار ${when} عند مركز طب الأسنان HEL تأكد ✅`,
+      '',
+      'نتسناوكم فالوقت.',
+    ].join('\n')
+  }
+  return [
+    `Bonjour ${name},`,
+    '',
+    `Votre rendez-vous du ${when} au Centre Dentaire HEL est confirmé ✅`,
+    '',
+    'Nous vous attendons.',
+  ].join('\n')
+}
+
+function isStaffConfirmSource(source) {
+  const s = String(source || '').toLowerCase()
+  return s === 'staff'
+    || s === 'staff_dashboard'
+    || s === 'dashboard'
+    || s === 'agenda'
+    || s === 'manual'
 }
 
 function selectionAskMessage(candidates, language = 'fr') {
@@ -1193,22 +1238,25 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
       return { ok: false, reason: 'invalid_status', status: appt.status }
     }
 
+    const staffSource = isStaffConfirmSource(source)
+    const confirmationSource = staffSource ? (source || 'staff_dashboard') : source
+
     const tx = () => {
       db.prepare(`
         UPDATE appointments
         SET status = 'confirmed', confirmed_at = ?, confirmation_source = ?
         WHERE id = ? AND status = 'non_confirme'
-      `).run(nowIso(), source, Number(appointmentId))
+      `).run(nowIso(), confirmationSource, Number(appointmentId))
 
       db.prepare(`
         UPDATE appointment_confirmation_requests
         SET status = 'confirmed', confirmed_at = ?, confirmation_source = ?, updated_at = ?
         WHERE appointment_id = ?
-      `).run(nowIso(), source, nowIso(), Number(appointmentId))
+      `).run(nowIso(), confirmationSource, nowIso(), Number(appointmentId))
     }
     runInTransaction(db, tx)
 
-    completeOpenConfirmationTasks(appointmentId, source === 'staff'
+    completeOpenConfirmationTasks(appointmentId, staffSource
       ? 'Confirmé manuellement par l’équipe'
       : 'Patient confirmé via WhatsApp')
 
@@ -1219,10 +1267,10 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
           appointment_id: appointmentId,
           event_type: 'APPOINTMENT_CONFIRMED',
           title: 'Patient confirmé',
-          detail: source === 'staff'
+          detail: staffSource
             ? `Confirmé par ${actorName || 'l’équipe'}`
             : 'Confirmé automatiquement après réponse WhatsApp',
-          actor_type: source === 'staff' ? 'human' : 'patient',
+          actor_type: staffSource ? 'human' : 'patient',
           actor_name: actorName,
         })
       } catch { /* optional */ }
@@ -1230,7 +1278,7 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
 
     if (logAiAction) {
       try {
-        const auditActor = source === 'staff'
+        const auditActor = staffSource
           ? (actor || {
             type: 'dashboard_user',
             userId: null,
@@ -1241,13 +1289,13 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
         logAiAction({
           customer_id: appt.customer_id,
           action_type: 'appointment_confirmed',
-          reason: source === 'staff' ? 'Confirmation manuelle' : 'Confirmation WhatsApp patient',
+          reason: staffSource ? 'Confirmation manuelle' : 'Confirmation WhatsApp patient',
           result: String(appointmentId),
-          source: source === 'staff' ? 'dashboard' : 'whatsapp',
+          source: staffSource ? 'dashboard' : 'whatsapp',
           actor: auditActor,
           payload: {
             appointment_id: appointmentId,
-            origin: source === 'staff' ? 'dashboard' : 'whatsapp_patient',
+            origin: staffSource ? 'dashboard' : 'whatsapp_patient',
             actor_user_id: auditActor.userId ?? null,
             actor_display_name: auditActor.displayName,
             actor_role: auditActor.role ?? null,
@@ -1257,6 +1305,161 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
     }
 
     return { ok: true, appointment: loadAppointmentBundle(appointmentId) }
+  }
+
+  function hasStaffConfirmationNotified(appointmentId) {
+    try {
+      const row = db.prepare(`
+        SELECT id FROM ai_actions
+        WHERE action_type = 'staff_confirmation_notified'
+          AND result = ?
+        LIMIT 1
+      `).get(String(appointmentId))
+      return Boolean(row)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Notify patient on WhatsApp after staff manually confirms a RDV.
+   * Not used when the patient already confirmed themselves in chat.
+   */
+  async function notifyPatientOfStaffConfirmation(appointment, {
+    source = 'staff_dashboard',
+    actorName = null,
+  } = {}) {
+    const whatsapp = {
+      attempted: false,
+      sent: false,
+      skipped: false,
+      messageId: null,
+      error: null,
+      disconnected: false,
+    }
+
+    if (!isStaffConfirmSource(source)) {
+      whatsapp.skipped = true
+      whatsapp.error = 'not_staff_source'
+      return whatsapp
+    }
+
+    const appt = appointment && appointment.id ? appointment : null
+    if (!appt) {
+      whatsapp.error = 'missing_appointment'
+      return whatsapp
+    }
+
+    if (hasStaffConfirmationNotified(appt.id)) {
+      whatsapp.skipped = true
+      whatsapp.error = 'already_notified'
+      return whatsapp
+    }
+
+    const phone = appt.phone_number || null
+    const chatKey = appt.whatsapp_chat_id || null
+
+    let resolvedChat = chatKey
+    if (!resolvedChat && phone) {
+      try {
+        const contact = findContactByWhatsAppOrPhone(db, { phone })
+        resolvedChat = contact?.whatsapp_id || contact?.whatsapp_chat_id || null
+      } catch { /* optional */ }
+    }
+    if (!resolvedChat && phone) {
+      const digits = String(phone).replace(/\D/g, '')
+      if (digits) resolvedChat = `${digits}@c.us`
+    }
+
+    if (!resolvedChat && !phone) {
+      whatsapp.error = 'no_patient_channel'
+      return whatsapp
+    }
+
+    const sendFn = helpers.sendWhatsAppText
+    if (typeof sendFn !== 'function') {
+      whatsapp.error = 'WhatsApp sender unavailable'
+      return whatsapp
+    }
+
+    const language = resolveLanguage(appt, resolvedChat)
+    const text = msgStaffConfirmedPatient(appt, language)
+    whatsapp.attempted = true
+
+    try {
+      const sent = await sendFn({
+        chatId: resolvedChat,
+        phone,
+        text,
+      })
+      whatsapp.sent = true
+      whatsapp.messageId = sent?.messageId || null
+      const outboundChatId = sent?.chatId || resolvedChat
+
+      if (typeof trackWhatsAppTurn === 'function') {
+        try {
+          trackWhatsAppTurn({
+            chatId: outboundChatId,
+            customerId: appt.customer_id || null,
+            outboundText: text,
+            outboundAuthor: 'ai',
+            outboundMessageId: sent?.messageId || null,
+            phoneNumber: phone,
+            contactName: appt.full_name || null,
+          })
+        } catch { /* optional */ }
+      }
+
+      if (typeof logAiAction === 'function') {
+        try {
+          logAiAction({
+            customer_id: appt.customer_id || null,
+            action_type: 'staff_confirmation_notified',
+            reason: actorName
+              ? `Notification confirmation agenda (${actorName})`
+              : 'Notification confirmation agenda',
+            result: String(appt.id),
+            source: 'dashboard',
+            payload: {
+              appointment_id: appt.id,
+              recipient: phone,
+              language,
+            },
+          })
+        } catch { /* optional */ }
+      }
+    } catch (error) {
+      whatsapp.sent = false
+      whatsapp.error = error?.message || String(error)
+      if (error?.code === 'WA_NOT_READY') {
+        whatsapp.disconnected = true
+      }
+      console.warn('[CONFIRM] staff confirmation WhatsApp notify failed', {
+        appointment_id: appt.id,
+        reason: whatsapp.error,
+        code: error?.code || null,
+      })
+    }
+
+    return whatsapp
+  }
+
+  /**
+   * Confirm + optional patient WhatsApp notify for staff sources.
+   */
+  async function confirmAppointmentAndNotify(appointmentId, opts = {}) {
+    const result = confirmAppointment(appointmentId, opts)
+    if (!result?.ok || result.already) {
+      return { ...result, whatsapp: { attempted: false, sent: false, skipped: true } }
+    }
+    if (!isStaffConfirmSource(opts.source)) {
+      return { ...result, whatsapp: { attempted: false, sent: false, skipped: true } }
+    }
+    const whatsapp = await notifyPatientOfStaffConfirmation(result.appointment, {
+      source: opts.source,
+      actorName: opts.actorName || null,
+    })
+    return { ...result, whatsapp }
   }
 
   /**
@@ -1931,6 +2134,8 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
     sendFollowupConfirmation,
     createStaffConfirmationTask,
     confirmAppointment,
+    confirmAppointmentAndNotify,
+    notifyPatientOfStaffConfirmation,
     cancelAppointmentFromConfirmation,
     handleInboundConfirmationReply,
     runConfirmationTick,
@@ -1941,6 +2146,7 @@ function createAppointmentConfirmationEngine(db, helpers = {}) {
     confirmationAskMessage,
     confirmationFollowupMessage,
     confirmationAckMessage,
+    msgStaffConfirmedPatient,
   }
 }
 
@@ -1949,6 +2155,7 @@ module.exports = {
   confirmationAskMessage,
   confirmationFollowupMessage,
   confirmationAckMessage,
+  msgStaffConfirmedPatient,
   cancellationAckMessage,
   selectionAskMessage,
   parseAppointmentSelection,

@@ -393,6 +393,10 @@ function createCrmRepository(db) {
     const problemAi = String(payload.problem || '').trim()
     const problemClient = problemAi
     const status = 'confirmed'
+    const { resolveService, canonicalizeAppointmentTypeDisplay } = require('./services')
+    const resolvedType = canonicalizeAppointmentTypeDisplay(problemAi)
+      || resolveService(problemAi)?.service
+      || null
 
     if (!fullName || !phoneRaw || !date || !time) {
       const err = new Error('Nom, téléphone, date et heure sont obligatoires')
@@ -435,11 +439,23 @@ function createCrmRepository(db) {
       const appointmentInsert = db.prepare(`
         INSERT INTO appointments (
           customer_id, appointment_date, appointment_time, status, conversation_id,
-          whatsapp_contact_id, confirmed_at, confirmation_source, created_at
-        ) VALUES (?, ?, ?, ?, NULL, ?, ?, 'staff', ?)
-      `).run(customer.id, date, time, status, contactId, createdAt, createdAt)
+          whatsapp_contact_id, appointment_type, confirmed_at, confirmation_source, created_at
+        ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 'staff', ?)
+      `).run(
+        customer.id,
+        date,
+        time,
+        status,
+        contactId,
+        resolvedType,
+        createdAt,
+        createdAt,
+      )
 
       const appointmentId = Number(appointmentInsert.lastInsertRowid)
+      const problemStored = String(
+        canonicalizeAppointmentTypeDisplay(problemAi) || problemAi,
+      ).slice(0, 120)
       const caseInsert = db.prepare(`
         INSERT INTO dental_cases (
           customer_id, appointment_id, problem, description, urgency, created_at
@@ -447,7 +463,7 @@ function createCrmRepository(db) {
       `).run(
         customer.id,
         appointmentId,
-        problemAi.slice(0, 120),
+        problemStored,
         problemClient,
         'moyenne',
         createdAt,

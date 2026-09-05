@@ -14,6 +14,7 @@ const {
   WAITLIST_PRIORITY_LABELS,
 } = require('./labels')
 const { formatPhoneDisplay } = require('../phone')
+const { canonicalizeAppointmentTypeDisplay } = require('../services')
 
 const SLOT_MINUTES = 30
 const DAY_SHORT = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam']
@@ -326,7 +327,7 @@ function createAgendaBoard(deps) {
           end_time: minutesToTime((toMinutes(time) || 0) + duration),
           status: r.status,
           status_label: appointmentStatusLabel(r.status),
-          appointment_type: r.appointment_type || r.problem || 'Consultation',
+          appointment_type: canonicalizeAppointmentTypeDisplay(r.appointment_type || r.problem) || 'Consultation',
           problem: r.problem,
           practitioner_id: r.practitioner_id || null,
           practitioner_name: r.practitioner_name || null,
@@ -391,7 +392,7 @@ function createAgendaBoard(deps) {
         duration_minutes: Number(r.duration_minutes) || 30,
         practitioner_id: r.practitioner_id || null,
         practitioner_name: r.practitioner_name || null,
-        appointment_type: r.appointment_type || r.problem || null,
+        appointment_type: canonicalizeAppointmentTypeDisplay(r.appointment_type || r.problem) || null,
         cancelled_at: r.created_at,
         kind: 'released',
       })
@@ -482,12 +483,12 @@ function createAgendaBoard(deps) {
         COALESCE(a.duration_minutes, 30) AS duration_minutes,
         a.practitioner_id,
         a.appointment_type,
-        a.source,
+        c.source,
         c.full_name,
         c.phone_number,
         d.problem,
         d.urgency,
-        p.display_name AS practitioner_name
+        p.full_name AS practitioner_name
       FROM appointments a
       JOIN customers c ON c.id = a.customer_id
       LEFT JOIN dental_cases d ON d.appointment_id = a.id
@@ -511,7 +512,7 @@ function createAgendaBoard(deps) {
       end_time: minutesToTime((toMinutes(time) || 0) + duration),
       status: row.status,
       status_label: appointmentStatusLabel(row.status),
-      appointment_type: row.appointment_type || row.problem || 'Consultation',
+      appointment_type: canonicalizeAppointmentTypeDisplay(row.appointment_type || row.problem) || 'Consultation',
       problem: row.problem,
       practitioner_id: row.practitioner_id || null,
       practitioner_name: row.practitioner_name || null,

@@ -11,19 +11,23 @@ import { api } from '@/lib/api'
 import {
   type DashNotification,
   type NotificationAlertPreferences,
-  isRecentNotification,
-  shouldPlaySoundForNotification,
-  parseNotificationTimestamp,
 } from '@/lib/notification-types'
 import {
   ensureNotificationSoundUnlockListeners,
   playNotificationSound,
   preloadNotificationSound,
 } from '@/lib/notification-sound'
+import {
+  dispatchUserAlerts,
+  resetNotificationAlertClaims,
+} from '@/lib/notification-alerts'
+import {
+  formatIngestDebug,
+  ingestNotifications,
+} from '@/lib/notification-ingest'
 import { useAuth } from '@/context/AuthContext'
 
 const POLL_MS = 4000
-const RECENT_MS = 15_000
 
 type NotificationPayload = {
   items?: DashNotification[]
@@ -60,75 +64,6 @@ function mergePreferences(raw?: NotificationAlertPreferences | null): Notificati
   return { ...DEFAULT_PREFS, ...raw }
 }
 
-function ingestNotifications(
-  incoming: DashNotification[],
-  prefs: NotificationAlertPreferences,
-  state: {
-    initialized: boolean
-    knownIds: Set<number>
-    playedIds: Set<number>
-    tabWasHidden: boolean
-  },
-): {
-  initialized: boolean
-  audibleIds: number[]
-} {
-  const dev = import.meta.env.DEV
-  let audibleIds: number[] = []
-
-  if (!state.initialized) {
-    for (const n of incoming) state.knownIds.add(n.id)
-    state.initialized = true
-    if (dev) {
-      console.info('[NOTIFICATIONS]', {
-        received: incoming.length,
-        new: 0,
-        newIds: [],
-        unread: incoming.filter((n) => !n.read_at && !n.is_read).length,
-        phase: 'initial_load',
-      })
-    }
-    return { initialized: true, audibleIds: [] }
-  }
-
-  const newlyArrived = incoming.filter((n) => !state.knownIds.has(n.id))
-  for (const n of incoming) state.knownIds.add(n.id)
-
-  if (newlyArrived.length === 0) {
-    return { initialized: true, audibleIds: [] }
-  }
-
-  const audible = newlyArrived.filter((n) => {
-    if (state.playedIds.has(n.id)) return false
-    if (!shouldPlaySoundForNotification(n, prefs)) return false
-    if (!isRecentNotification(n.created_at, RECENT_MS)) return false
-    if (state.tabWasHidden && !isRecentNotification(n.created_at, 5000)) return false
-    return true
-  })
-
-  if (audible.length > 0) {
-    audibleIds = audible.map((n) => n.id)
-    for (const id of audibleIds) state.playedIds.add(id)
-  }
-
-  if (dev) {
-    const delays = newlyArrived.map((n) => ({
-      id: n.id,
-      delayFromCreatedMs: Date.now() - parseNotificationTimestamp(n.created_at),
-    }))
-    console.info('[NOTIFICATIONS]', {
-      received: incoming.length,
-      new: newlyArrived.length,
-      newIds: newlyArrived.map((n) => n.id),
-      audibleIds,
-      delays,
-    })
-  }
-
-  state.tabWasHidden = false
-  return { initialized: true, audibleIds }
-}
-
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const { token, ready } = useAuth()
   const [items, setItems] = useState<DashNotification[]>([])
@@ -138,21 +73,22 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const knownIdsRef = useRef<Set<number>>(new Set())
   const playedIdsRef = useRef<Set<number>>(new Set())
   const initializedRef = useRef(false)
-  const tabWasHiddenRef = useRef(false)
   const prefsRef = useRef<NotificationAlertPreferences>({ ...DEFAULT_PREFS })
   const sessionTokenRef = useRef<string | null>(null)
+  const fetchingRef = useRef(false)
 
   const resetSession = useCallback(() => {
     knownIdsRef.current = new Set()
     playedIdsRef.current = new Set()
     initializedRef.current = false
-    tabWasHiddenRef.current = false
+    resetNotificationAlertClaims()
     setItems([])
     setUnreadCount(0)
   }, [])
 
   const fetchNotifications = useCallback(async () => {
-    if (!token) return
+    if (!token || fetchingRef.current) return
+    fetchingRef.current = true
     try {
       const payload = await api<NotificationPayload>('/dashboard/api/notifications?limit=30')
       const list = payload.items || payload.notifications || []
@@ -161,23 +97,38 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       )
       prefsRef.current = mergePreferences(payload.alertPreferences)
 
-      const { audibleIds } = ingestNotifications(list, prefsRef.current, {
+      const ingestState = {
         initialized: initializedRef.current,
         knownIds: knownIdsRef.current,
         playedIds: playedIdsRef.current,
-        tabWasHidden: tabWasHiddenRef.current,
-      })
-      initializedRef.current = true
+      }
+      const result = ingestNotifications(list, prefsRef.current, ingestState)
+      initializedRef.current = result.initialized
 
       setItems(list)
       setUnreadCount(unread)
 
-      if (audibleIds.length > 0) {
-        playNotificationSound(audibleIds)
+      if (import.meta.env.DEV && result.newlyArrived.length > 0) {
+        console.info('[NOTIFICATIONS]', {
+          received: list.length,
+          unread,
+          phase: 'poll',
+          ...formatIngestDebug(result.newlyArrived, result.audibleIds),
+          visibility: document.visibilityState,
+        })
+      }
+
+      if (result.alertNotifications.length > 0) {
+        dispatchUserAlerts(
+          result.alertNotifications,
+          result.audibleNotifications,
+          playNotificationSound,
+        )
       }
     } catch {
       /* silent */
     } finally {
+      fetchingRef.current = false
       setLoading(false)
     }
   }, [token])
@@ -206,12 +157,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(timer)
   }, [ready, token, fetchNotifications, resetSession])
 
+  // Visibility: never skip alerts when hidden — only refresh promptly when returning.
   useEffect(() => {
     function onVisibility() {
-      if (document.visibilityState === 'hidden') {
-        tabWasHiddenRef.current = true
-        return
-      }
       if (document.visibilityState === 'visible' && token) {
         void fetchNotifications()
       }

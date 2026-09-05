@@ -280,6 +280,123 @@ function isOfficialService(value) {
   return OFFICIAL_SERVICES.some((s) => normalizeKey(s) === key)
 }
 
+/**
+ * Agenda / CRM "Type" label: always a clean catalogue name when possible.
+ * Never strip Arabic/Darija motifs — only collapse known official services
+ * that were polluted with trailing junk (e.g. CJK pasted after Orthodontie).
+ *
+ * @param {string|null|undefined} raw
+ * @returns {string|null}
+ */
+function canonicalizeAppointmentTypeDisplay(raw) {
+  const s = String(raw || '').trim()
+  if (!s) return null
+
+  // Exact official label
+  for (const official of OFFICIAL_SERVICES) {
+    if (s === official) return official
+  }
+
+  // "Orthodontie 久々精密固定" / "Orthodontie （…）" / "Orthodontie (appareil)"
+  // → Type field shows catalogue name only.
+  for (const official of OFFICIAL_SERVICES) {
+    if (!s.startsWith(official)) continue
+    const rest = s.slice(official.length).trim()
+    if (!rest) return official
+    // Parenthetical client wording from displayLabel — Type still shows catalogue
+    if (/^[（(]/.test(rest)) return official
+    // Trailing CJK / fullwidth punctuation only (corruption) → strip
+    if (/^[\u3040-\u30ff\u3400-\u9fff\u3000-\u303f\uFF00-\uFFEF\s·•\-_/／]+$/.test(rest)) {
+      return official
+    }
+    // "Orthodontie something-latin" — if resolveService agrees, prefer catalogue
+    break
+  }
+
+  const resolved = resolveService(s)
+  if (resolved?.service && isOfficialService(resolved.service)) {
+    // Free-text motif that maps to a service (e.g. "appareil", "تقويم") → catalogue
+    // Keep non-service Arabic complaints unchanged when resolve fails / descriptive.
+    if (normalizeKey(s) === normalizeKey(resolved.service)) return resolved.service
+    if (s.startsWith(resolved.service)) return resolved.service
+    // Synonym-only inputs ("ta9wim", "تقويم") → show official French type in Agenda
+    if (SERVICE_SYNONYMS[normalizeKey(s)] || Object.keys(SERVICE_SYNONYMS).some((syn) => {
+      return syn.length >= 3 && normalizeKey(s) === syn
+    })) {
+      return resolved.service
+    }
+  }
+
+  return s
+}
+
+/**
+ * Repair known corrupted type/motif strings in SQLite (idempotent, targeted).
+ * Only collapses "OfficialLabel + CJK/fullwidth junk" — never rewrites Arabic free text.
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @returns {number} rows touched
+ */
+function repairCorruptedAppointmentTypeLabels(db) {
+  if (!db || typeof db.prepare !== 'function') return 0
+  let touched = 0
+
+  function shouldCollapseOfficialJunk(raw) {
+    const s = String(raw || '').trim()
+    for (const official of OFFICIAL_SERVICES) {
+      if (!s.startsWith(official)) continue
+      const rest = s.slice(official.length).trim()
+      if (rest && /^[\u3040-\u30ff\u3400-\u9fff\u3000-\u303f\uFF00-\uFFEF\s·•\-_/／（）()]+$/.test(rest)) {
+        return official
+      }
+    }
+    return null
+  }
+
+  try {
+    const apptRows = db.prepare(`
+      SELECT id, appointment_type FROM appointments
+      WHERE appointment_type IS NOT NULL AND trim(appointment_type) != ''
+    `).all()
+    const updAppt = db.prepare('UPDATE appointments SET appointment_type = ? WHERE id = ?')
+    for (const row of apptRows) {
+      const clean = shouldCollapseOfficialJunk(row.appointment_type)
+      if (clean) {
+        updAppt.run(clean, row.id)
+        touched += 1
+      }
+    }
+  } catch { /* optional column */ }
+
+  try {
+    const caseRows = db.prepare(`
+      SELECT id, problem FROM dental_cases
+      WHERE problem IS NOT NULL AND trim(problem) != ''
+    `).all()
+    const updCase = db.prepare('UPDATE dental_cases SET problem = ? WHERE id = ?')
+    for (const row of caseRows) {
+      const clean = shouldCollapseOfficialJunk(row.problem)
+      if (clean) {
+        updCase.run(clean, row.id)
+        touched += 1
+      }
+    }
+  } catch { /* optional */ }
+
+  try {
+    const typeRows = db.prepare('SELECT id, name FROM appointment_types').all()
+    const updType = db.prepare('UPDATE appointment_types SET name = ? WHERE id = ?')
+    for (const row of typeRows) {
+      const clean = shouldCollapseOfficialJunk(row.name)
+      if (clean) {
+        updType.run(clean, row.id)
+        touched += 1
+      }
+    }
+  } catch { /* optional */ }
+
+  return touched
+}
+
 function buildServiceResult(service, clientText) {
   const urgency = service === 'Urgences dentaires'
     ? 'haute'
@@ -468,6 +585,8 @@ module.exports = {
   NAME_FORBIDDEN_TERMS,
   normalizeKey,
   isOfficialService,
+  canonicalizeAppointmentTypeDisplay,
+  repairCorruptedAppointmentTypeLabels,
   resolveService,
   containsForbiddenNameTerm,
   looksLikeServiceText,

@@ -1,9 +1,11 @@
+import { useEffect, useState } from 'react'
 import {
   BellRing,
   CalendarX,
   MessageCircle,
   PlugZap,
   UserX,
+  Volume2,
   Zap,
 } from 'lucide-react'
 import { cabinetSettingsApi, type NotificationsSettings } from '@/lib/cabinet-settings'
@@ -14,6 +16,17 @@ import {
   SettingsToast,
   useSettingsSection,
 } from '@/components/settings/useSettingsSection'
+import { Button } from '@/components/ui/Button'
+import {
+  playNotificationSound,
+  unlockNotificationSound,
+} from '@/lib/notification-sound'
+import {
+  enableBrowserNotifications,
+  getBrowserNotificationsPref,
+  getNotificationPermission,
+  setBrowserNotificationsPref,
+} from '@/lib/notification-alerts'
 
 const NOTIFICATION_ITEMS: {
   key: Exclude<keyof NotificationsSettings, 'soundEnabled'>
@@ -59,12 +72,27 @@ const NOTIFICATION_ITEMS: {
   },
 ]
 
+function permissionLabel(p: NotificationPermission | 'unsupported') {
+  if (p === 'granted') return 'Autorisée'
+  if (p === 'denied') return 'Refusée'
+  if (p === 'unsupported') return 'Non supportée'
+  return 'Non demandée'
+}
+
 export function NotificationsSettingsSection({ canEdit }: { canEdit: boolean }) {
   const s = useSettingsSection<NotificationsSettings>({
     load: cabinetSettingsApi.getNotifications,
     save: cabinetSettingsApi.saveNotifications,
     canEdit,
   })
+  const [perm, setPerm] = useState<NotificationPermission | 'unsupported'>(() => getNotificationPermission())
+  const [browserOn, setBrowserOn] = useState(() => getBrowserNotificationsPref())
+  const [testMsg, setTestMsg] = useState('')
+
+  useEffect(() => {
+    setPerm(getNotificationPermission())
+    setBrowserOn(getBrowserNotificationsPref())
+  }, [])
 
   if (s.loading || !s.draft) {
     return <SettingsSectionLoader error={s.error} onRetry={s.refresh} />
@@ -72,9 +100,34 @@ export function NotificationsSettingsSection({ canEdit }: { canEdit: boolean }) 
 
   const d = s.draft
 
+  async function onEnableBrowser() {
+    const result = await enableBrowserNotifications()
+    setPerm(result)
+    setBrowserOn(true)
+    await unlockNotificationSound()
+    if (result === 'granted') setTestMsg('Notifications navigateur activées.')
+    else if (result === 'denied') {
+      setTestMsg('Permission refusée par le navigateur. Réactivez-la dans les paramètres Chrome du site.')
+    } else if (result === 'unsupported') {
+      setTestMsg('Ce navigateur ne prend pas en charge les notifications système.')
+    } else {
+      setTestMsg('Permission non accordée.')
+    }
+  }
+
+  async function onTestSound() {
+    const unlocked = await unlockNotificationSound()
+    if (!unlocked) {
+      setTestMsg('Le navigateur bloque le son. Cliquez à nouveau après interaction avec la page.')
+      return
+    }
+    playNotificationSound([-1])
+    setTestMsg('Son de test joué.')
+  }
+
   return (
     <>
-      <SettingsToast message={s.toast} />
+      <SettingsToast message={s.toast || testMsg} />
       <div className="grid gap-3">
         <div className="rounded-[14px] border border-border bg-white p-4">
           <SettingsSwitch
@@ -84,7 +137,46 @@ export function NotificationsSettingsSection({ canEdit }: { canEdit: boolean }) 
             onChange={(v) => s.patch({ soundEnabled: v })}
             disabled={!canEdit}
           />
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<Volume2 className="h-4 w-4" />}
+              onClick={() => void onTestSound()}
+            >
+              Tester le son
+            </Button>
+          </div>
         </div>
+
+        <div className="rounded-[14px] border border-border bg-white p-4">
+          <SettingsSwitch
+            label="Notifications navigateur"
+            description="Afficher une notification système Windows/macOS lorsque le Smart CRM est en arrière-plan."
+            checked={browserOn && perm !== 'denied'}
+            onChange={(v) => {
+              setBrowserOn(v)
+              setBrowserNotificationsPref(v)
+              if (v && perm !== 'granted') void onEnableBrowser()
+            }}
+            disabled={!canEdit || perm === 'unsupported'}
+          />
+          <p className="mt-2 text-xs text-muted">
+            Permission navigateur : {permissionLabel(perm)}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<BellRing className="h-4 w-4" />}
+              onClick={() => void onEnableBrowser()}
+              disabled={!canEdit || perm === 'unsupported'}
+            >
+              Activer les notifications
+            </Button>
+          </div>
+        </div>
+
         {NOTIFICATION_ITEMS.map((item) => (
           <div
             key={item.key}

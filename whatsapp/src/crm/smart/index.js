@@ -425,6 +425,11 @@ function createSmartCrm(db, crmRepo = null) {
     if (getSetting('appointment_source') == null) {
       setSetting('appointment_source', { source: 'local_crm' })
     }
+
+    try {
+      const { repairCorruptedAppointmentTypeLabels } = require('../services')
+      repairCorruptedAppointmentTypeLabels(db)
+    } catch { /* non-blocking */ }
   }
 
   seedIfEmpty()
@@ -2564,6 +2569,8 @@ function createSmartCrm(db, crmRepo = null) {
     handleInboundConfirmationReply: (...args) => appointmentConfirmation.handleInboundConfirmationReply(...args),
     runConfirmationTick: (...args) => appointmentConfirmation.runConfirmationTick(...args),
     confirmAppointmentViaEngine: (...args) => appointmentConfirmation.confirmAppointment(...args),
+    confirmAppointmentAndNotify: (...args) => appointmentConfirmation.confirmAppointmentAndNotify(...args),
+    notifyPatientStaffConfirmation: (...args) => appointmentConfirmation.notifyPatientOfStaffConfirmation(...args),
     slotProposals,
     searchPatientsForSlot: (...args) => slotProposals.searchPatientsForSlot(...args),
     createSlotProposal: (...args) => slotProposals.createAndSendProposal(...args),

@@ -6129,6 +6129,66 @@ app.patch('/dashboard/api/crm/appointments/:id', ensureDashboardSession, async (
       })
     }
 
+    // Staff manual confirm → WhatsApp notify patient (mirror cancel notify)
+    if (
+      String(body.status || '') === 'confirmed'
+      && Object.keys(body).every((k) => k === 'status' || k === 'source')
+      && typeof crm.smart?.confirmAppointmentAndNotify === 'function'
+    ) {
+      const confirmOpts = {
+        source: body.source || 'staff_dashboard',
+        actorName: req.dashboardUser?.displayName || req.dashboardUser?.username || null,
+        actor: getAuthenticatedActor(req.dashboardUser),
+      }
+      const result = await crm.smart.confirmAppointmentAndNotify(req.params.id, confirmOpts)
+      if (!result.ok && result.reason === 'not_found') {
+        return res.status(404).json({ ok: false, error: 'Rendez-vous introuvable' })
+      }
+      if (!result.ok && result.reason === 'invalid_status') {
+        return res.status(400).json({
+          ok: false,
+          error: 'Ce rendez-vous ne peut pas être confirmé',
+        })
+      }
+      const appt = result.appointment || null
+      const actor = getAuthenticatedActor(req.dashboardUser)
+      if (actor && appt && !result.already) {
+        crm.smart?.recordActivity?.({
+          event_type: 'appointment_confirmed',
+          category: 'appointment',
+          actor,
+          origin: 'dashboard',
+          source: 'dashboard',
+          patient_id: appt.customer_id,
+          appointment_id: Number(req.params.id),
+          title: 'Rendez-vous confirmé',
+          old_value: { status: 'non_confirme' },
+          new_value: {
+            date: appt.appointment_date,
+            time: String(appt.appointment_time || '').slice(0, 5),
+            status: 'confirmed',
+          },
+          source_event_id: `appointment:confirm:${req.params.id}:${Date.now()}`,
+        })
+      }
+      return res.json({
+        ok: true,
+        already: Boolean(result.already),
+        whatsapp: result.whatsapp || null,
+        appointment: appt
+          ? {
+            id: appt.id,
+            status: appt.status || 'confirmed',
+            appointment_date: appt.appointment_date,
+            appointment_time: appt.appointment_time,
+            customer_id: appt.customer_id,
+            full_name: appt.full_name,
+            phone_number: appt.phone_number,
+          }
+          : { id: Number(req.params.id), status: 'confirmed' },
+      })
+    }
+
     const beforeRow = crm?.db?.prepare(`
       SELECT a.id, a.appointment_date, a.appointment_time, a.status, a.customer_id
       FROM appointments a WHERE a.id = ?

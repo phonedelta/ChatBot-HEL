@@ -63,6 +63,14 @@ export function shouldPlaySoundForNotification(
   prefs: NotificationAlertPreferences,
 ): boolean {
   if (prefs.soundEnabled === false) return false
+  return shouldAlertForNotification(notification, prefs)
+}
+
+/** Type toggles only — used for OS/system alerts even when sound is muted. */
+export function shouldAlertForNotification(
+  notification: DashNotification,
+  prefs: NotificationAlertPreferences,
+): boolean {
   const key = NOTIFICATION_TYPE_SETTINGS_KEY[notification.type]
   if (!key) return true
   return prefs[key] !== false
