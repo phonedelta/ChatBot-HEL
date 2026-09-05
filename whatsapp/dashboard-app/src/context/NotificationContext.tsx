@@ -51,6 +51,7 @@ const DEFAULT_PREFS: NotificationAlertPreferences = {
   soundEnabled: true,
   newPatientMessage: true,
   patientNoResponse: true,
+  appointmentCreated: true,
   appointmentCancelled: true,
   appointmentUnconfirmed: true,
   slotReleased: true,
