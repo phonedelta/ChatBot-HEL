@@ -8,8 +8,6 @@ import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/smart/PageBits'
 import { Skeleton } from '@/components/ui/Skeleton'
 
-type ConnectMode = 'qr' | 'phone'
-
 type QrPayload = {
   ok: boolean
   qr?: string | null
@@ -17,28 +15,13 @@ type QrPayload = {
   instance?: WaInstance
   error?: string
   lastError?: string | null
-  pairing_code?: string | null
-  pairing_code_display?: string | null
-  pairing_phone?: string | null
-}
-
-type PairPayload = {
-  ok: boolean
-  state?: string
-  instance?: WaInstance
-  error?: string
-  lastError?: string | null
-  pairing_code?: string | null
-  pairing_code_display?: string | null
-  pairing_phone?: string | null
-  pending?: boolean
 }
 
 function whatsappStatusLabel(state?: string | null) {
   const v = String(state || '').toLowerCase()
   if (v === 'ready') return 'Connecté'
   if (v === 'authenticated' || v === 'connecting') return 'Connexion en cours'
-  if (v === 'qr' || v === 'code') return 'Connexion requise'
+  if (v === 'qr') return 'Connexion requise'
   if (v === 'initializing' || v === 'recovering' || v === 'pairing' || v === 'opening') return 'Connexion en cours'
   if (v === 'disconnected' || v === 'missing') return 'Déconnecté'
   if (v === 'auth_failure') return 'Erreur de connexion'
@@ -51,7 +34,7 @@ function isConnected(state?: string | null) {
 
 function isConnecting(state?: string | null) {
   const v = String(state || '').toLowerCase()
-  return ['initializing', 'qr', 'code', 'recovering', 'connecting', 'authenticated', 'pairing', 'opening'].includes(v)
+  return ['initializing', 'qr', 'recovering', 'connecting', 'authenticated', 'pairing', 'opening'].includes(v)
 }
 
 function looksLikeTechnicalId(value?: string | null) {
@@ -105,10 +88,7 @@ export function IntegrationsPage() {
   const [manageOpen, setManageOpen] = useState(false)
   const [qrOpen, setQrOpen] = useState(false)
   const [disconnectOpen, setDisconnectOpen] = useState(false)
-  const [connectMode, setConnectMode] = useState<ConnectMode>('qr')
-  const [pairPhoneInput, setPairPhoneInput] = useState('')
   const [qr, setQr] = useState<string | null>(null)
-  const [pairingCode, setPairingCode] = useState<string | null>(null)
   const [qrLoading, setQrLoading] = useState(false)
   const [qrError, setQrError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -154,7 +134,6 @@ export function IntegrationsPage() {
   useEffect(() => {
     if (isConnected(main?.state)) {
       setQr(null)
-      setPairingCode(null)
       if (qrOpen) {
         showToast('WhatsApp connecté.')
         setQrOpen(false)
@@ -164,12 +143,10 @@ export function IntegrationsPage() {
   }, [main?.state, qrOpen, showToast])
 
   async function fetchQr() {
-    setConnectMode('qr')
     setQrLoading(true)
     setError('')
     setQrError('')
     setQr(null)
-    setPairingCode(null)
     try {
       const started = await api<QrPayload>('/dashboard/api/instances/main/qr', {
         method: 'POST',
@@ -221,72 +198,6 @@ export function IntegrationsPage() {
     }
   }
 
-  async function fetchPairingCode() {
-    const phone = pairPhoneInput.trim()
-    if (!phone) {
-      setQrError('Indiquez le numéro WhatsApp du cabinet (ex. 0612345678).')
-      return
-    }
-
-    setConnectMode('phone')
-    setQrLoading(true)
-    setError('')
-    setQrError('')
-    setQr(null)
-    setPairingCode(null)
-    try {
-      const started = await api<PairPayload>('/dashboard/api/instances/main/pair', {
-        method: 'POST',
-        body: { phone_number: phone, force: true, wait_ms: 60000 },
-      })
-      if (started.instance) {
-        setInstances((prev) => mergeInstance(prev, started.instance))
-      }
-      const code = started.pairing_code_display || started.pairing_code || null
-      if (code) {
-        setPairingCode(code)
-        await load(true)
-        return
-      }
-      if (started.lastError) {
-        setQrError(started.lastError)
-      }
-      if (isConnected(started.state)) {
-        showToast('WhatsApp connecté.')
-        await load(true)
-        return
-      }
-
-      const deadline = Date.now() + 90000
-      while (Date.now() < deadline) {
-        await new Promise((resolve) => window.setTimeout(resolve, 2000))
-        const payload = await api<PairPayload>('/dashboard/api/instances/main/pair')
-        if (payload.instance) {
-          setInstances((prev) => mergeInstance(prev, payload.instance))
-        }
-        const nextCode = payload.pairing_code_display || payload.pairing_code || null
-        if (nextCode) {
-          setPairingCode(nextCode)
-          return
-        }
-        if (payload.lastError) {
-          setQrError(payload.lastError)
-        }
-        if (isConnected(payload.state)) {
-          showToast('WhatsApp connecté.')
-          return
-        }
-      }
-      setQrError((prev) => prev || 'Code de jumelage non généré à temps. Réessayez.')
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Impossible de générer le code'
-      setQrError(message)
-      setError(message)
-    } finally {
-      setQrLoading(false)
-    }
-  }
-
   async function reconnect() {
     setBusy(true)
     setError('')
@@ -298,7 +209,6 @@ export function IntegrationsPage() {
       await load()
       setManageOpen(false)
       setQrOpen(true)
-      setConnectMode('qr')
       await fetchQr()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Reconnexion impossible')
@@ -313,7 +223,6 @@ export function IntegrationsPage() {
     try {
       await api('/dashboard/api/instances/main', { method: 'DELETE' })
       setQr(null)
-      setPairingCode(null)
       setDisconnectOpen(false)
       setManageOpen(false)
       showToast('WhatsApp déconnecté.')
@@ -328,7 +237,6 @@ export function IntegrationsPage() {
   function openConnect() {
     setManageOpen(false)
     setQrOpen(true)
-    setConnectMode('qr')
     void fetchQr()
   }
 
@@ -532,77 +440,16 @@ export function IntegrationsPage() {
         <Modal onClose={() => setQrOpen(false)} className="max-w-md">
           <div className="p-5">
             <h3 className="text-lg font-semibold text-navy">Connecter WhatsApp</h3>
-
-            <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl bg-[#F5FAFC] p-1">
-              <button
-                type="button"
-                className={cn(
-                  'rounded-lg px-3 py-2 text-sm font-medium transition',
-                  connectMode === 'qr' ? 'bg-white text-navy shadow-sm' : 'text-muted',
-                )}
-                onClick={() => {
-                  setConnectMode('qr')
-                  setQrError('')
-                  if (!qr && !qrLoading) void fetchQr()
-                }}
-              >
-                QR code
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  'rounded-lg px-3 py-2 text-sm font-medium transition',
-                  connectMode === 'phone' ? 'bg-white text-navy shadow-sm' : 'text-muted',
-                )}
-                onClick={() => {
-                  setConnectMode('phone')
-                  setQrError('')
-                  setQr(null)
-                }}
-              >
-                Numéro (Android)
-              </button>
-            </div>
-
-            {connectMode === 'qr' ? (
-              <ol className="mt-3 list-decimal space-y-1.5 pl-4 text-sm text-muted">
-                <li>Ouvrez WhatsApp sur votre téléphone.</li>
-                <li>Accédez aux appareils connectés.</li>
-                <li>Scannez ce QR code.</li>
-              </ol>
-            ) : (
-              <ol className="mt-3 list-decimal space-y-1.5 pl-4 text-sm text-muted">
-                <li>Ouvrez WhatsApp → Appareils connectés → Lier un appareil.</li>
-                <li>Choisissez « Lier avec un numéro de téléphone ».</li>
-                <li>Saisissez le code à 8 caractères affiché ici.</li>
-              </ol>
-            )}
-
-            {connectMode === 'phone' ? (
-              <div className="mt-4 space-y-2">
-                <label className="block text-xs font-medium text-muted" htmlFor="pair-phone">
-                  Numéro WhatsApp du cabinet
-                </label>
-                <input
-                  id="pair-phone"
-                  type="tel"
-                  inputMode="tel"
-                  autoComplete="tel"
-                  placeholder="06XXXXXXXX ou 2126XXXXXXXX"
-                  value={pairPhoneInput}
-                  onChange={(e) => setPairPhoneInput(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm text-navy outline-none focus:border-cyan"
-                />
-              </div>
-            ) : null}
-
+            <ol className="mt-3 list-decimal space-y-1.5 pl-4 text-sm text-muted">
+              <li>Ouvrez WhatsApp sur votre téléphone.</li>
+              <li>Accédez aux appareils connectés.</li>
+              <li>Scannez ce QR code.</li>
+            </ol>
             <div className="mt-5 flex min-h-[240px] flex-col items-center justify-center">
               {qrLoading ? (
                 <div className="flex flex-col items-center gap-3 text-muted">
                   <Loader2 className="h-9 w-9 animate-spin text-cyan" />
-                  <p className="text-sm">
-                    {connectMode === 'phone' ? 'Génération du code…' : 'Génération du QR…'}
-                  </p>
+                  <p className="text-sm">Génération du QR…</p>
                   {qrError ? (
                     <p className="max-w-xs rounded-xl bg-danger/10 px-3 py-2 text-center text-xs text-danger">
                       {qrError}
@@ -611,16 +458,7 @@ export function IntegrationsPage() {
                 </div>
               ) : connected ? (
                 <p className="text-sm font-medium text-success">WhatsApp connecté avec succès.</p>
-              ) : connectMode === 'phone' && pairingCode ? (
-                <>
-                  <p className="font-mono text-3xl font-semibold tracking-[0.2em] text-navy">
-                    {pairingCode}
-                  </p>
-                  <p className="mt-3 max-w-xs text-center text-xs text-muted">
-                    Entrez ce code dans WhatsApp Android. Il se renouvelle environ toutes les 3 minutes.
-                  </p>
-                </>
-              ) : connectMode === 'qr' && qr ? (
+              ) : qr ? (
                 <>
                   <img
                     src={qr.startsWith('data:') ? qr : `data:image/png;base64,${qr}`}
@@ -631,11 +469,7 @@ export function IntegrationsPage() {
                 </>
               ) : (
                 <div className="space-y-2 text-center">
-                  <p className="text-sm text-muted">
-                    {connectMode === 'phone'
-                      ? 'Saisissez le numéro puis générez le code.'
-                      : 'Impossible d’afficher le QR pour le moment.'}
-                  </p>
+                  <p className="text-sm text-muted">Impossible d’afficher le QR pour le moment.</p>
                   {qrError ? (
                     <p className="rounded-xl bg-danger/10 px-3 py-2 text-xs text-danger">{qrError}</p>
                   ) : null}
@@ -647,12 +481,8 @@ export function IntegrationsPage() {
                 Fermer
               </Button>
               {!connected ? (
-                <Button
-                  size="sm"
-                  loading={qrLoading}
-                  onClick={() => void (connectMode === 'phone' ? fetchPairingCode() : fetchQr())}
-                >
-                  {connectMode === 'phone' ? (pairingCode ? 'Régénérer' : 'Générer le code') : 'Régénérer'}
+                <Button size="sm" loading={qrLoading} onClick={() => void fetchQr()}>
+                  Régénérer
                 </Button>
               ) : null}
             </div>
