@@ -62,7 +62,10 @@ const {
   isPrivateChatJid,
   serializedOf,
 } = require('./whatsapp-identity')
-const { formatPhoneDisplay } = require('./crm/phone')
+const { formatPhoneDisplay, normalizePhoneDigits } = require('./crm/phone')
+
+/** Per-instance phone for WhatsApp pairing-code auth (Android “link with phone number”). */
+const instancePairPhones = new Map()
 
 const port = Number(process.env.PORT || 8081)
 const provider = (process.env.WHATSAPP_PROVIDER || 'custom').toLowerCase()
@@ -285,6 +288,49 @@ function isActiveCrmDeterministicWorkflow(lead) {
     || stage === 'crm_collection'
     || stage === 'awaiting_patient'
 }
+
+/** Resume hint after a FAQ interrupt — draft/awaiting_field unchanged. */
+function buildBookingResumeHint(lead, languageHint = 'fr') {
+  if (!lead) return null
+  const darija = languageHint === 'darija' || languageHint === 'ar'
+  const awaiting = String(lead.awaiting_field || '')
+  if (awaiting === 'confirmation') {
+    return darija
+      ? 'وبالنسبة للموعد: إلا كانت المعلومات صحيحة جاوب بـ *نعم*، وإذا بغيتي تبدل شي حاجة قول ليا شنو تبدل.'
+      : 'Pour le rendez-vous : si tout est correct, répondez *OUI*. Sinon indiquez ce qu’il faut modifier.'
+  }
+  if (awaiting === 'slot_alternative') {
+    return darija
+      ? 'وبالنسبة للموعد، اختار رقم من الاقتراحات اللي فوق.'
+      : 'Pour le rendez-vous, choisissez un numéro parmi les propositions ci-dessus.'
+  }
+  if (awaiting === 'confirmation_rejection' || awaiting === 'fields_to_correct' || awaiting === 'field_correction') {
+    return darija
+      ? 'نقدروا نكمّلو تصحيح معلومات الموعد منين تكون واجد.'
+      : 'Nous pouvons reprendre la correction des informations du rendez-vous quand vous voulez.'
+  }
+  const fieldHints = {
+    full_name: darija ? 'وبالنسبة للموعد، باقي خاصني الاسم الكامل.' : 'Pour le rendez-vous, il me manque encore le nom complet.',
+    phone_number: darija ? 'وبالنسبة للموعد، باقي خاصني رقم الهاتف.' : 'Pour le rendez-vous, il me manque encore le numéro de téléphone.',
+    phone: darija ? 'وبالنسبة للموعد، باقي خاصني رقم الهاتف.' : 'Pour le rendez-vous, il me manque encore le numéro de téléphone.',
+    city: darija ? 'وبالنسبة للموعد، شنو هي المدينة ديالك؟' : 'Pour le rendez-vous, quelle est votre ville ?',
+    problem: darija ? 'وبالنسبة للموعد، شنو هو المشكل أو الخدمة؟' : 'Pour le rendez-vous, quel est le motif / la demande ?',
+    reason: darija ? 'وبالنسبة للموعد، شنو هو المشكل أو الخدمة؟' : 'Pour le rendez-vous, quel est le motif / la demande ?',
+    appointment: darija ? 'وبالنسبة للموعد، عافاك عطيني النهار والساعة.' : 'Pour le rendez-vous, indiquez le jour et l’heure.',
+    bulk: darija ? 'نقدروا نكمّلو طلب الموعد منين تكون واجد.' : 'Nous pouvons reprendre la prise de rendez-vous quand vous voulez.',
+  }
+  if (fieldHints[awaiting]) return fieldHints[awaiting]
+  try {
+    const { checkCustomerData } = require('./crm/checkCustomerData')
+    const missing = checkCustomerData(lead).missing || []
+    const first = missing[0]
+    if (first && fieldHints[first]) return fieldHints[first]
+  } catch { /* optional */ }
+  return darija
+    ? 'نقدروا نكمّلو طلب الموعد منين تكون واجد.'
+    : 'Nous pouvons reprendre la prise de rendez-vous quand vous voulez.'
+}
+
 const aiConversationQueues = new Map()
 const aiKnowledgeBase = loadAiKnowledgeBase()
 const openAiClient = openAiApiKey
@@ -934,6 +980,8 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
             || semantic.intent === 'ASK_SERVICES'
             || semantic.intent === 'ASK_LOCATION'
             || semantic.intent === 'ASK_OPENING_HOURS'
+            || semantic.intent === 'ASK_IDENTITY'
+            || semantic.intent === 'ASK_PHONE'
           ) {
             router.bookAppointment = false
           }
@@ -1401,41 +1449,66 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       resetNluUnclearCount(key)
     }
 
-    // FAQ interrupt during active booking — answer location/hours without clearing draft
+    // FAQ interrupt during active booking — answer without clearing draft, then resume
     const leadPeekFaq = crm?.repo?.getLead?.(key) || null
     const bookingDraftActive = leadPeekFaq
       && ['awaiting_form', 'crm_collection', 'confirmation', 'awaiting_patient'].includes(String(leadPeekFaq.stage || ''))
     const faqIntent = String(router.intent || '').toUpperCase()
     const faqConf = Number(router.intentConfidence || 0)
+    const FAQ_INTERRUPT_INTENTS = new Set([
+      'ASK_LOCATION',
+      'ASK_OPENING_HOURS',
+      'ASK_IDENTITY',
+      'ASK_PHONE',
+      'ASK_PRICE',
+      'ASK_SERVICES',
+    ])
+    const slotAltActive = String(leadPeekFaq?.awaiting_field || '') === 'slot_alternative'
     if (
-      bookingDraftActive
+      (bookingDraftActive || slotAltActive)
       && !isVoice
       && faqConf >= 0.7
-      && (faqIntent === 'ASK_LOCATION' || faqIntent === 'ASK_OPENING_HOURS')
+      && FAQ_INTERRUPT_INTENTS.has(faqIntent)
       && !hasPriorityOverBooking(routingState)
     ) {
-      let faqReply = null
+      let faqReply = buildIntentDirectReply(faqIntent, languageHint)
+        || buildIntentDirectReply(faqIntent, 'fr')
       try {
         const { HEL_CLINIC } = require('./crm/smart/defaults')
         const lang = languageHint === 'darija' || languageHint === 'ar' ? 'darija' : 'fr'
-        if (faqIntent === 'ASK_LOCATION') {
+        if (!faqReply && faqIntent === 'ASK_LOCATION') {
           faqReply = lang === 'darija'
-            ? `العنوان ديالنا:\n${HEL_CLINIC.address}\n\nنقدروا نكمّلو الحجز ديالك منين تكون واجد.`
-            : `Notre adresse :\n${HEL_CLINIC.address}\n\nNous pouvons reprendre votre prise de rendez-vous quand vous voulez.`
-        } else if (faqIntent === 'ASK_OPENING_HOURS') {
+            ? `العنوان ديالنا:\n${HEL_CLINIC.address}`
+            : `Notre adresse :\n${HEL_CLINIC.address}`
+        } else if (!faqReply && faqIntent === 'ASK_OPENING_HOURS') {
           faqReply = lang === 'darija'
-            ? 'كنخدمو من الإثنين للسبت (الصباح والعشية حسب اليوم).\n\nنقدروا نكمّلو الحجز ديالك منين تكون واجد.'
-            : 'Nous sommes ouverts du lundi au samedi (matin et après-midi selon le jour).\n\nNous pouvons reprendre votre prise de rendez-vous quand vous voulez.'
+            ? 'كنخدمو من الإثنين للسبت (الصباح والعشية حسب اليوم).'
+            : 'Nous sommes ouverts du lundi au samedi (matin et après-midi selon le jour).'
+        } else if (!faqReply && faqIntent === 'ASK_PRICE') {
+          faqReply = lang === 'darija'
+            ? 'الأثمنة كتعتمد على الفحص. عافاك عيط لينا على المركز باش نعطيوك تقدير دقيق، ولا كمّل الحجز و الفريق غادي يتواصل معاك.'
+            : 'Les tarifs dépendent de l’examen. Appelez le cabinet pour un devis précis, ou poursuivez la prise de rendez-vous — l’équipe vous recontactera.'
         }
       } catch {
-        faqReply = null
+        /* keep faqReply */
       }
+
       if (faqReply) {
+        const resume = buildBookingResumeHint(leadPeekFaq, languageHint)
+        const fullReply = resume ? `${faqReply}\n\n${resume}` : faqReply
+        if (process.env.CRM_DEBUG_BOOKING === '1') {
+          console.log('[booking-interrupt]', {
+            state: leadPeekFaq?.stage,
+            awaiting: leadPeekFaq?.awaiting_field,
+            intent: faqIntent,
+            resumeState: leadPeekFaq?.awaiting_field,
+          })
+        }
         try {
           crm.smart?.trackWhatsAppTurn?.({
             chatId: options.chatId || key,
             conversationId: key,
-            outboundText: faqReply,
+            outboundText: fullReply,
             outboundAuthor: 'ai',
             contactName: options.contactName || null,
           })
@@ -1445,10 +1518,10 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
         setAiConversationHistory(key, [
           ...history,
           { role: 'user', content: isVoice && cleanPatientText ? `[vocal] ${cleanPatientText}` : content },
-          { role: 'assistant', content: faqReply },
+          { role: 'assistant', content: fullReply },
         ])
         return {
-          reply: faqReply,
+          reply: fullReply,
           reason: 'booking_faq_interrupt',
           model: openAiModel,
           language_hint: languageHint,
@@ -1458,6 +1531,35 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
           should_skip_llm: true,
           router,
           lead: leadPeekFaq,
+        }
+      }
+    }
+
+    // Identity FAQ outside booking — never seed a name / never open form
+    if (
+      !isVoice
+      && faqConf >= 0.7
+      && (faqIntent === 'ASK_IDENTITY' || faqIntent === 'ASK_PHONE')
+      && !bookingDraftActive
+    ) {
+      const identityReply = buildIntentDirectReply(faqIntent, languageHint)
+        || buildIntentDirectReply(faqIntent, 'fr')
+      if (identityReply) {
+        setAiConversationHistory(key, [
+          ...history,
+          { role: 'user', content: isVoice && cleanPatientText ? `[vocal] ${cleanPatientText}` : content },
+          { role: 'assistant', content: identityReply },
+        ])
+        return {
+          reply: identityReply,
+          reason: faqIntent === 'ASK_IDENTITY' ? 'ask_identity_direct' : 'ask_phone_direct',
+          model: openAiModel,
+          language_hint: languageHint,
+          is_voice: isVoice,
+          intent: faqIntent,
+          intent_confidence: faqConf,
+          should_skip_llm: true,
+          router,
         }
       }
     }
@@ -3499,6 +3601,56 @@ function publicAccountPhone(record) {
   return resolved ? formatPhoneDisplay(resolved) : null
 }
 
+function normalizePairingPhone(value) {
+  const digits = normalizePhoneDigits(value)
+  if (!digits || digits.length < 10 || digits.length > 15) {
+    return null
+  }
+  return digits
+}
+
+function formatPairingCodeDisplay(code) {
+  const raw = String(code || '').replace(/[\s-]+/g, '').toUpperCase()
+  if (!raw) return null
+  if (raw.length === 8) {
+    return `${raw.slice(0, 4)}-${raw.slice(4)}`
+  }
+  return raw
+}
+
+function getPairPhoneForInstance(instanceId) {
+  const key = normalizeInstanceId(instanceId)
+  if (instancePairPhones.has(key)) {
+    return instancePairPhones.get(key) || null
+  }
+  return normalizePairingPhone(process.env.WA_PAIR_PHONE || '')
+}
+
+function setPairPhoneForInstance(instanceId, phone) {
+  const key = normalizeInstanceId(instanceId)
+  if (phone === null || phone === undefined || String(phone).trim() === '') {
+    instancePairPhones.delete(key)
+    return null
+  }
+
+  const normalized = normalizePairingPhone(phone)
+  if (!normalized) {
+    const error = new Error('Numéro invalide pour le jumelage WhatsApp (ex. 212612345678 ou 0612345678)')
+    error.code = 'INVALID_PHONE'
+    throw error
+  }
+
+  instancePairPhones.set(key, normalized)
+  return normalized
+}
+
+function clearPairingChallenge(record) {
+  if (!record) return
+  record.pairingCode = null
+  record.pairingCodeCreatedAt = null
+  record.pairingPhone = null
+}
+
 function serializeStatus(record) {
   if (!record) {
     return {
@@ -3512,6 +3664,9 @@ function serializeStatus(record) {
       pendingMessages: 0,
       connected: false,
       phone_resolved: false,
+      pairing_code: null,
+      pairing_code_display: null,
+      pairing_phone: null,
       account: {
         phone: null,
         resolved: false,
@@ -3522,6 +3677,7 @@ function serializeStatus(record) {
 
   const phone = publicAccountPhone(record)
   const ready = String(record.state || '').toLowerCase() === 'ready'
+  const pairingCode = record.pairingCode || null
   return {
     state: record.state || 'missing',
     lastSeenAt: record.lastSeenAt || null,
@@ -3533,6 +3689,9 @@ function serializeStatus(record) {
     pendingMessages: Number(record.pendingMessages || 0),
     connected: ready,
     phone_resolved: Boolean(phone),
+    pairing_code: pairingCode,
+    pairing_code_display: formatPairingCodeDisplay(pairingCode),
+    pairing_phone: record.pairingPhone || getPairPhoneForInstance(record.instanceId) || null,
     account: {
       phone,
       resolved: Boolean(phone),
@@ -3613,8 +3772,12 @@ async function killSessionBrowsers(instanceId) {
   await sleep(800)
 }
 
-async function resetInstanceForQr(instanceId, reason = 'Dashboard QR refresh') {
+async function resetInstanceForQr(instanceId, reason = 'Dashboard QR refresh', options = {}) {
   const normalizedInstanceId = normalizeInstanceId(instanceId)
+
+  if (Object.prototype.hasOwnProperty.call(options, 'pairPhone')) {
+    setPairPhoneForInstance(normalizedInstanceId, options.pairPhone)
+  }
 
   let record = getInstance(normalizedInstanceId)
   if (record) {
@@ -3633,6 +3796,7 @@ async function resetInstanceForQr(instanceId, reason = 'Dashboard QR refresh') {
     record.client = client
     record.qr = null
     record.qrCreatedAt = null
+    clearPairingChallenge(record)
     record.listenerClient = null
     attachClientListeners(record)
     updateState(record, 'disconnected', {
@@ -3706,6 +3870,10 @@ function serializeDashboardInstance(instanceId) {
     account: baseStatus.account,
     qr_available: Boolean(record?.qr),
     qr_created_at: record?.qrCreatedAt || null,
+    pairing_code: baseStatus.pairing_code,
+    pairing_code_display: baseStatus.pairing_code_display,
+    pairing_phone: baseStatus.pairing_phone,
+    pairing_code_available: Boolean(record?.pairingCode),
   }
 }
 
@@ -3812,13 +3980,25 @@ function buildClient(instanceId) {
     })
   }
 
-  return new WaClient({
+  const pairPhone = getPairPhoneForInstance(instanceId)
+  const clientOptions = {
     authStrategy: new LocalAuth({
       clientId,
       dataPath: waSessionPath,
     }),
     puppeteer,
-  })
+  }
+
+  // Android WhatsApp: “Link with phone number instead” — must be set at Client init
+  // (do not call requestPairingCode from the qr handler).
+  if (pairPhone) {
+    clientOptions.pairWithPhoneNumber = {
+      phoneNumber: pairPhone,
+      showNotification: true,
+    }
+  }
+
+  return new WaClient(clientOptions)
 }
 
 function clearReconnectTimer(record) {
@@ -3855,6 +4035,7 @@ function initializeRecord(record) {
         record.client = client
         record.qr = null
         record.qrCreatedAt = null
+        clearPairingChallenge(record)
         record.listenerClient = null
         attachClientListeners(record)
         updateState(record, 'initializing', { lastError: null })
@@ -3935,6 +4116,7 @@ async function removeInstance(instanceId, options = {}) {
   const shouldDeleteSession = options.deleteSession !== false
   const record = getInstance(normalizedInstanceId)
   const hadStoredSession = hasStoredSession(normalizedInstanceId)
+  setPairPhoneForInstance(normalizedInstanceId, null)
 
   if (record) {
     clearReconnectTimer(record)
@@ -4282,7 +4464,34 @@ function attachClientListeners(record) {
       record.qrCreatedAt = null
     }
 
+    clearPairingChallenge(record)
     updateState(record, 'qr', {
+      lastError: null,
+      phone: null,
+      phoneE164: null,
+      phoneResolved: false,
+    })
+  })
+
+  client.on('code', (code) => {
+    const pairingCode = String(code || '').replace(/[\s-]+/g, '').toUpperCase()
+    if (!pairingCode) {
+      return
+    }
+
+    record.qr = null
+    record.qrCreatedAt = null
+    record.pairingCode = pairingCode
+    record.pairingCodeCreatedAt = nowIso()
+    record.pairingPhone = getPairPhoneForInstance(record.instanceId)
+
+    console.log('[iadis-wa] pairing code ready', {
+      instance_id: record.instanceId,
+      phone: record.pairingPhone,
+      code: formatPairingCodeDisplay(pairingCode),
+    })
+
+    updateState(record, 'code', {
       lastError: null,
       phone: null,
       phoneE164: null,
@@ -4292,6 +4501,7 @@ function attachClientListeners(record) {
 
   client.on('authenticated', () => {
     clearReconnectTimer(record)
+    clearPairingChallenge(record)
     if (record.state !== 'ready') {
       updateState(record, 'authenticated', { lastError: null })
     }
@@ -4299,6 +4509,7 @@ function attachClientListeners(record) {
 
   client.on('ready', () => {
     clearReconnectTimer(record)
+    clearPairingChallenge(record)
     updateState(record, 'ready', { lastError: null })
     void refreshConnectedAccount(record)
     syncAutomationHistory(record, 'ready')
@@ -4333,7 +4544,7 @@ function attachClientListeners(record) {
     if (isWhatsAppWaitingForPairing(state)) {
       if (record.state === 'ready') {
         updateState(record, 'connecting', { lastError: null })
-      } else if (record.state !== 'qr') {
+      } else if (record.state !== 'qr' && record.state !== 'code') {
         updateState(record, 'connecting', { lastError: null })
       }
       return
@@ -4387,6 +4598,9 @@ function ensureInstance(instanceId) {
       lastError: null,
       qr: null,
       qrCreatedAt: null,
+      pairingCode: null,
+      pairingCodeCreatedAt: null,
+      pairingPhone: null,
       initPromise: null,
       recoverPromise: null,
       healthCheckPromise: null,
@@ -4411,12 +4625,17 @@ function ensureInstance(instanceId) {
   return record
 }
 
-async function waitForQr(record, waitMs = qrWaitMs) {
+async function waitForAuthChallenge(record, waitMs = qrWaitMs, { prefer = 'any' } = {}) {
   const startedAt = Date.now()
+  const wantCode = prefer === 'code' || prefer === 'any'
+  const wantQr = prefer === 'qr' || prefer === 'any'
 
   while (Date.now() - startedAt < waitMs) {
-    if (record.qr) {
-      return record.qr
+    if (wantCode && record.pairingCode) {
+      return { kind: 'code', value: record.pairingCode }
+    }
+    if (wantQr && record.qr) {
+      return { kind: 'qr', value: record.qr }
     }
 
     const state = String(record.state || '').toLowerCase()
@@ -4435,7 +4654,23 @@ async function waitForQr(record, waitMs = qrWaitMs) {
     await sleep(300)
   }
 
-  return record.qr || null
+  if (wantCode && record.pairingCode) {
+    return { kind: 'code', value: record.pairingCode }
+  }
+  if (wantQr && record.qr) {
+    return { kind: 'qr', value: record.qr }
+  }
+  return null
+}
+
+async function waitForQr(record, waitMs = qrWaitMs) {
+  const challenge = await waitForAuthChallenge(record, waitMs, { prefer: 'qr' })
+  return challenge?.kind === 'qr' ? challenge.value : null
+}
+
+async function waitForPairingCode(record, waitMs = qrWaitMs) {
+  const challenge = await waitForAuthChallenge(record, waitMs, { prefer: 'code' })
+  return challenge?.kind === 'code' ? challenge.value : null
 }
 
 async function storeIncomingAndGetDecision(normalizedPayload) {
@@ -6428,7 +6663,10 @@ app.get('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, (req,
     instance: serializeDashboardInstance(instanceId),
     state: record?.state || 'missing',
     qr: record?.qr || null,
-    created_at: record?.qrCreatedAt || null,
+    pairing_code: record?.pairingCode || null,
+    pairing_code_display: formatPairingCodeDisplay(record?.pairingCode),
+    pairing_phone: record?.pairingPhone || getPairPhoneForInstance(instanceId) || null,
+    created_at: record?.qrCreatedAt || record?.pairingCodeCreatedAt || null,
     lastError: record?.lastError || null,
   })
 })
@@ -6441,6 +6679,9 @@ app.post('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, asyn
   const waitMs = Number.isFinite(rawWait) ? Math.max(0, rawWait) : defaultDashboardQrWaitMs
 
   try {
+    // QR mode must not keep a pending pairWithPhoneNumber option.
+    setPairPhoneForInstance(instanceId, null)
+
     let record = getInstance(instanceId)
     const state = String(record?.state || '').toLowerCase()
 
@@ -6450,6 +6691,9 @@ app.post('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, asyn
         instance: serializeDashboardInstance(instanceId),
         state: record.state,
         qr: null,
+        pairing_code: null,
+        pairing_code_display: null,
+        pairing_phone: null,
         created_at: record.qrCreatedAt || null,
         lastError: null,
       })
@@ -6460,10 +6704,11 @@ app.post('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, asyn
       || !record
       || browserLocked
       || !record.qr
-      || ['disconnected', 'auth_failure', 'missing'].includes(state)
+      || Boolean(record.pairingCode)
+      || ['disconnected', 'auth_failure', 'missing', 'code'].includes(state)
 
     record = needsReset
-      ? await resetInstanceForQr(instanceId, 'Dashboard QR generation')
+      ? await resetInstanceForQr(instanceId, 'Dashboard QR generation', { pairPhone: null })
       : ensureInstance(instanceId)
 
     const qr = waitMs > 0 ? await waitForQr(record, waitMs) : (record.qr || null)
@@ -6474,6 +6719,9 @@ app.post('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, asyn
       instance: serializeDashboardInstance(instanceId),
       state: record.state,
       qr,
+      pairing_code: record.pairingCode || null,
+      pairing_code_display: formatPairingCodeDisplay(record.pairingCode),
+      pairing_phone: record.pairingPhone || null,
       created_at: record.qrCreatedAt || null,
       lastError: record.lastError || null,
       pending: !qr && finalState !== 'ready',
@@ -6483,6 +6731,93 @@ app.post('/dashboard/api/instances/:instanceId/qr', ensureDashboardSession, asyn
     return res.status(code).json({
       ok: false,
       error: error.message || 'Unable to fetch dashboard QR code',
+    })
+  }
+})
+
+app.get('/dashboard/api/instances/:instanceId/pair', ensureDashboardSession, (req, res) => {
+  if (!assertPermission(req, res, PERMISSIONS.MANAGE_WHATSAPP)) return undefined
+  const instanceId = normalizeInstanceId(req.params.instanceId)
+  const record = getInstance(instanceId)
+
+  return res.json({
+    ok: true,
+    instance: serializeDashboardInstance(instanceId),
+    state: record?.state || 'missing',
+    pairing_code: record?.pairingCode || null,
+    pairing_code_display: formatPairingCodeDisplay(record?.pairingCode),
+    pairing_phone: record?.pairingPhone || getPairPhoneForInstance(instanceId) || null,
+    created_at: record?.pairingCodeCreatedAt || null,
+    lastError: record?.lastError || null,
+  })
+})
+
+app.post('/dashboard/api/instances/:instanceId/pair', ensureDashboardSession, async (req, res) => {
+  if (!assertPermission(req, res, PERMISSIONS.MANAGE_WHATSAPP)) return undefined
+  const instanceId = normalizeInstanceId(req.params.instanceId)
+  const force = parseBoolean(req.body?.force, true)
+  const rawWait = Number(req.body?.wait_ms)
+  const waitMs = Number.isFinite(rawWait) ? Math.max(0, rawWait) : defaultDashboardQrWaitMs
+  const phoneInput = req.body?.phone_number ?? req.body?.phone ?? req.body?.pairing_phone ?? ''
+
+  try {
+    const pairPhone = setPairPhoneForInstance(instanceId, phoneInput)
+    if (!pairPhone) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Indiquez le numéro WhatsApp à lier (ex. 0612345678 ou 212612345678).',
+      })
+    }
+
+    let record = getInstance(instanceId)
+    const state = String(record?.state || '').toLowerCase()
+
+    if (state === 'ready' && !force) {
+      return res.json({
+        ok: true,
+        instance: serializeDashboardInstance(instanceId),
+        state: record.state,
+        pairing_code: null,
+        pairing_code_display: null,
+        pairing_phone: pairPhone,
+        created_at: null,
+        lastError: null,
+      })
+    }
+
+    const browserLocked = /browser is already running/i.test(String(record?.lastError || ''))
+    const needsReset = force
+      || !record
+      || browserLocked
+      || !record.pairingCode
+      || record.pairingPhone !== pairPhone
+      || ['disconnected', 'auth_failure', 'missing', 'qr'].includes(state)
+
+    record = needsReset
+      ? await resetInstanceForQr(instanceId, 'Dashboard phone pairing', { pairPhone })
+      : ensureInstance(instanceId)
+
+    const pairingCode = waitMs > 0
+      ? await waitForPairingCode(record, waitMs)
+      : (record.pairingCode || null)
+    const finalState = String(record.state || '').toLowerCase()
+
+    return res.json({
+      ok: true,
+      instance: serializeDashboardInstance(instanceId),
+      state: record.state,
+      pairing_code: pairingCode || record.pairingCode || null,
+      pairing_code_display: formatPairingCodeDisplay(pairingCode || record.pairingCode),
+      pairing_phone: record.pairingPhone || pairPhone,
+      created_at: record.pairingCodeCreatedAt || null,
+      lastError: record.lastError || null,
+      pending: !(pairingCode || record.pairingCode) && finalState !== 'ready',
+    })
+  } catch (error) {
+    const status = error.code === 'INVALID_PHONE' ? 400 : (error.code === 'WA_NOT_AVAILABLE' ? 501 : 500)
+    return res.status(status).json({
+      ok: false,
+      error: error.message || 'Unable to start phone pairing',
     })
   }
 })
@@ -7061,6 +7396,7 @@ app.post('/instance/qr', ensureInternalToken, async (req, res) => {
   const instanceId = normalizeInstanceId(req.body?.instance_id)
 
   try {
+    setPairPhoneForInstance(instanceId, null)
     const record = ensureInstance(instanceId)
     const qr = await waitForQr(record)
 
@@ -7076,6 +7412,43 @@ app.post('/instance/qr', ensureInternalToken, async (req, res) => {
     return res.status(code).json({
       ok: false,
       error: error.message || 'Unable to fetch QR',
+    })
+  }
+})
+
+app.post('/instance/pair', ensureInternalToken, async (req, res) => {
+  const instanceId = normalizeInstanceId(req.body?.instance_id)
+  const phoneInput = req.body?.phone_number ?? req.body?.phone ?? ''
+  const force = parseBoolean(req.body?.force, true)
+
+  try {
+    const pairPhone = setPairPhoneForInstance(instanceId, phoneInput)
+    if (!pairPhone) {
+      return res.status(400).json({
+        ok: false,
+        error: 'phone_number is required (international digits, e.g. 212612345678)',
+      })
+    }
+
+    const record = force
+      ? await resetInstanceForQr(instanceId, 'API phone pairing', { pairPhone })
+      : ensureInstance(instanceId)
+    const pairingCode = await waitForPairingCode(record)
+
+    return res.json({
+      ok: true,
+      instance_id: instanceId,
+      state: record.state,
+      pairing_code: pairingCode || record.pairingCode || null,
+      pairing_code_display: formatPairingCodeDisplay(pairingCode || record.pairingCode),
+      pairing_phone: record.pairingPhone || pairPhone,
+      created_at: record.pairingCodeCreatedAt || null,
+    })
+  } catch (error) {
+    const status = error.code === 'INVALID_PHONE' ? 400 : (error.code === 'WA_NOT_AVAILABLE' ? 501 : 500)
+    return res.status(status).json({
+      ok: false,
+      error: error.message || 'Unable to start phone pairing',
     })
   }
 })

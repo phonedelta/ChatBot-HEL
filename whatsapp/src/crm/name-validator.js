@@ -29,7 +29,69 @@ const RELATION_TOKENS = new Set([
   'ami', 'amie', 'cousin', 'cousine',
 ])
 
-/** Correction / grammar command tokens — never part of a person name. */
+/** Pronouns / identity tokens — never part of a patient full name. */
+const IDENTITY_PRONOUN_TOKENS = new Set([
+  'nta', 'nti', 'ntaia', 'ntaya', 'ntuma', 'ntoma', 'ntouma',
+  'toi', 'tu', 'vous', 'vousetes', 'who', 'qui',
+  'انت', 'أنت', 'انتي', 'أنتي', 'نتا', 'نتي',
+])
+
+const IDENTITY_QUESTION_TOKENS = new Set([
+  'chkon', 'chkoun', 'shkon', 'shkoun', 'chkounnta', 'chkonnta',
+  'شكون', 'من',
+])
+
+/**
+ * "chkon nta" / "qui es-tu" — never a patient name.
+ */
+function looksLikeIdentityQuestion(text) {
+  const raw = collapseSpaces(text)
+  if (!raw) return false
+  const n = normalizeKey(raw)
+    .replace(/[?؟!.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!n) return false
+
+  if (
+    /^(?:chkon|chkoun|shkon|shkoun)\s+(?:nta|nti|hada|had)\b/.test(n)
+    || /^(?:nta|nti)\s+(?:chkon|chkoun|shkon|shkoun)\b/.test(n)
+    || /\b(?:chkon|chkoun|shkon|shkoun)\s+(?:hada|had)\s+(?:chatbot|bot|assistant)\b/.test(n)
+    || /\b(?:wach|wesh)\s+(?:nta|nti)\s+(?:bot|robo|robot|assistant)\b/.test(n)
+    || /\b(?:nta|nti)\s+(?:bot|robo|robot|assistant)\b/.test(n)
+    || /\b(?:nta|nti)\s+(?:insan|insane)\s+(?:wela|ou|و)\s+(?:bot|robo)\b/.test(n)
+    || /\bm3a(?:men|mn|chkon|chkoun)\s+kanhder\b/.test(n)
+    || /\bm3amen\s+kanhder\b/.test(n)
+    || /\b(?:chkon|chkoun|shkon)\s+li\s+kayjawbni\b/.test(n)
+    || /\b(?:qui\s+(?:es[- ]?tu|etes[- ]?vous|êtes[- ]?vous)|vous\s+etes\s+qui|tu\s+es\s+qui|cest\s+qui|avec\s+qui\s+je\s+parle|je\s+parle\s+avec\s+qui)\b/.test(n)
+    || /\b(?:etes[- ]?vous|êtes[- ]?vous)\s+(?:un\s+)?(?:robot|assistant|bot)\b/.test(n)
+    || /شكون\s*(نتا|نتي|هذا)/.test(raw)
+    || /من\s*(أنت|انتم|أنتم)/.test(raw)
+    || /مع\s*من\s*(أتكلم|نتكلم)/.test(raw)
+    || /واش\s*(نتا|نتي)\s*(روبو|روبوت|بوت)/.test(raw)
+    || /هل\s*أنت\s*روبوت/.test(raw)
+    || /من\s*يجيبني/.test(raw)
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Explicit conversational name markers (Darija / FR / AR).
+ */
+function hasExplicitNameMarker(text) {
+  const raw = String(text || '')
+  if (!raw.trim()) return false
+  return (
+    /\b(?:smiti|smyti|smiyti|smiya|smya|lism|ismi|ism)\b/i.test(raw)
+    || /\b(?:nom\s+dyali|lism\s+dyali|smya\s+dyali|mon\s+nom|je\s+m['’]appelle|nom\s+complet)\b/i.test(raw)
+    || /(?:اسمي|سميتي|الاسم(?:\s+الكامل)?|الاسم\s+ديالي)/u.test(raw)
+    || /^(?:le\s+)?nom(?:\s+complet)?\s*[:\-–]/im.test(raw)
+    || /^(?:الاسم(?:\s+الكامل)?)\s*[:\-–]/um.test(raw)
+  )
+}
+
 const NAME_COMMAND_TOKENS = new Set([
   'smiya', 'smiyti', 'smito', 'smiyto', 'smitha', 'smita', 'smiti', 'ismi',
   'dialo', 'dyalo', 'dialha', 'dyalha', 'dyal', 'dial',
@@ -39,11 +101,15 @@ const NAME_COMMAND_TOKENS = new Set([
   'ville', 'city', 'phone', 'telephone', 'numero', 'tel', 'rdv', 'rendez',
   'tabyid', 'tabyit', 'blanchiment', 'detartrage', 'facette', 'facettes',
   'au', 'fait',
+  'chkon', 'chkoun', 'shkon', 'shkoun', 'nta', 'nti', 'bot', 'robo', 'robot',
+  'bghit', 'brit', 'maw3id', 'mawa3id', 'fin', 'kaynin', 'localisation',
+  'wakha', 'oui', 'non', 'test', 'ok', 'okay',
 ])
 
 const ARABIC_CONVERSATIONAL = [
   /بغيت/, /واش/, /كاين/, /يمكن/, /ناخذ/, /ناخدو/, /موعد/, /شكرا/, /بزاف/,
   /السلام/, /عليكم/, /فين/, /عيادة/, /غدا/, /اليوم/, /ممكن/, /حجز/,
+  /شكون/, /من أنت/, /من انتم/,
 ]
 
 const CITY_ONLY = new Set([
@@ -228,6 +294,9 @@ function assessFullNameCandidate(candidate) {
   if (raw.length < 3 || raw.length > 100) {
     return { valid: false, normalizedName: null, confidence: 0.99, reason: 'length', needsAi: false, source: 'deterministic' }
   }
+  if (looksLikeIdentityQuestion(raw)) {
+    return { valid: false, normalizedName: null, confidence: 0.99, reason: 'identity_question', needsAi: false, source: 'deterministic' }
+  }
   if (hasQuestionMark(raw)) {
     return { valid: false, normalizedName: null, confidence: 0.99, reason: 'question_mark', needsAi: false, source: 'deterministic' }
   }
@@ -274,6 +343,12 @@ function assessFullNameCandidate(candidate) {
   }
   if (tokens.some((t) => NAME_COMMAND_TOKENS.has(normalizeKey(t).replace(/[^\p{L}0-9]/gu, '')))) {
     return { valid: false, normalizedName: null, confidence: 0.99, reason: 'command_token', needsAi: false, source: 'deterministic' }
+  }
+  if (tokens.some((t) => {
+    const key = normalizeKey(t).replace(/[^\p{L}0-9]/gu, '')
+    return IDENTITY_PRONOUN_TOKENS.has(key) || IDENTITY_QUESTION_TOKENS.has(key)
+  })) {
+    return { valid: false, normalizedName: null, confidence: 0.99, reason: 'identity_pronoun', needsAi: false, source: 'deterministic' }
   }
   const relationOnly = tokens.length > 0
     && tokens.every((t) => RELATION_TOKENS.has(normalizeKey(t).replace(/[^\p{L}0-9]/gu, '')))
@@ -501,5 +576,7 @@ module.exports = {
   normalizeAcceptedName,
   stripPersonNameLabels,
   looksLikeDarijaLatinPhrase,
+  looksLikeIdentityQuestion,
+  hasExplicitNameMarker,
   hasQuestionMark,
 }

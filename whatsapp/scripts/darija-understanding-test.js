@@ -145,6 +145,11 @@ const INTENT_CASES = [
   { text: 'sift liya localisation dyalkom', intent: 'ASK_LOCATION' },
   { text: '3tini l mawa3id li motaha', intent: 'CHECK_APPOINTMENT_AVAILABILITY' },
   { text: 'imta la3ba lbarca', intent: 'OTHER' },
+  { text: 'Shkon nta', intent: 'ASK_IDENTITY' },
+  { text: 'chkoun nta', intent: 'ASK_IDENTITY' },
+  { text: 'vous etes qui', intent: 'ASK_IDENTITY' },
+  { text: 'qui es-tu', intent: 'ASK_IDENTITY' },
+  { text: 'شكون نتا', intent: 'ASK_IDENTITY' },
 ]
 
 function run() {
@@ -303,7 +308,9 @@ function run() {
     assert.ok(!detectAvailabilityIntent('nom dyali adam mait').matched)
     expectNotIntent('nom dyali adam mait', 'LIST_MY_APPOINTMENTS')
     expectNotIntent('imta la3ba lbarca', 'ASK_OPENING_HOURS')
-    passed += 7
+    expectNotIntent('Shkon nta', 'BOOK_APPOINTMENT')
+    assert.strictEqual(routePatientMessage('Shkon nta').bookAppointment, false)
+    passed += 9
   } catch (err) {
     failures.push(`availDetect: ${err.message}`)
   }

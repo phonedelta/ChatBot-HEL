@@ -23,6 +23,8 @@ const INTENT_NAMES = [
   'ASK_PRICE',
   'ASK_LOCATION',
   'ASK_OPENING_HOURS',
+  'ASK_IDENTITY',
+  'ASK_PHONE',
   'DENTAL_PAIN',
   'DENTAL_EMERGENCY',
   'GREETING',
@@ -215,6 +217,28 @@ const INTENT_DICTIONARY = {
     ],
     keywords: ['horaire', 'horaires', 'ouvert', 'ouverture', 'wa9t', 'وقت', 'fo9ach', 'kat7ello'],
   },
+  ASK_IDENTITY: {
+    phrases: [
+      'chkon nta', 'chkoun nta', 'shkon nta', 'shkoun nta',
+      'chkon nti', 'chkoun nti', 'nta chkon', 'nti chkoun',
+      'chkon hada', 'chkon had chatbot', 'wach nta bot', 'nta bot',
+      'wach nta assistant', 'm3amen kanhder', 'm3a chkon kanhder',
+      'chkoun li kayjawbni', 'shkon kayjawbni',
+      'qui es-tu', 'qui êtes-vous', 'qui etes-vous', 'vous êtes qui', 'vous etes qui',
+      'tu es qui', 'avec qui je parle', 'je parle avec qui',
+      'êtes-vous un robot', 'etes-vous un robot', 'êtes-vous un assistant',
+      'شكون نتا', 'شكون نتي', 'من أنت', 'من أنتم', 'مع من أتكلم', 'واش نتا روبو',
+    ],
+    keywords: ['chkon', 'chkoun', 'shkon', 'shkoun', 'شكون'],
+  },
+  ASK_PHONE: {
+    phrases: [
+      '3tini nmra dyalkom', 'nmr dyalkom', 'numero dyalkom', 'telephone dyalkom',
+      '3tini numero', 'votre numero', 'votre téléphone', 'numéro du cabinet',
+      'رقم الهاتف ديالكم', 'عطيوني رقمكم',
+    ],
+    keywords: ['dyalkom', 'dialkom', 'ديالكم'],
+  },
   DENTAL_PAIN: {
     phrases: [
       'kan wje3ni dersi', '3ndi wja3 f drssa', '3andi wja3', 'darsa katwja3ni',
@@ -360,6 +384,20 @@ function classifyIntent(rawText, options = {}) {
     }
   }
 
+  // Identity questions — never names / never booking
+  try {
+    const { looksLikeIdentityQuestion } = require('../crm/name-validator')
+    if (looksLikeIdentityQuestion(rawText) || looksLikeIdentityQuestion(text)) {
+      return {
+        intent: 'ASK_IDENTITY',
+        confidence: 0.96,
+        matched: 'identity_question',
+        matchType: 'guard',
+        nlu: darija,
+      }
+    }
+  } catch { /* optional */ }
+
   /** @type {{ intent: string, confidence: number, matched: string|null, matchType: string|null }} */
   let best = { intent: 'OTHER', confidence: 0, matched: null, matchType: null }
 
@@ -460,6 +498,22 @@ function classifyIntent(rawText, options = {}) {
         }
       }
 
+      if (intentName === 'ASK_IDENTITY') {
+        if (/\b(chkon|chkoun|shkon|shkoun)\b/i.test(sourceText) || /شكون/.test(sourceText)) {
+          confidence = Math.max(confidence, 0.94)
+        }
+      }
+
+      if (intentName === 'ASK_PHONE') {
+        if (/\b(nmra|nmr|numero|telephone|tel).{0,12}(dyalkom|dialkom)\b/i.test(sourceText)) {
+          confidence = Math.max(confidence, 0.9)
+        }
+        // Patient giving their own phone must not win as clinic contact FAQ
+        if (/(?:\+?212|0)[\s.-]*[5-7](?:[\s.-]*\d){8}/.test(sourceText) && !/\b(dyalkom|dialkom|cabinet)\b/i.test(sourceText)) {
+          confidence = 0
+        }
+      }
+
       if (confidence > best.confidence) {
         best = {
           intent: intentName,
@@ -537,7 +591,24 @@ function buildIntentDirectReply(intent, languageHint = 'fr') {
   if (intent === 'ASK_SERVICES') {
     return buildPublicServicesReply(languageHint)
   }
-
+  const darija = languageHint === 'darija' || languageHint === 'ar'
+  if (intent === 'ASK_IDENTITY') {
+    return darija
+      ? 'أنا المساعد الافتراضي ديال مركز الأسنان HEL. نقدر نعاونك فالمواعيد، المواعيد المتاحة، معلومات المركز والخدمات، وإذا احتجتي شي حاجة خاصة يقدر يتدخل معاك واحد من الفريق.'
+      : 'Je suis l’assistant virtuel du Centre Dentaire HEL. Je peux vous aider pour les rendez-vous, les disponibilités, les infos du cabinet et les soins. Si besoin, un membre de l’équipe peut prendre le relais.'
+  }
+  if (intent === 'ASK_PHONE') {
+    try {
+      const { HEL_CLINIC } = require('../crm/smart/defaults')
+      return darija
+        ? `رقم الهاتف ديال المركز: ${HEL_CLINIC.phone}`
+        : `Téléphone du cabinet : ${HEL_CLINIC.phone}`
+    } catch {
+      return darija
+        ? 'رقم الهاتف ديال المركز: (+212) 7 107 44444'
+        : 'Téléphone du cabinet : (+212) 7 107 44444'
+    }
+  }
   return null
 }
 

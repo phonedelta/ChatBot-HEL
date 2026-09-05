@@ -252,6 +252,15 @@ function classifyIntentFromConcepts(concepts, normalizedText = '') {
     return { intent: 'OTHER', confidence: 0.9, matched: 'concepts:sports_out_of_scope' }
   }
 
+  // Identity / who are you
+  if (
+    (c.has('identity') && (c.has('pronoun_you') || /\b(nta|nti|bot|assistant|hada)\b/i.test(text)))
+    || /\b(chkon|chkoun|shkon|shkoun)\s+(nta|nti|hada)\b/i.test(text)
+    || /\b(qui\s+es|vous\s+etes\s+qui|tu\s+es\s+qui)\b/i.test(text)
+  ) {
+    return { intent: 'ASK_IDENTITY', confidence: 0.95, matched: 'concepts:identity' }
+  }
+
   // CANCEL before LIST (e.g. "bghit nlghi rdv dyali")
   if (c.has('cancel') && (c.has('appointment') || c.has('want') || c.has('my') || /\brdv\b|موعد/.test(text))) {
     return { intent: 'CANCEL_APPOINTMENT', confidence: 0.92, matched: 'concepts:cancel' }

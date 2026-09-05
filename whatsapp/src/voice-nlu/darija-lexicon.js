@@ -69,6 +69,11 @@ const CONCEPT_FORMS = {
   no: ['non', 'no', 'la', 'lla', 'laa', 'lah', 'لا', 'لاء', 'ماشي'],
   refuse: ['mabghitch', 'mabghitch', 'مابغيتش', 'ما بغيتش'],
 
+  identity: [
+    'chkon', 'chkoun', 'shkon', 'shkoun', 'شكون',
+  ],
+  pronoun_you: ['nta', 'nti', 'نتا', 'نتي', 'أنت', 'انتي'],
+
   // Dental domain (surface help)
   tooth: ['ders', 'darsa', 'darssa', 'drssa', 'snan', 'sinn', 'ضرس', 'سن', 'أسنان'],
   pain: ['wja3', 'wje3', 'waj3', 'kadarni', 'katwja3ni', 'وجع', 'وجعني'],

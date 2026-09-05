@@ -46,6 +46,10 @@ export interface WaInstance {
   lastSeenAt?: string | null
   lastError?: string | null
   qrCreatedAt?: string | null
+  pairing_code?: string | null
+  pairing_code_display?: string | null
+  pairing_phone?: string | null
+  pairing_code_available?: boolean
 }
 
 export interface OverviewPayload {

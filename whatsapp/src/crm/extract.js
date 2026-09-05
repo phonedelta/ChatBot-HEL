@@ -14,6 +14,8 @@ const {
 const {
   validateFullName,
   assessFullNameCandidate,
+  hasExplicitNameMarker,
+  looksLikeIdentityQuestion,
 } = require('./name-validator')
 const {
   isConfirmationYes: binaryYes,
@@ -249,6 +251,7 @@ function extractAppointment(text, nowOrOpts = new Date()) {
   }
 
   const dmy = raw.match(/\b(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?\b/)
+  let numericDate = null
   if (dmy) {
     const day = Number(dmy[1])
     const month = Number(dmy[2]) - 1
@@ -259,8 +262,22 @@ function extractAppointment(text, nowOrOpts = new Date()) {
       if (!dmy[3] && candidate < new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
         candidate.setFullYear(candidate.getFullYear() + 1)
       }
-      date = candidate
+      numericDate = candidate
     }
+  }
+
+  // Weekday + explicit calendar date must agree (e.g. "mardi 09/09" when 09/09 is Wednesday).
+  if (date && numericDate && matchWeekday(normalized) !== null) {
+    if (numericDate.getDay() !== date.getDay()) {
+      return {
+        appointment_date: null,
+        appointment_time: null,
+        date_weekday_mismatch: true,
+      }
+    }
+    date = numericDate
+  } else if (numericDate) {
+    date = numericDate
   }
 
   // Shared time normalizer (12h30, 14h, m3a 14h, غدا مع 14, …)
@@ -739,7 +756,10 @@ function extractBulkBookingFields(text, options = {}) {
 
   if (!result.full_name) {
     const name = validateFullName(line)
-    if (name && !looksLikeDateLine(line) && !extractPhone(line) && !looksLikeServiceText(line)) {
+    // Conservative (history seed): never accept a bare 2-word line as name without a marker/label.
+    // Structured form labels are handled earlier via extractLabeledValue.
+    const allowBareName = !conservative || hasExplicitNameMarker(line) || hasExplicitNameMarker(raw)
+    if (name && allowBareName && !looksLikeDateLine(line) && !extractPhone(line) && !looksLikeServiceText(line)) {
       result.full_name = name
       continue
     }
@@ -804,7 +824,12 @@ function extractBulkBookingFields(text, options = {}) {
     }
   }
 
-  if (result.full_name && (looksLikeServiceText(result.full_name) || !validateFullName(result.full_name))) {
+  if (result.full_name && (
+    looksLikeServiceText(result.full_name)
+    || looksLikeIdentityQuestion(result.full_name)
+    || looksLikeIdentityQuestion(raw)
+    || !validateFullName(result.full_name)
+  )) {
     result.full_name = null
   }
 

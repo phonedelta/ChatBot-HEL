@@ -356,6 +356,39 @@ async function run() {
   ))
   passed += 2
 
+  // "Shkon nta" then booking must NOT seed fullName
+  const chatShkon = '212677700905@c.us'
+  turn = await crm.processCrmTurn({
+    conversationId: `main:${chatShkon}`,
+    chatId: chatShkon,
+    userText: 'Shkon nta',
+    languageHint: 'darija',
+  })
+  turn = await crm.processCrmTurn({
+    conversationId: `main:${chatShkon}`,
+    chatId: chatShkon,
+    userText: 'Bghit maw3id',
+    languageHint: 'darija',
+    voiceIntent: 'BOOK_APPOINTMENT',
+    router: { intent: 'BOOK_APPOINTMENT', bookAppointment: true, intentConfidence: 0.93 },
+  })
+  assert.ok(!turn.lead.full_name, `fullName must stay empty, got ${turn.lead.full_name}`)
+  assert.strictEqual(turn.lead.stage, 'awaiting_form')
+  assert.ok(/الاسم الكامل|nom complet/i.test((turn.replies || [turn.forceReply]).join(' ')))
+  passed += 3
+
+  // Date/time natural forms
+  const nowDt = new Date('2026-09-05T12:00:00')
+  assert.strictEqual(extractAppointment('nhar tlat m3a 11:30', nowDt).appointment_date, '2026-09-08')
+  assert.strictEqual(extractAppointment('nhar tlat m3a 11:30', nowDt).appointment_time, '11:30')
+  assert.strictEqual(extractAppointment('ghda m3a 14h', nowDt).appointment_date, '2026-09-06')
+  assert.strictEqual(extractAppointment('ghda m3a 14h', nowDt).appointment_time, '14:00')
+  assert.strictEqual(extractAppointment('07/09 11h30', nowDt).appointment_time, '11:30')
+  assert.ok(extractAppointment('mardi 09/09', nowDt)?.date_weekday_mismatch)
+  assert.strictEqual(extractEmbeddedTime('3 pm'), '15:00')
+  assert.strictEqual(extractEmbeddedTime('11 w noss'), '11:30')
+  passed += 8
+
   try { fs.unlinkSync(dbPath) } catch { /* */ }
 
   console.log(`\nbooking-input-normalization: ${passed} checks passed`)

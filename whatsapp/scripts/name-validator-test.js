@@ -41,6 +41,18 @@ async function run() {
   assertInvalid('ymkn nakhdo')
   assertInvalid('Ymkn Nakhdo')
 
+  // Identity questions must never become patient names
+  assertInvalid('Shkon nta')
+  assertInvalid('chkon nta')
+  assertInvalid('Chkoun nta')
+  assertInvalid('shkoun nti')
+  assertInvalid('vous etes qui')
+  assertInvalid('qui es-tu')
+  const { looksLikeIdentityQuestion } = require('../src/crm/name-validator')
+  assert.ok(looksLikeIdentityQuestion('Shkon nta'))
+  assert.ok(looksLikeIdentityQuestion('شكون نتا'))
+  assert.ok(!looksLikeIdentityQuestion('Salim Zouhairi'))
+
   // Darija / FR / AR conversational
   assertInvalid('wach kayn ghdda')
   assertInvalid('bghit nakhod rendez vous')
@@ -50,6 +62,10 @@ async function run() {
   assertInvalid('merci beaucoup')
   assertInvalid('salam khoya')
   assertInvalid('possible demain')
+  assertInvalid('bghit maw3id')
+  assertInvalid('fin kaynin')
+  assertInvalid('test')
+  assertInvalid('wakha')
 
   // Motifs / villes / heures
   assertInvalid('douleur dentaire')

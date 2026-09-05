@@ -78,9 +78,24 @@ function normalizeTimeExpression(text) {
     }
   }
 
-  // 11 ونص / 11 w nos
-  const half = raw.match(/^(?:(?:m3a|مع|a|à)\s+)?(\d{1,2})\s*(?:ونص|w\s*nos|ou?\s*nos)\s*$/i)
-  if (half) return pack(Number(half[1]), 30)
+  // 11 ونص / 11 w nos / 11 w noss / 11 et demi / onze heures et demie
+  const half = raw.match(/^(?:(?:m3a|مع|a|à)\s+)?(\d{1,2})\s*(?:ونص|w\s*nos+s?|ou?\s*nos+s?|et\s+demi(?:e)?)\s*$/i)
+    || raw.match(/^(?:onze)\s*(?:heures?\s+)?et\s+demi(?:e)?\s*$/i)
+  if (half) {
+    const h = half[1] != null ? Number(half[1]) : 11
+    return pack(h, 30)
+  }
+
+  // 3 pm / 11:30 am / 3:00 PM
+  const ampm = raw.match(/^(?:(?:m3a|مع|a|à)\s+)?(\d{1,2})(?:\s*[:h]\s*(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)\s*$/i)
+  if (ampm) {
+    let hour = Number(ampm[1])
+    const minute = Number(ampm[2] || 0)
+    const meridiem = String(ampm[3] || '').toLowerCase().replace(/\./g, '')
+    if (meridiem.startsWith('p') && hour < 12) hour += 12
+    if (meridiem.startsWith('a') && hour === 12) hour = 0
+    return pack(hour, minute)
+  }
 
   // 12h30 / 12 h 30 / 12:30 / 12H30 / m3a 12h30
   const withMin = raw.match(/^(?:(?:m3a|مع|a|à)\s+)?(\d{1,2})\s*(?:h|:)\s*(\d{2})\s*$/i)
@@ -109,7 +124,7 @@ function extractEmbeddedTime(text) {
   if (direct) return direct.normalized
 
   const candidates = []
-  const re = /(?:(?:m3a|مع|a|à)\s*)?\d{1,2}\s*(?:h|:)\s*\d{2}|(?:(?:m3a|مع|a|à)\s*)?\d{1,2}\s*h\b|\d{1,2}:\d{2}|(?:m3a|مع)\s*\d{1,2}\b/gi
+  const re = /(?:(?:m3a|مع|a|à)\s*)?\d{1,2}\s*(?:h|:)\s*\d{2}\s*(?:a\.?m\.?|p\.?m\.?)?|(?:(?:m3a|مع|a|à)\s*)?\d{1,2}\s*h\b|\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)?|\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?)|(?:m3a|مع)\s*\d{1,2}\b|\d{1,2}\s*(?:w\s*nos+s?|ونص|et\s+demi)/gi
   let m
   while ((m = re.exec(raw)) !== null) {
     candidates.push(m[0])

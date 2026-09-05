@@ -169,6 +169,8 @@ function routePatientMessage(rawText, options = {}) {
     || intent === 'ASK_SERVICES'
     || intent === 'ASK_LOCATION'
     || intent === 'ASK_OPENING_HOURS'
+    || intent === 'ASK_IDENTITY'
+    || intent === 'ASK_PHONE'
   ) {
     bookAppointment = false
   }
