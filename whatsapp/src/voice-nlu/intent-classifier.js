@@ -6,7 +6,7 @@
  */
 
 const { CLINIC_SERVICES } = require('./transcript-interpreter')
-const { buildPublicServicesReply, PUBLIC_SERVICES_LIST } = require('../crm/services')
+const { PUBLIC_SERVICES_LIST } = require('../crm/services')
 const {
   normalizeDarijaForNlu,
   classifyIntentFromConcepts,
@@ -538,6 +538,7 @@ function classifyIntent(rawText, options = {}) {
       greeting: 'GREETING',
       thanks: 'THANKS',
       cancel: 'CANCEL_APPOINTMENT',
+      availability: 'CHECK_APPOINTMENT_AVAILABILITY',
       ask_services: 'ASK_SERVICES',
       info: 'ASK_SERVICES',
     }[voiceHint]
@@ -581,43 +582,11 @@ function classifyIntent(rawText, options = {}) {
   return { ...best, nlu: darija }
 }
 
-/**
- * Direct canned replies for high-confidence intents that should skip LLM guessing.
- * @param {string} intent
- * @param {'fr'|'darija'|'mixed'|'auto'|string} languageHint
- * @returns {string|null}
- */
-function buildIntentDirectReply(intent, languageHint = 'fr') {
-  if (intent === 'ASK_SERVICES') {
-    return buildPublicServicesReply(languageHint)
-  }
-  const darija = languageHint === 'darija' || languageHint === 'ar'
-  if (intent === 'ASK_IDENTITY') {
-    return darija
-      ? 'أنا المساعد الافتراضي ديال مركز الأسنان HEL. نقدر نعاونك فالمواعيد، المواعيد المتاحة، معلومات المركز والخدمات، وإذا احتجتي شي حاجة خاصة يقدر يتدخل معاك واحد من الفريق.'
-      : 'Je suis l’assistant virtuel du Centre Dentaire HEL. Je peux vous aider pour les rendez-vous, les disponibilités, les infos du cabinet et les soins. Si besoin, un membre de l’équipe peut prendre le relais.'
-  }
-  if (intent === 'ASK_PHONE') {
-    try {
-      const { HEL_CLINIC } = require('../crm/smart/defaults')
-      return darija
-        ? `رقم الهاتف ديال المركز: ${HEL_CLINIC.phone}`
-        : `Téléphone du cabinet : ${HEL_CLINIC.phone}`
-    } catch {
-      return darija
-        ? 'رقم الهاتف ديال المركز: (+212) 7 107 44444'
-        : 'Téléphone du cabinet : (+212) 7 107 44444'
-    }
-  }
-  return null
-}
-
 module.exports = {
   INTENT_NAMES,
   INTENT_DICTIONARY,
   CLINIC_SERVICES,
   PUBLIC_SERVICES_LIST,
   classifyIntent,
-  buildIntentDirectReply,
   normalizeIntentText,
 }

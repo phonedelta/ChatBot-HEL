@@ -1,5 +1,5 @@
 /**
- * Format dashboard knowledge_items for OpenAI / assistant prompts.
+ * Format live dashboard knowledge_items for the conversational AI provider.
  */
 
 const CATEGORY_LABELS = {

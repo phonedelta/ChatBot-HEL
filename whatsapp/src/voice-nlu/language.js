@@ -64,7 +64,7 @@ function scoreLanguageSignals(text) {
   const arabicChars = (raw.match(/[\u0600-\u06FF]/g) || []).length
   const latinChars = (raw.match(/[A-Za-zÀ-ÿ]/g) || []).length
 
-  const darijaLatin = /\b(salam|salamou|labas|bghit|bghiti|baghit|baghi|ba8i|kanbghi|kanbghit|wach|wash|kifash|kifach|chno|chkoun|chkou|fin|fayn|homa|kayn|kayna|kaynin|dyal|3endi|3andi|andi|safi|mzyan|bzaf|chwiya|ch7al|chhal|bach|bash|wje3\w*|waj3\w*|ouj3\w*|ders\w*|drass\w*|darssa|7ri9|hri9|nafkha|ghdda|ghedda|lyoum|nji|nakhod|nakhdo|nkhod|ndir|n9dar|n9ala3|nqala3|mow3id|mo3id|randivo|serviss|tbib|nssawal|blassa|lalla|sidi|kan|taman|bghina|3ndek|3andek|3lach|ymkn|imken|momkin|khoya|khti)\b/i
+  const darijaLatin = /\b(salam|salamou|labas|bghit|bghiti|baghit|baghi|ba8i|kanbghi|kanbghit|wach|wash|kifash|kifach|chno|chkon|chkoun|chkou|fin|fayn|homa|kayn|kayna|kaynin|kaydwi|m3aya|dyal|dialach|3endi|3andi|andi|safi|mzyan|bzaf|chwiya|ch7al|chhal|bach|bash|wje3\w*|waj3\w*|ouj3\w*|ders\w*|drass\w*|darssa|7ri9|hri9|nafkha|ghdda|ghedda|lyoum|nji|nakhod|nakhdo|nkhod|ndir|n9dar|n9ala3|nqala3|mow3id|mo3id|randivo|serviss|tbib|nssawal|blassa|lalla|sidi|kan|taman|bghina|3ndek|3andek|3lach|ymkn|imken|momkin|khoya|khti)\b/i
   const darijaArabic = /بغيت|بغيتي|عندي|واش|فين|شنو|لاباس|سلام|موعد|ضرسي|وجع|كاينين|كاين|غدا|اليوم|خويا|ديال|نتوما|كيبغ|شحال|مزيان|ممكن/
 
   const strongFrench = (

@@ -416,11 +416,11 @@ function validateFullName(value) {
 }
 
 /**
- * Optional OpenAI semantic check for ambiguous candidates.
+ * Optional centralized AI-provider semantic check for ambiguous candidates.
  * Never invents a name. On error → reject.
  *
  * @param {string} candidate
- * @param {{ openAiClient?: any, model?: string } | null} ai
+ * @param {{ provider?: any } | null} ai
  */
 async function classifyPersonNameWithAi(candidate, ai = null) {
   const base = assessFullNameCandidate(candidate)
@@ -431,9 +431,8 @@ async function classifyPersonNameWithAi(candidate, ai = null) {
     return base
   }
 
-  const client = ai?.openAiClient || null
-  const model = ai?.model || process.env.OPENAI_MODEL || 'gpt-5.6-luna'
-  if (!client) {
+  const provider = ai?.provider || null
+  if (!provider?.isConfigured?.()) {
     return {
       valid: false,
       normalizedName: null,
@@ -446,9 +445,8 @@ async function classifyPersonNameWithAi(candidate, ai = null) {
 
   const text = collapseSpaces(base.candidateForAi || candidate)
   try {
-    const response = await client.responses.create({
-      model,
-      instructions: [
+    const result = await provider.generateStructured({
+      systemPrompt: [
         'Tu es un validateur de données pour un formulaire de cabinet dentaire marocain.',
         'Détermine si le texte fourni représente réellement un nom complet de personne.',
         'Langues: français, Darija alphabet latin, arabe.',
@@ -457,7 +455,7 @@ async function classifyPersonNameWithAi(candidate, ai = null) {
         'Ne corrige pas une phrase pour la transformer en nom. Ne devine jamais. Ne translittère pas.',
         'Retourne UNIQUEMENT un JSON: {"isPersonFullName":boolean,"confidence":number,"normalizedName":string|null,"reason":string}',
       ].join(' '),
-      input: [
+      messages: [
         {
           role: 'user',
           content: JSON.stringify({
@@ -468,35 +466,11 @@ async function classifyPersonNameWithAi(candidate, ai = null) {
           }),
         },
       ],
-      max_output_tokens: 200,
-      store: false,
+      maxOutputTokens: 200,
+      intent: 'VALIDATE_PATIENT_NAME',
     })
 
-    const rawOut = String(response?.output_text || '').trim()
-    const jsonMatch = rawOut.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      return {
-        valid: false,
-        normalizedName: null,
-        confidence: 0.3,
-        reason: 'ai_invalid_json',
-        needsAi: false,
-        source: 'ai',
-      }
-    }
-    let parsed
-    try {
-      parsed = JSON.parse(jsonMatch[0])
-    } catch {
-      return {
-        valid: false,
-        normalizedName: null,
-        confidence: 0.3,
-        reason: 'ai_json_parse_error',
-        needsAi: false,
-        source: 'ai',
-      }
-    }
+    const parsed = result.data
 
     const isPerson = Boolean(parsed.isPersonFullName)
     const confidence = Math.max(0, Math.min(1, Number(parsed.confidence) || 0))

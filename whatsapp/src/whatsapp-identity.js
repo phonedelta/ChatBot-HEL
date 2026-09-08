@@ -10,7 +10,11 @@ const {
   extractPhoneFromWaContact,
   resolvePhoneFromWhatsAppContact,
 } = require('./crm/smart/contact-resolver')
-const { formatPhoneDisplay, toE164, isValidPhone } = require('./crm/phone')
+const {
+  formatPhoneDisplay,
+  toE164,
+  isValidInternationalPhone,
+} = require('./crm/phone')
 
 function serializedOf(value) {
   if (value == null) return ''
@@ -119,7 +123,7 @@ function sanitizeAccountPhone(value) {
   const classified = classifyJid(raw)
   if (classified.jidType === 'lid') return null
   const phone = coerceReliablePhone(raw) || classified.phoneNumber
-  if (phone && isValidPhone(phone)) return phone
+  if (phone && isValidInternationalPhone(phone)) return phone
   return null
 }
 

@@ -9,7 +9,7 @@
     "reset:crm": "node scripts/_reset-crm-data.js",
     "network:info": "node scripts/network-info.js",
     "build": "npm run build:dashboard",
-    "dev": "nodemon src/index.js",
+    "dev": "nodemon --watch src --ext js,json --ignore src/dashboard/dist/** --ignore storage/** src/index.js",
     "build:dashboard": "npm --prefix dashboard-app run build",
     "dev:dashboard": "npm --prefix dashboard-app run dev",
     "test:ui-zoom": "node scripts/ui-zoom-test.js",
@@ -130,6 +130,9 @@
     "test:qa-regressions": "node scripts/qa-regressions-test.js",
     "test:manual-appointment-whatsapp": "node scripts/manual-appointment-whatsapp-confirmation-test.js",
     "test:knowledge-prompt": "node scripts/knowledge-prompt-test.js",
+    "test:openrouter-conversation": "node scripts/openrouter-conversation-test.js",
+    "test:voice-transcription": "node scripts/voice-transcription-pipeline-test.js",
+    "test:voice-file": "node scripts/voice-transcription-compare.js",
     "test:analytics-period-comparison": "node scripts/analytics-test.js"
   },
   "dependencies": {

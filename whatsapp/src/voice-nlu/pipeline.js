@@ -33,7 +33,7 @@ function buildLlmPreanalysisBlock(analysis) {
   const interpreter = analysis.interpreter || null
 
   return [
-    'VOICE PRE-ANALYSIS (trusted structured understanding from AI Transcript Interpreter):',
+    'VOICE PRE-ANALYSIS (structured aid; every critical value still requires backend validation):',
     `Language: ${analysis.language}`,
     `Reply language: ${analysis.replyLanguageHint}`,
     `Corrected text: ${analysis.correctedText}`,
@@ -52,12 +52,12 @@ function buildLlmPreanalysisBlock(analysis) {
     entityLines,
     '',
     'Instructions for this turn:',
-    '- Trust the AI Transcript Interpreter output above as the patient meaning.',
-    '- Answer using the corrected text and detected service/intent.',
+    '- Use only interpretations supported by the raw/corrected transcript.',
+    '- If confidence is low, ask for clarification without inventing the patient meaning.',
     '- If a clinic service was detected, acknowledge that service and guide toward WhatsApp booking when relevant.',
     '- Do not invent facts not supported by clinic knowledge.',
     '- Reply in the reply language indicated (Darija ⇒ Arabic script only).',
-    '- Prefer interpreting imperfect Darija ASR over saying you did not understand.',
+    '- Never invent a date, time, phone, name, city, service or booking action.',
   ].filter((line) => line !== null).join('\n')
 }
 
@@ -121,6 +121,7 @@ function runVoiceAnalysis(rawTranscript, meta = {}) {
   const confidence = computeVoiceConfidence({
     asrScore: meta.asrScore,
     asrWeak: meta.asrWeak,
+    asrSuspicious: meta.asrSuspicious,
     rawText: rawTranscript,
     correctedText: workingText,
     intent: intentResult.intent,
@@ -180,6 +181,12 @@ function runVoiceAnalysis(rawTranscript, meta = {}) {
  */
 function analysisFromInterpreter(rawTranscript, interpreted, meta = {}) {
   const normalized = normalizeTranscript(interpreted.correctedText || rawTranscript)
+  const rawNormalized = normalizeTranscript(rawTranscript)
+  const rawEntities = extractEntities(
+    [rawTranscript, rawNormalized.cleanedText, rawNormalized.normalizedText].filter(Boolean).join(' '),
+    rawNormalized.canonicalTokens,
+    { serviceDetection: interpreted.serviceDetection },
+  )
 
   const analysis = {
     language: interpreted.language,
@@ -197,6 +204,7 @@ function analysisFromInterpreter(rawTranscript, interpreted, meta = {}) {
     intentConfidence: interpreted.intentConfidence,
     intentMatchedBy: interpreted.intentMatchedBy,
     entities: {
+      ...rawEntities,
       ...extractEntities(interpreted.correctedText, normalized.canonicalTokens, {
         serviceDetection: interpreted.serviceDetection,
       }),
@@ -211,6 +219,7 @@ function analysisFromInterpreter(rawTranscript, interpreted, meta = {}) {
     pipelineMode: 'ai_transcript_interpreter',
     asrScore: meta.asrScore ?? null,
     asrWeak: Boolean(meta.asrWeak),
+    asrSuspicious: Boolean(meta.asrSuspicious),
   }
 
   analysis.llmBlock = buildLlmPreanalysisBlock(analysis)
@@ -230,7 +239,7 @@ async function analyzeVoiceTranscript(input = {}) {
   let interpreterError = null
 
   // Primary path: AI Transcript Interpreter (always, when available)
-  if (rawTranscript && typeof input.transcriptInterpreter === 'function') {
+  if (rawTranscript && !input.asrWeak && typeof input.transcriptInterpreter === 'function') {
     try {
       const interpreted = await interpretTranscriptWithAi({
         rawTranscript,
@@ -240,6 +249,7 @@ async function analyzeVoiceTranscript(input = {}) {
         analysis = analysisFromInterpreter(rawTranscript, interpreted, {
           asrScore: input.asrScore,
           asrWeak: input.asrWeak,
+          asrSuspicious: input.asrSuspicious,
         })
       }
     } catch (error) {
@@ -275,6 +285,7 @@ async function analyzeVoiceTranscript(input = {}) {
     analysis = runVoiceAnalysis(rawTranscript, {
       asrScore: input.asrScore,
       asrWeak: input.asrWeak,
+      asrSuspicious: input.asrSuspicious,
     })
     analysis.pipelineMode = analysis.pipelineMode || 'rules_fallback'
   }
@@ -282,6 +293,9 @@ async function analyzeVoiceTranscript(input = {}) {
   if (interpreterError) {
     analysis.interpreterError = interpreterError
   }
+  analysis.asrScore = input.asrScore ?? analysis.asrScore ?? null
+  analysis.asrWeak = Boolean(input.asrWeak)
+  analysis.asrSuspicious = Boolean(input.asrSuspicious)
 
   analysis.llmBlock = buildLlmPreanalysisBlock(analysis)
 
@@ -323,6 +337,7 @@ async function analyzeVoiceTranscript(input = {}) {
       meaning_hint: analysis.meaningHint,
       asr_score: input.asrScore ?? null,
       asr_weak: Boolean(input.asrWeak),
+      asr_suspicious: Boolean(input.asrSuspicious),
       asr_label: input.asrLabel || null,
       interpreter_error: analysis.interpreterError || null,
       pipeline: [
@@ -347,9 +362,9 @@ async function analyzeVoiceTranscript(input = {}) {
  */
 function buildLowConfidenceVoiceReply(language) {
   if (language === 'darija' || language === 'mixed') {
-    return 'سمح ليا، الصوت ما توضحش مزيان. واش تقدر تعاود الميساج الصوتي بشوية، ولا تكتب ليا شنو بغيتي؟'
+    return 'سمح ليا، الصوت ما توضحش مزيان. واش تقدر تعاود تصيفط الميساج الصوتي، ولا تكتب ليا شنو بغيتي؟'
   }
-  return 'Désolé, le message vocal n\'est pas assez clair. Pouvez-vous le répéter un peu plus lentement, ou écrire votre demande ?'
+  return 'Désolé, le message vocal n\'est pas assez clair. Pouvez-vous le renvoyer ou écrire votre demande ?'
 }
 
 module.exports = {

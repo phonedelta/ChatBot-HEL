@@ -135,12 +135,12 @@ function applyLastWins(acc, extracted, { identity = true } = {}) {
 
 /**
  * @param {ReturnType<import('./repository').createCrmRepository>} repo
- * @param {{ openAiClient?: any, openAiModel?: string } | null} [ai]
+ * @param {{ provider?: any } | null} [ai]
  */
 function createCrmWorkflow(repo, ai = null, options = {}) {
   const { validateBooking } = options
-  const nameAi = ai && ai.openAiClient
-    ? { openAiClient: ai.openAiClient, model: ai.openAiModel || process.env.OPENAI_MODEL }
+  const nameAi = ai?.provider?.isConfigured?.()
+    ? { provider: ai.provider }
     : null
 
   function replyLanguage(lead, fallback = 'fr') {

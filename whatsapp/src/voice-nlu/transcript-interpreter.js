@@ -40,6 +40,7 @@ const INTERPRETER_INTENTS = [
   'greeting',
   'thanks',
   'cancel',
+  'availability',
   'other',
 ]
 
@@ -56,6 +57,7 @@ const INTENT_TO_INTERNAL = {
   greeting: 'salutation',
   thanks: 'remerciement',
   cancel: 'annulation_rendez_vous',
+  availability: 'disponibilites',
   other: 'autre',
 }
 
@@ -75,8 +77,8 @@ function buildInterpreterInstructions() {
     '- arabe',
     '- termes médicaux',
     '',
-    'Ton travail n\'est PAS de corriger l\'orthographe.',
-    'Ton travail est de retrouver ce que le patient voulait réellement dire.',
+    'Ton travail est de corriger prudemment les erreurs phonétiques évidentes sans réécrire le sens.',
+    'Chaque intention, service, date, heure, téléphone, ville ou nom doit être soutenu par des mots réellement présents dans la transcription.',
     '',
     'Tu dois reconnaître automatiquement les services dentaires suivants :',
     ...CLINIC_SERVICES.map((name) => `- ${name}`),
@@ -91,10 +93,8 @@ function buildInterpreterInstructions() {
     '"Ditartraj"',
     '"Traitmon carie"',
     '',
-    'Tu dois retrouver automatiquement le bon service même si la transcription contient des fautes importantes.',
-    '',
-    'Ne réponds jamais "je ne comprends pas".',
-    'Si tu as un doute, retourne le service le plus probable avec un niveau de confiance.',
+    'Tu peux retrouver un service malgré une faute phonétique proche, mais tu ne dois jamais choisir un service seulement parce que la conversation concerne un cabinet dentaire.',
+    'Si le sens est incertain, utilise intent "other", service null, conserve corrected_text proche du transcript et baisse confidence.',
     '',
     'INTENTS possibles:',
     INTERPRETER_INTENTS.join(', '),
@@ -103,7 +103,7 @@ function buildInterpreterInstructions() {
     '- Patients écrivent souvent en Arabizi (3=ع, 7=ح, 9=ق), alphabet arabe, ou FR+Darija mélangés.',
     '- chno homa les service / ach katdirou / wach katdiro implant / quels sont vos services ⇒ intent ask_services (PAS appointment)',
     '- ch7al taman / combien ⇒ intent price (PAS appointment)',
-    '- wach kayn chi blassa ghdda / chno kayn mn rdv / je veux nchof chno kayn ⇒ info sur disponibilités (pas mes RDV)',
+    '- wach kayn chi blassa ghdda / chno kayn mn rdv / je veux nchof chno kayn ⇒ availability (pas appointment)',
     '- chno les rdv dyali / wach 3ndi chi rdv / شنو المواعيد ديالي ⇒ info sur MES rendez-vous',
     '- bghit nakhod rdv / بغيت ناخد موعد ⇒ appointment',
     '- bghit nlghi / annuler lia rdv ⇒ cancel',
@@ -129,15 +129,17 @@ function buildInterpreterInstructions() {
     '  "intent": "appointment",',
     '  "service": "Blanchiment des dents",',
     '  "corrected_text": "Bghit ndir blanchiment.",',
-    '  "confidence": 0.97',
+    '  "confidence": 0.70,',
+    '  "evidence": ["blanchiment"]',
     '}',
     '',
     'Champs :',
     '- language: "darija" | "fr" | "mixed" | "ar"',
     '- intent: un des intents listés',
-    '- service: nom EXACT d\'un service listé ci-dessus (jamais null si un service est probable)',
-    '- corrected_text: reformulation courte du sens patient (darija latine OK), pas une traduction scolaire',
+    '- service: nom EXACT d\'un service listé, ou null si aucun terme du transcript ne le soutient',
+    '- corrected_text: correction minimale et fidèle; ne transforme jamais une disponibilité en création/modification de rendez-vous',
     '- confidence: nombre entre 0 et 1',
+    '- evidence: liste de courts extraits exacts du transcript qui justifient intent/service',
     '- Tu peux aussi ajouter "problem" (motif FR court) si utile, sinon omets-le.',
   ].join('\n')
 }
@@ -149,8 +151,8 @@ function buildInterpreterInstructions() {
 function buildInterpreterUserPrompt(rawTranscript) {
   return [
     'Interprète cette transcription Whisper d\'un patient marocain.',
-    'Retrouve le sens réel, le service dentaire et l\'intention.',
-    'Ne dis jamais que tu ne comprends pas.',
+    'Corrige uniquement ce qui est soutenu par les mots entendus.',
+    'Si le transcript ne permet pas une conclusion fiable, retourne intent other, service null et une faible confiance.',
     'Réponds uniquement en JSON.',
     '',
     `Transcription: ${String(rawTranscript || '').trim()}`,
@@ -279,6 +281,46 @@ function resolveService(serviceName, correctedText = '') {
   return null
 }
 
+function comparableTokens(text) {
+  return String(text || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .match(/[\p{L}\p{N}]+/gu) || []
+}
+
+function isConservativeCorrection(rawTranscript, correctedText) {
+  const raw = String(rawTranscript || '').trim()
+  const corrected = String(correctedText || '').trim()
+  if (!corrected || corrected === raw) return true
+  const rawTokens = new Set(comparableTokens(raw))
+  const correctedTokens = comparableTokens(corrected)
+  if (!rawTokens.size || !correctedTokens.length) return false
+  const overlap = correctedTokens.filter((token) => rawTokens.has(token)).length
+  return overlap / Math.max(rawTokens.size, correctedTokens.length) >= 0.34
+}
+
+function hasIntentEvidence(intent, rawTranscript) {
+  const raw = String(rawTranscript || '')
+  const rules = {
+    appointment: /\b(?:rdv|rendez|appointment|mow3id|maw3id|nakhod\s+(?:chi\s+)?(?:rdv|rendez))\b|موعد/i,
+    availability: /\b(?:disponib|créneau|creneau|aw9at|wa9t|blassa|chno\s+kayn|wach\s+kayn)\b|متاح|متوفر|الأوقات/i,
+    cancel: /\b(?:annul|cancel|nlghi)\b|نلغي/i,
+    emergency: /\b(?:urgence|urgent|mosta3jel|nafkha)\b|مستعجل|ورم/i,
+    pain: /\b(?:douleur|wje3|waj3|kay?dorni|mal)\b|وجع|كيضر/i,
+    hours: /\b(?:horaires?|ouvert|ouverture|kat7ell|fo9ach)\b|وقتاش|حالين/i,
+    location: /\b(?:adresse|localisation|fin\s+kayn|parking)\b|فين/i,
+    price: /\b(?:prix|taman|ch7al|combien|cout)\b|ثمن|بشحال/i,
+    greeting: /\b(?:salam|bonjour|bonsoir|hello)\b|سلام/i,
+    thanks: /\b(?:merci|choukran|thanks)\b|شكرا/i,
+    ask_services: /\b(?:services?|soins?|ach\s+katdir|chno\s+kat9edm)\b|خدمات/i,
+    treatment: /\b(?:ta9wim|orthodont|detar|détar|carie|implant|couronne|extraction|blanchiment|facette)\b|تقويم|تسوس|خلع/i,
+    info: /\b(?:info|question|nssawal|wach)\b|سؤال/i,
+    other: true,
+  }
+  const rule = rules[intent]
+  return rule === true || (rule instanceof RegExp && rule.test(raw))
+}
+
 /**
  * Normalize interpreter JSON into internal voice-nlu analysis fields.
  * @param {object} parsed
@@ -290,15 +332,29 @@ function normalizeInterpreterResult(parsed, rawTranscript) {
     ? (languageRaw === 'ar' ? 'darija' : languageRaw)
     : 'darija'
 
-  const interpreterIntent = String(parsed?.intent || 'other').toLowerCase().trim()
+  const requestedIntent = String(parsed?.intent || 'other').toLowerCase().trim()
+  const intentSupported = INTERPRETER_INTENTS.includes(requestedIntent)
+    && hasIntentEvidence(requestedIntent, rawTranscript)
+  const interpreterIntent = intentSupported ? requestedIntent : 'other'
   let internalIntent = INTENT_TO_INTERNAL[interpreterIntent] || 'autre'
 
-  const correctedText = String(parsed?.corrected_text || parsed?.correctedText || '').trim()
-    || String(rawTranscript || '').trim()
+  const proposedCorrection = String(parsed?.corrected_text || parsed?.correctedText || '').trim()
+  const correctionAccepted = isConservativeCorrection(rawTranscript, proposedCorrection)
+  const correctedText = correctionAccepted && proposedCorrection
+    ? proposedCorrection
+    : String(rawTranscript || '').trim()
 
-  const serviceResolved = resolveService(parsed?.service, correctedText)
-  const problem = String(parsed?.problem || '').trim() || null
-  const confidence = Math.max(0, Math.min(1, Number(parsed?.confidence ?? 0.85)))
+  const rawService = detectService(rawTranscript)
+  const proposedService = resolveService(parsed?.service, correctedText)
+  const serviceResolved = rawService && proposedService?.serviceId === rawService.serviceId
+    ? proposedService
+    : (rawService || null)
+  const problemSupported = ['pain', 'emergency'].includes(interpreterIntent)
+  const problem = problemSupported && String(parsed?.problem || '').trim()
+    ? String(parsed.problem).trim()
+    : null
+  let confidence = Math.max(0, Math.min(1, Number(parsed?.confidence ?? 0.35)))
+  if (!correctionAccepted || !intentSupported) confidence = Math.min(confidence, 0.35)
 
   if (serviceResolved?.intent === 'urgence' || interpreterIntent === 'emergency') {
     internalIntent = 'urgence'
@@ -347,6 +403,8 @@ function normalizeInterpreterResult(parsed, rawTranscript) {
       corrected_text: correctedText,
       confidence,
       raw: parsed,
+      correctionAccepted,
+      intentEvidence: intentSupported,
     },
     language,
     replyLanguageHint: toReplyLanguageHint(language),
@@ -378,7 +436,7 @@ function normalizeInterpreterResult(parsed, rawTranscript) {
       score: confidence,
       lowConfidence: confidence < 0.42,
       reasons: ['ai_transcript_interpreter'],
-      recoverable: true,
+      recoverable: confidence >= 0.5,
     },
   }
 }
@@ -416,5 +474,7 @@ module.exports = {
   extractJsonObject,
   resolveService,
   normalizeInterpreterResult,
+  hasIntentEvidence,
+  isConservativeCorrection,
   interpretTranscriptWithAi,
 }

@@ -71,6 +71,11 @@ async function run() {
     ['11h', '11:00'],
     ['m3a 14h', '14:00'],
     ['à 11h', '11:00'],
+    ['onze heures trente', '11:30'],
+    ['onze heures et demie', '11:30'],
+    ['hdach w noss', '11:30'],
+    ['حداش ونص', '11:30'],
+    ['tlata l3chiya', '15:00'],
   ]) {
     assertTime(raw, expected)
     passed += 1
@@ -79,7 +84,8 @@ async function run() {
   assert.strictEqual(normalizeTimeExpression('+212612345678'), null)
   assert.strictEqual(normalizeTimeExpression('03/09'), null)
   assert.strictEqual(normalizeTimeExpression('05/09/2026'), null)
-  passed += 4
+  assert.strictEqual(normalizeTimeExpression('tlata'), null, 'ambiguous AM/PM must not be invented')
+  passed += 5
 
   // --- Slot selection formats ---
   const candidates = ['10:30', '12:00', '12:30']
@@ -318,14 +324,14 @@ async function run() {
   turn = await crm.processCrmTurn({
     conversationId: convBulk,
     chatId: chatBulk,
-    userText: bulkMsg,
+    userText: bulkMsg.replace('07/09', '17/09'),
     languageHint: 'darija',
   })
   assert.strictEqual(turn.lead.full_name, 'Salim Zouhairi', turn.lead.full_name)
   assert.strictEqual(turn.lead.city, 'Casablanca', turn.lead.city)
   assert.ok(turn.lead.phone_number && /602269407/.test(turn.lead.phone_number))
   assert.strictEqual(turn.lead.problem, 'Orthodontie')
-  assert.strictEqual(turn.lead.appointment_date, '2026-09-07')
+  assert.strictEqual(turn.lead.appointment_date, '2026-09-17')
   assert.strictEqual(turn.lead.appointment_time, '11:30')
   assert.ok(
     turn.lead.stage === 'confirmation' || turn.lead.awaiting_field === 'slot_alternative',

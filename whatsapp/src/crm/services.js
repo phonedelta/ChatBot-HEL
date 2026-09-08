@@ -44,54 +44,6 @@ const OFFICIAL_SERVICES = [
 ]
 
 /**
- * Canonical WhatsApp reply for ASK_SERVICES.
- * @param {'fr'|'darija'|'mixed'|'auto'|string} languageHint
- * @returns {string}
- */
-function buildPublicServicesReply(languageHint = 'fr') {
-  const darija = languageHint === 'darija'
-    || languageHint === 'mixed'
-    || languageHint === 'ar'
-    || String(languageHint || '').toLowerCase().includes('darija')
-    || String(languageHint || '').toLowerCase().includes('arab')
-
-  if (darija) {
-    return [
-      'الخدمات المتوفرة بمركز طب الأسنان HEL هي :',
-      '',
-      '- تقويم الأسنان',
-      '- طب أسنان الأطفال',
-      '- علاج اللثة',
-      '- تبييض الأسنان',
-      '- إزالة الجير (دِيتارتراج)',
-      '- علاج التسوس',
-      '- القشور / الفينير',
-      '- الحالات المستعجلة',
-      '',
-      'تقدروا تكتبوا لينا على واتساب باش تحجزو موعد.',
-    ].join('\n')
-  }
-
-  return [
-    'Les services disponibles au Centre Dentaire HEL sont :',
-    '',
-    ...PUBLIC_SERVICES_LIST.map((name) => `- ${name}`),
-    '',
-    'Vous pouvez nous écrire sur WhatsApp pour demander un rendez-vous.',
-  ].join('\n')
-}
-
-/** Compact knowledge block always injected into the LLM clinic facts. */
-function formatPublicServicesKnowledge() {
-  return [
-    '## Services',
-    '- Catalogue officiel (répondre exactement à ASK_SERVICES / « quels services ») :',
-    ...PUBLIC_SERVICES_LIST.map((name) => `  - ${name}`),
-    '- Invitation : le patient peut écrire sur WhatsApp pour demander un rendez-vous.',
-  ].join('\n')
-}
-
-/**
  * Synonyms / free-text → official service.
  * Keys must be normalized via normalizeKey.
  */
@@ -592,6 +544,4 @@ module.exports = {
   looksLikeServiceText,
   looksLikeAdminOrCatalogQuestion,
   hasPersonalDentalComplaint,
-  buildPublicServicesReply,
-  formatPublicServicesKnowledge,
 }

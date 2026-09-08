@@ -10,6 +10,7 @@ const {
   resolveReplyDestination,
   normalizeIncomingWhatsAppMessage,
   jidsEqual,
+  resolveConnectedWhatsAppAccount,
 } = require('../src/whatsapp-identity')
 const { parseWhatsAppId, extractPhoneFromWaContact } = require('../src/crm/smart/contact-resolver')
 
@@ -29,6 +30,22 @@ async function run() {
   assert.strictEqual(sanitizeAccountPhone('200940212715738'), null)
   assert.strictEqual(sanitizeAccountPhone('212612345678'), '+212612345678')
   assert.strictEqual(sanitizeAccountPhone('212612345678@c.us'), '+212612345678')
+
+  const turkeyJid = classifyJid('905321234567@c.us')
+  assert.strictEqual(turkeyJid.jidType, 'phone')
+  assert.strictEqual(turkeyJid.phoneNumber, '+905321234567')
+  assert.strictEqual(sanitizeAccountPhone('+90 532 123 45 67'), '+905321234567')
+  assert.strictEqual(sanitizeAccountPhone('905321234567@c.us'), '+905321234567')
+  assert.strictEqual(parseWhatsAppId('905321234567@c.us').e164, '+905321234567')
+
+  const turkeyAccount = await resolveConnectedWhatsAppAccount({
+    info: {
+      wid: { _serialized: '905321234567@c.us', user: '905321234567' },
+      pushname: 'Cabinet Turquie',
+    },
+  })
+  assert.strictEqual(turkeyAccount.phoneNumber, '+905321234567')
+  assert.strictEqual(turkeyAccount.resolved, true)
 
   const group = classifyJid('120363426272388530@g.us')
   assert.strictEqual(group.jidType, 'group')

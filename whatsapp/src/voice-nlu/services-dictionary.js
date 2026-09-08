@@ -357,11 +357,6 @@ function buildServiceIndex(entry) {
     } else {
       tokens.push(normalized)
     }
-    // Index individual words only when long enough to avoid collisions
-    // (e.g. "ders" from caries phrases stealing extraction requests).
-    for (const part of normalized.split(' ')) {
-      if (part.length >= 6) tokens.push(part)
-    }
   }
 
   return {

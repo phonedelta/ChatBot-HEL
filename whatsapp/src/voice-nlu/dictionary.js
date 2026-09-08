@@ -10,7 +10,7 @@ const CANONICAL_GROUPS = [
       'dent', 'dents', 'سن', 'سنان', 'sinn', 'senn', 'sinan', 'sennan', 'sinnan', 'senan', 'snan',
       'ders', 'dersi', 'darsi', 'drass', 'drassa', 'darssa', 'dars', 'darss', 'الضرس', 'ضرس',
       'darsa', 'derssa', 'drssa', 'sni', 'snani', 'snia',
-      'adrass', 'adras', 'derci', 'darci', 'dirty', 'jersey',
+      'adrass', 'adras', 'derci', 'darci',
     ],
   },
   {
@@ -25,7 +25,7 @@ const CANONICAL_GROUPS = [
       'katwja3ni', 'kaywja3ni', 'kaywja3oni', 'katwja3oni', 'katwja3', 'kaywja3',
       'وجع', 'وجعني', 'كاينوجعني', 'كايوجعني', 'كايضرني', 'كاتضرني', 'كيضرني', 'كايضر', 'كاتضر',
       'kayj3ni', 'kaywaj3ni', 'yewj3ni', 'ywje3ni',
-      'hrssa', 'harsa', '7ri9', 'hri9', '7ri9a', 'حريق', 'كايحرقني', 'kay7argni', 'visa', 'vision', 'wagon',
+      'hrssa', 'harsa', '7ri9', 'hri9', '7ri9a', 'حريق', 'كايحرقني', 'kay7argni',
     ],
   },
   {
@@ -40,7 +40,7 @@ const CANONICAL_GROUPS = [
     canonical: 'rendez-vous',
     forms: [
       'rendez-vous', 'rendez vous', 'rdv', 'rdvs', 'موعد', 'mow3id', 'maw3id', 'mawid', 'mo3id',
-      'appointment', 'randivo', 'randivou', 'randivos', 'randevous', 'rendezvou', 'hervé', 'hervey',
+      'appointment', 'randivo', 'randivou', 'randivos', 'randevous', 'rendezvou',
       'air de vie', 'rendezvouz',
     ],
   },
@@ -48,7 +48,7 @@ const CANONICAL_GROUPS = [
     canonical: 'vouloir',
     forms: [
       'bghit', 'bghiti', 'bghitc', 'بغيت', 'بغيتي', 'bghina', 'بغينا', 'baghit', 'bagheti', 'baghi',
-      'ba8i', 'bagli', 'beach', 'big hit', 'je veux', 'je voudrais', 'veux', 'voudrais',
+      'ba8i', 'bagli', 'je veux', 'je voudrais', 'veux', 'voudrais',
     ],
   },
   {
@@ -79,18 +79,18 @@ const CANONICAL_GROUPS = [
     canonical: 'extraire',
     forms: [
       'n9ala3', 'nqala3', 'n9la3', 'nkalaa', 'قلع', 'نقلع', 'extraction', 'arracher', 'enlever',
-      'n9ale3', 'nqale3', 'qala3', 'n7yed', 'n7ayed', 't7ayd', 't7ayed', 'nhayed',
+      'n9ale3', 'nqale3', 'qala3', 'n7yed', 'n7ayed', 't7ayd', 't7ayed', 'nhayed', 'nhyed',
     ],
   },
   {
     canonical: 'implant',
-    forms: ['implant', 'implants', 'emplant', 'امبلونت', 'امبلانت', 'انبلونت', 'implantt'],
+    forms: ['implant', 'implants', 'implan', 'emplant', 'امبلونت', 'امبلانت', 'انبلونت', 'implantt'],
   },
   {
     canonical: 'appareil',
     forms: [
       'appareil', 'appareils', 'apareil', 'bra', 'brackets', 'bracket', 'bagues', 'bague', 'bagat', 'brisat',
-      'تقويم', 't9wim', 'ta9wim', 'ta9ouim', 'taqwim', 'orthodontie', 'orthodontiste', 'ortodonti', 'aligneur',
+      'تقويم', 't9wim', 'ta9wim', 'ta9ouim', 'taqwim', 'takouim', 'orthodontie', 'orthodontiste', 'ortodonti', 'ortodontie', 'aligneur',
       'gouttiere', 'gouttière',
     ],
   },
@@ -115,6 +115,10 @@ const CANONICAL_GROUPS = [
   {
     canonical: 'horaires',
     forms: ['horaire', 'horaires', 'وقت', 'الوقت', 'wa9t', 'ouvert', 'ouverture', 'ouverture'],
+  },
+  {
+    canonical: 'disponibilite',
+    forms: ['disponible', 'disponibles', 'disponibilite', 'disponibilité', 'aw9at', 'الأوقات', 'متاح', 'متاحة', 'متوفر'],
   },
   {
     canonical: 'localisation',
@@ -177,14 +181,14 @@ const CANONICAL_GROUPS = [
   {
     canonical: 'carie',
     forms: [
-      'carie', 'caries', 'تسوس', 'tssaws', 'tsous', 'tsouss', 'hrssa', '7chwa', 'hachwa', 'plombage', 'plomba',
+      'carie', 'caries', 'kari', 'تسوس', 'tssaws', 'tsous', 'tsouss', 'tassous', 'tasawos', 'hrssa', '7chwa', 'hachwa', 'plombage', 'plomba',
       'obturation', 'composite',
     ],
   },
   {
     canonical: 'detartrage',
     forms: [
-      'detartrage', 'détartrage', 'tandif', 'تنظيف', 'tartre', 'tn9iya', 'tnqiya', 'jir', 'nettoyage', 'polissage',
+      'detartrage', 'détartrage', 'detratrage', 'tandif', 'تنظيف', 'tartre', 'tn9iya', 'tnqiya', 'jir', 'nettoyage', 'polissage',
     ],
   },
   {
@@ -218,6 +222,10 @@ const CANONICAL_GROUPS = [
     canonical: 'ville',
     forms: ['ville', 'city', 'مدينة', 'mdina', 'casa', 'casablanca', 'rabat'],
   },
+  {
+    canonical: 'consultation',
+    forms: ['consultation', 'consultasion', 'consulte', 'استشارة'],
+  },
 ]
 
 /** @type {Map<string, string>} */
@@ -238,8 +246,6 @@ const ASR_CORRECTIONS = {
   bagheti: 'bghiti',
   baghi: 'bghit',
   ba8i: 'bghit',
-  beach: 'bghit',
-  'big hit': 'bghit',
   bagly: 'bghit',
   // prendre
   nkhod: 'nakhod',
@@ -254,8 +260,6 @@ const ASR_CORRECTIONS = {
   rendezvou: 'rendez-vous',
   'rendez vous': 'rendez-vous',
   'air de vie': 'rdv',
-  hervé: 'rdv',
-  hervey: 'rdv',
   // dents / douleur
   dersi: 'dersi',
   derci: 'dersi',
@@ -270,11 +274,6 @@ const ASR_CORRECTIONS = {
   katdarni: 'wje3ni',
   kaydarni: 'wje3ni',
   kaydrni: 'wje3ni',
-  dirty: 'dersi',
-  jersey: 'dersi',
-  visa: 'wje3',
-  vision: 'wje3ni',
-  wagon: 'waj3',
   ouja: 'ouj3',
   oujaani: 'wje3ni',
   // avoir

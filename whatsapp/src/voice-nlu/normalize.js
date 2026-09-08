@@ -12,7 +12,7 @@ const { canonicalForToken, normalizeKey } = require('./dictionary')
 function tokenize(text) {
   return String(text || '')
     .split(/(\s+|[\u0600-\u06FF]+|[A-Za-zÀ-ÿ0-9_']+)/g)
-    .filter((part) => part && !/^\s+$/.test(part))
+    .filter(Boolean)
 }
 
 /**

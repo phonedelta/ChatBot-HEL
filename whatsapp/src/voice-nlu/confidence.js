@@ -7,6 +7,7 @@
  * @param {object} params
  * @param {number} [params.asrScore]
  * @param {boolean} [params.asrWeak]
+ * @param {boolean} [params.asrSuspicious]
  * @param {string} [params.rawText]
  * @param {string} [params.correctedText]
  * @param {string} [params.intent]
@@ -18,6 +19,7 @@
 function computeVoiceConfidence({
   asrScore = 0,
   asrWeak = false,
+  asrSuspicious = false,
   rawText = '',
   correctedText = '',
   intent = 'autre',
@@ -40,6 +42,10 @@ function computeVoiceConfidence({
   if (asrWeak) {
     score -= 0.12
     reasons.push('asr_weak')
+  }
+  if (asrSuspicious && !asrWeak) {
+    score -= 0.05
+    reasons.push('asr_suspicious_but_usable')
   }
 
   if (Number.isFinite(asrScore)) {
@@ -83,15 +89,15 @@ function computeVoiceConfidence({
   score = Math.max(0, Math.min(1, score))
 
   // Recoverable: known intent or dental tokens ⇒ do not force clarification.
-  const recoverable = Boolean(
+  const recoverable = !asrWeak && Boolean(
     (intent && intent !== 'autre' && Number(intentConfidence || 0) >= 0.7)
     || meaningHint
     || knownDental,
   )
 
-  const lowConfidence = recoverable
+  const lowConfidence = asrWeak || (recoverable
     ? (score < 0.22 || reasons.includes('empty') || reasons.includes('junk_transcript'))
-    : score < 0.42
+    : score < 0.42)
 
   return {
     score: Number(score.toFixed(3)),

@@ -1,6 +1,6 @@
 /**
- * Phone normalization for Moroccan WhatsApp numbers.
- * Output display format: +212 6 XX XX XX XX
+ * Phone normalization. Booking validation remains Moroccan, while WhatsApp
+ * transport identity may use any plausible E.164 international number.
  */
 
 function digitsOnly(value) {
@@ -69,10 +69,22 @@ function isValidPhone(value) {
   return /^212[5-7]\d{8}$/.test(digits)
 }
 
+/**
+ * Transport-level E.164 validation for connected WhatsApp accounts/contacts.
+ * This does not relax the clinic booking form's Moroccan phone validation.
+ */
+function isValidInternationalPhone(value) {
+  const raw = String(value || '').trim()
+  if (!raw || /@lid|@g\.us|@broadcast/i.test(raw)) return false
+  const digits = normalizePhoneDigits(raw)
+  return /^[1-9]\d{7,14}$/.test(digits)
+}
+
 module.exports = {
   digitsOnly,
   normalizePhoneDigits,
   toE164,
   formatPhoneDisplay,
   isValidPhone,
+  isValidInternationalPhone,
 }

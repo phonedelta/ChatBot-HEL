@@ -7,6 +7,7 @@ const {
   classifyIntent,
   routePatientMessage,
   normalizeDarijaForNlu,
+  normalizeDarijaText,
   isProtectedToken,
 } = require('../src/voice-nlu')
 const { hasExplicitBookingIntent: bookingHint } = require('../src/voice-nlu/intent-table')
@@ -81,6 +82,8 @@ const INTENT_CASES = [
   { text: 'chno les horaires dyalkom', intent: 'ASK_OPENING_HOURS' },
   { text: 'annuler lia rdv dyali', intent: 'CANCEL_APPOINTMENT' },
   { text: 'bghit nchof les disponibilités', intent: 'CHECK_APPOINTMENT_AVAILABILITY' },
+  { text: 'Chno l aw9at li disponible f dak nhar', intent: 'CHECK_APPOINTMENT_AVAILABILITY' },
+  { text: 'bghit rendez-vous orthodontie mardi à onze heures trente', intent: 'BOOK_APPOINTMENT' },
 
   // FAQ / pain / thanks / greeting
   { text: 'slm', intent: 'GREETING' },
@@ -156,6 +159,10 @@ function run() {
   let passed = 0
   const failures = []
 
+  const spaced = normalizeDarijaText('bghit rendez vous nhar tlat')
+  assert.match(spaced.normalizedText, /\s/, 'legacy normalizer must preserve word boundaries')
+  passed += 1
+
   // --- Intent corpus ---
   for (const c of INTENT_CASES) {
     try {
@@ -172,7 +179,9 @@ function run() {
     expectNotIntent('ch7al taman detartrage', 'BOOK_APPOINTMENT')
     expectNotIntent('wach katdiro implant', 'BOOK_APPOINTMENT')
     expectNotIntent('implant', 'BOOK_APPOINTMENT')
-    passed += 4
+    expectNotIntent('Hervé va venir demain', 'BOOK_APPOINTMENT')
+    expectNotIntent('visa wagon jersey', 'DENTAL_PAIN')
+    passed += 6
   } catch (err) {
     failures.push(err.message)
   }

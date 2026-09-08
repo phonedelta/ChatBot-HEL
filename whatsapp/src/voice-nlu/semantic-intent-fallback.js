@@ -1,7 +1,6 @@
 /**
- * Controlled OpenAI semantic intent fallback for unknown Darija formulations.
- * Deterministic state machines / classifiers stay primary — call only when confidence is low.
- * Reuses the existing OpenAI provider (responses API, same as transcript interpreter).
+ * Controlled semantic intent fallback for unknown Darija formulations.
+ * All model transport goes through the centralized AI provider.
  */
 
 const ALLOWED_INTENTS = [
@@ -59,50 +58,18 @@ function buildSemanticIntentSystemPrompt() {
   ].join('\n')
 }
 
-function extractJsonObject(text) {
-  const raw = String(text || '').trim()
-  if (!raw) return null
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  const candidate = fenced ? fenced[1].trim() : raw
-  try {
-    return JSON.parse(candidate)
-  } catch {
-    const start = candidate.indexOf('{')
-    const end = candidate.lastIndexOf('}')
-    if (start >= 0 && end > start) {
-      try { return JSON.parse(candidate.slice(start, end + 1)) } catch { return null }
-    }
-    return null
-  }
-}
-
-function extractOpenAiOutputText(response) {
-  if (!response) return ''
-  if (typeof response.output_text === 'string') return response.output_text
-  const parts = []
-  for (const item of response.output || []) {
-    for (const c of item.content || []) {
-      if (typeof c.text === 'string') parts.push(c.text)
-      else if (typeof c === 'string') parts.push(c)
-    }
-  }
-  return parts.join('\n').trim()
-}
-
 /**
  * @param {{
- *   openai: object,
- *   model: string,
+ *   provider: object,
  *   rawText: string,
  *   normalizedText?: string|null,
  *   stage?: string|null,
  * }} args
  */
 async function classifyIntentSemanticFallback(args = {}) {
-  const openai = args.openai
-  const model = String(args.model || '').trim()
+  const provider = args.provider
   const rawText = String(args.rawText || '').trim()
-  if (!openai || !model || !rawText) {
+  if (!provider?.isConfigured?.() || !rawText) {
     return { intent: 'OTHER', confidence: 0, source: 'missing_client', language: null, entities: {} }
   }
 
@@ -119,31 +86,15 @@ async function classifyIntentSemanticFallback(args = {}) {
     'Classifie l\'intent parmi la liste autorisée. JSON uniquement.',
   ].filter(Boolean).join('\n')
 
-  let content = ''
+  let parsed = null
   try {
-    if (openai.responses?.create) {
-      const response = await openai.responses.create({
-        model,
-        instructions: buildSemanticIntentSystemPrompt(),
-        input: [{ role: 'user', content: prompt }],
-        max_output_tokens: 220,
-        store: false,
-      })
-      content = extractOpenAiOutputText(response)
-    } else if (openai.chat?.completions?.create) {
-      const completion = await openai.chat.completions.create({
-        model,
-        temperature: 0,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: buildSemanticIntentSystemPrompt() },
-          { role: 'user', content: prompt },
-        ],
-      })
-      content = completion?.choices?.[0]?.message?.content || ''
-    } else {
-      return { intent: 'OTHER', confidence: 0, source: 'unsupported_client', language: null, entities: {} }
-    }
+    const result = await provider.generateStructured({
+      systemPrompt: buildSemanticIntentSystemPrompt(),
+      messages: [{ role: 'user', content: prompt }],
+      maxOutputTokens: 220,
+      intent: 'SEMANTIC_CLASSIFICATION',
+    })
+    parsed = result.data
   } catch (err) {
     return {
       intent: 'OTHER',
@@ -155,7 +106,6 @@ async function classifyIntentSemanticFallback(args = {}) {
     }
   }
 
-  const parsed = extractJsonObject(content)
   const intent = String(parsed?.intent || 'OTHER').toUpperCase()
   const allowed = ALLOWED_INTENTS.includes(intent) ? intent : 'OTHER'
   const confidence = Math.max(0, Math.min(1, Number(parsed?.confidence) || 0))

@@ -1,5 +1,5 @@
 const assert = require('assert')
-const { classifyIntent, buildIntentDirectReply } = require('../src/voice-nlu')
+const { classifyIntent } = require('../src/voice-nlu')
 
 const askServicesCases = [
   '3afak chno homa les service li kaynin f had centre',
@@ -22,18 +22,6 @@ function run() {
     assert.ok(hit.confidence >= 0.7, `low confidence for: ${text} => ${hit.confidence}`)
     console.log(`ok  ASK_SERVICES ${(hit.confidence).toFixed(2)} <= ${text}`)
   }
-
-  const replyFr = buildIntentDirectReply('ASK_SERVICES', 'fr')
-  assert.ok(replyFr.includes('Orthodontie'))
-  assert.ok(replyFr.includes('Blanchiment dentaire'))
-  assert.ok(replyFr.includes('Traitement des caries'))
-  assert.ok(replyFr.includes('Vous pouvez nous écrire sur WhatsApp'))
-  assert.ok(!replyFr.includes('Implants dentaires'))
-
-  const replyDarija = buildIntentDirectReply('ASK_SERVICES', 'darija')
-  assert.ok(replyDarija.includes('تقويم'))
-  assert.ok(/خدمات|موعد|واتساب/.test(replyDarija))
-  assert.ok(!replyDarija.includes('زراعة'))
 
   const userCase = classifyIntent('Chno les services li kaynin')
   assert.strictEqual(userCase.intent, 'ASK_SERVICES')

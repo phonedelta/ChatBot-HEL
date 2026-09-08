@@ -45,6 +45,23 @@ function normalizeSlotTime(value) {
   return `${String(Number(match[1])).padStart(2, '0')}:${match[2]}`
 }
 
+const HOUR_WORDS = Object.freeze({
+  dix: 10,
+  onze: 11,
+  douze: 12,
+  treize: 13,
+  quatorze: 14,
+  quinze: 15,
+  seize: 16,
+  hdach: 11,
+  '7dach': 11,
+  حداش: 11,
+})
+
+function hourFromWord(value) {
+  return HOUR_WORDS[String(value || '').toLowerCase()] ?? null
+}
+
 /**
  * Normalize natural Moroccan / FR time expressions to HH:mm.
  * Safe for: 12h30, 12 h 30, 12:30, 12H30, 14h, 14 h, m3a 14h, à 11h.
@@ -78,12 +95,26 @@ function normalizeTimeExpression(text) {
     }
   }
 
-  // 11 ونص / 11 w nos / 11 w noss / 11 et demi / onze heures et demie
+  // hdach w noss / حداش ونص / onze heures et demie
+  const wordHalf = raw.match(/^(?:(?:m3a|مع|a|à)\s+)?(dix|onze|douze|treize|quatorze|quinze|seize|hdach|7dach|حداش)\s*(?:heures?\s*)?(?:ونص|w\s*nos+s?|ou?\s*nos+s?|et\s+demi(?:e)?)\s*$/i)
+  if (wordHalf) return pack(hourFromWord(wordHalf[1]), 30)
+
+  // onze heures trente / onze heures 30
+  const wordTime = raw.match(/^(?:(?:m3a|مع|a|à)\s+)?(dix|onze|douze|treize|quatorze|quinze|seize|hdach|7dach|حداش)\s*(?:heures?|الساعة)\s*(\d{1,2}|trente)?\s*$/i)
+  if (wordTime) {
+    const minute = !wordTime[2] ? 0 : (String(wordTime[2]).toLowerCase() === 'trente' ? 30 : Number(wordTime[2]))
+    return pack(hourFromWord(wordTime[1]), minute)
+  }
+
+  // tlata l3chiya is explicit PM; bare "tlata" remains ambiguous.
+  if (/^(?:(?:m3a|مع)\s+)?(?:tlata|ثلاثة)\s+(?:d\s*)?(?:l3chiya|العشية|apres-midi|après-midi)\s*$/i.test(raw)) {
+    return pack(15, 0)
+  }
+
+  // 11 ونص / 11 w nos / 11 w noss / 11 et demi
   const half = raw.match(/^(?:(?:m3a|مع|a|à)\s+)?(\d{1,2})\s*(?:ونص|w\s*nos+s?|ou?\s*nos+s?|et\s+demi(?:e)?)\s*$/i)
-    || raw.match(/^(?:onze)\s*(?:heures?\s+)?et\s+demi(?:e)?\s*$/i)
   if (half) {
-    const h = half[1] != null ? Number(half[1]) : 11
-    return pack(h, 30)
+    return pack(Number(half[1]), 30)
   }
 
   // 3 pm / 11:30 am / 3:00 PM
@@ -124,7 +155,7 @@ function extractEmbeddedTime(text) {
   if (direct) return direct.normalized
 
   const candidates = []
-  const re = /(?:(?:m3a|مع|a|à)\s*)?\d{1,2}\s*(?:h|:)\s*\d{2}\s*(?:a\.?m\.?|p\.?m\.?)?|(?:(?:m3a|مع|a|à)\s*)?\d{1,2}\s*h\b|\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)?|\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?)|(?:m3a|مع)\s*\d{1,2}\b|\d{1,2}\s*(?:w\s*nos+s?|ونص|et\s+demi)/gi
+  const re = /(?:(?:m3a|مع|a|à)\s*)?\d{1,2}\s*(?:h|:)\s*\d{2}\s*(?:a\.?m\.?|p\.?m\.?)?|(?:(?:m3a|مع|a|à)\s*)?\d{1,2}\s*h\b|\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)?|\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?)|(?:m3a|مع)\s*\d{1,2}\b|\d{1,2}\s*(?:w\s*nos+s?|ونص|et\s+demi)|(?:(?:m3a|مع|a|à)\s*)?(?:dix|onze|douze|treize|quatorze|quinze|seize|hdach|7dach|حداش)\s*(?:heures?|الساعة)?\s*(?:trente|\d{1,2}|w\s*nos+s?|ونص|et\s+demi(?:e)?)?|(?:(?:m3a|مع)\s*)?(?:tlata|ثلاثة)\s+(?:d\s*)?(?:l3chiya|العشية|apres-midi|après-midi)/gi
   let m
   while ((m = re.exec(raw)) !== null) {
     candidates.push(m[0])

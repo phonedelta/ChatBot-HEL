@@ -4,7 +4,14 @@
  * Never invent a phone number from a LID numeric id.
  */
 
-const { toE164, formatPhoneDisplay, normalizePhoneDigits, digitsOnly, isValidPhone } = require('../phone')
+const {
+  toE164,
+  formatPhoneDisplay,
+  normalizePhoneDigits,
+  digitsOnly,
+  isValidPhone,
+  isValidInternationalPhone,
+} = require('../phone')
 
 function nowIso() {
   return new Date().toISOString()
@@ -46,7 +53,7 @@ function parseWhatsAppId(value) {
   let e164 = ''
   if (!isLid && !isGroup && isPhoneJid && digits) {
     const normalized = normalizePhoneDigits(digits)
-    if (/^212[5-7]\d{8}$/.test(normalized)) {
+    if (isValidInternationalPhone(`+${normalized}`)) {
       e164 = `+${normalized}`
     }
   }
@@ -83,7 +90,7 @@ function extractPhoneFromWaContact(contact) {
 }
 
 /**
- * Accept only verified Moroccan mobiles/landlines — never invent from LID digits.
+ * Accept verified international E.164 numbers — never invent from LID digits.
  * @param {string} value
  * @returns {string|null} +212…
  */
@@ -95,8 +102,11 @@ function coerceReliablePhone(value) {
     const parsed = parseWhatsAppId(raw)
     return parsed.e164 || null
   }
+  // Bare 15-digit values are commonly LID ids. Require an explicit "+" or
+  // phone JID at that length to avoid displaying a technical id as a number.
+  if (!raw.startsWith('+') && digitsOnly(raw).length >= 15) return null
   const e164 = toE164(raw)
-  if (e164 && isValidPhone(e164) && /^212[5-7]\d{8}$/.test(normalizePhoneDigits(e164))) {
+  if (e164 && isValidInternationalPhone(e164)) {
     return e164
   }
   return null
@@ -327,14 +337,9 @@ function createContactResolver(db) {
     if (!jid || jid.includes('@broadcast') || jid.includes('@g.us')) return null
 
     const parsed = parseWhatsAppId(jid)
-    const phone = toE164(phone_number)
-    if (phone && !isValidPhone(phone)) {
-      // Reject non-Moroccan junk carefully — still allow valid E.164 mobiles
-      if (!/^212[5-7]\d{8}$/.test(normalizePhoneDigits(phone))) {
-        return null
-      }
-    }
-    const safePhone = phone && /^212[5-7]\d{8}$/.test(normalizePhoneDigits(phone)) ? phone : null
+    const phone = coerceReliablePhone(phone_number)
+    if (phone && !isValidInternationalPhone(phone)) return null
+    const safePhone = phone && isValidInternationalPhone(phone) ? phone : null
 
     let customer = null
     if (customer_id) {

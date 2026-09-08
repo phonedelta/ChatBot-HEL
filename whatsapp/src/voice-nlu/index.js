@@ -24,7 +24,6 @@ const {
 } = require('./transcript-interpreter')
 const {
   classifyIntent,
-  buildIntentDirectReply,
   INTENT_NAMES,
   INTENT_DICTIONARY,
 } = require('./intent-classifier')
@@ -84,7 +83,6 @@ module.exports = {
   normalizeInterpreterResult,
   extractJsonObject,
   classifyIntent,
-  buildIntentDirectReply,
   INTENT_NAMES,
   INTENT_DICTIONARY,
   detectServiceBookingIntent,

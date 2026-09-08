@@ -554,7 +554,9 @@ function createAvailabilityFlow(db, helpers = {}) {
       handled: true,
       action: 'slots_listed',
       forceReply: formatSlotsMessage(dateIso, result.times, language),
-      shouldSkipLlm: true,
+      // Backend owns the exact slots; the conversational layer may add a natural
+      // introduction but must append this validated list without changing values.
+      shouldSkipLlm: false,
       availabilityDate: dateIso,
       slots: snap,
     }
