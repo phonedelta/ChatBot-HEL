@@ -133,6 +133,7 @@
     "test:openrouter-conversation": "node scripts/openrouter-conversation-test.js",
     "test:voice-transcription": "node scripts/voice-transcription-pipeline-test.js",
     "test:voice-file": "node scripts/voice-transcription-compare.js",
+    "test:platform-reset": "node scripts/platform-reset-test.js",
     "test:analytics-period-comparison": "node scripts/analytics-test.js"
   },
   "dependencies": {

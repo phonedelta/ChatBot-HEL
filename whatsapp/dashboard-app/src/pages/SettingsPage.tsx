@@ -53,7 +53,7 @@ const SECTION_COPY: Record<
 }
 
 export function SettingsPage() {
-  const { can } = usePermissions()
+  const { can, isAdmin } = usePermissions()
   const [searchParams, setSearchParams] = useSearchParams()
   const usersRef = useRef<UsersAccessSectionHandle>(null)
   useDocumentTitle('Paramètres')
@@ -162,7 +162,7 @@ export function SettingsPage() {
                   <AutomationsSettingsSection canEdit={canManageSettings} />
                 ) : null}
                 {activeSection === 'security' ? (
-                  <SecuritySettingsSection canEdit={canManageSettings} />
+                  <SecuritySettingsSection canEdit={canManageSettings} isAdmin={isAdmin} />
                 ) : null}
                 {activeSection === 'notifications' ? (
                   <NotificationsSettingsSection canEdit={canManageSettings} />

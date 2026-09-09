@@ -6,8 +6,15 @@ import {
   SettingsToast,
   useSettingsSection,
 } from '@/components/settings/useSettingsSection'
+import { PlatformResetSection } from '@/components/settings/PlatformResetSection'
 
-export function SecuritySettingsSection({ canEdit }: { canEdit: boolean }) {
+export function SecuritySettingsSection({
+  canEdit,
+  isAdmin,
+}: {
+  canEdit: boolean
+  isAdmin: boolean
+}) {
   const s = useSettingsSection<SecuritySettings>({
     load: cabinetSettingsApi.getSecurity,
     save: cabinetSettingsApi.saveSecurity,
@@ -48,6 +55,7 @@ export function SecuritySettingsSection({ canEdit }: { canEdit: boolean }) {
             />
           ) : null}
         </SettingsCard>
+        {isAdmin ? <PlatformResetSection /> : null}
       </div>
       <SettingsPanelFooter dirty={s.dirty} saving={s.saving} onSave={s.onSave} onCancel={s.onCancel} canEdit={canEdit} />
     </>

@@ -48,6 +48,7 @@ const { createDashboardUsers } = require('./dashboard/users')
 const { createSmartCrmRouter } = require('./dashboard/smart-routes')
 const { createCrmService } = require('./crm')
 const { openCrmDatabase } = require('./crm/db')
+const { createPlatformResetGate } = require('./crm/platform-reset-gate')
 const { getAuthenticatedActor } = require('./crm/smart/activity-actors')
 const { formatKnowledgeItemsForPrompt } = require('./crm/smart/knowledge-prompt')
 const { createAiProvider } = require('./ai/ai-provider')
@@ -294,6 +295,9 @@ function isActiveCrmDeterministicWorkflow(lead) {
 }
 
 const aiConversationQueues = new Map()
+const platformResetGate = createPlatformResetGate()
+const runOperationalTask = platformResetGate.run
+
 const aiKnowledgeBase = loadAiKnowledgeBase()
 const aiProvider = createAiProvider({
   providerName: openRouterBaseUrl.includes('openrouter.ai') ? 'openrouter' : 'openai-compatible',
@@ -4065,7 +4069,7 @@ function enqueueRealtimeMessage(record, message, options = {}) {
     .catch(() => {})
     .then(async () => {
       try {
-        await processRealtimeMessage(record, message, options)
+        await runOperationalTask(() => processRealtimeMessage(record, message, options))
       } finally {
         record.pendingMessages = Math.max(0, Number(record.pendingMessages || 1) - 1)
       }
@@ -4085,6 +4089,10 @@ function shouldSyncHistoryMessage(message) {
   }
 
   const messageTimeMs = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000
+  const resetCutoffMs = Number(automationState.platformResetAt || 0)
+  if (resetCutoffMs > 0 && messageTimeMs <= resetCutoffMs) {
+    return false
+  }
   const lookbackMs = automationHistoryLookbackHours * 60 * 60 * 1000
   return messageTimeMs >= Date.now() - lookbackMs
 }
@@ -4104,8 +4112,7 @@ function syncAutomationHistory(record, reason = 'interval') {
     return Promise.resolve()
   }
 
-  record.historySyncPromise = Promise.resolve()
-    .then(async () => {
+  record.historySyncPromise = runOperationalTask(async () => {
       for (const chatId of chats) {
         const chat = await runWithRetries(
           () => Promise.race([
@@ -5851,6 +5858,29 @@ app.use(
   createSmartCrmRouter({
     getSmart: () => (crm ? crm.smart : null),
     getCrm: () => crm,
+    aiHistoryPath,
+    crmMediaDir,
+    voiceLogDir: aiVoiceNluLogDir,
+    beforePlatformReset: platformResetGate.begin,
+    afterPlatformReset: platformResetGate.end,
+    getWhatsappStatus: () => {
+      const record = getInstance('main')
+      return {
+        ready: String(record?.state || '').toLowerCase() === 'ready',
+        connected: Boolean(record?.client),
+      }
+    },
+    resetRuntimeData: () => {
+      for (const key of Object.keys(aiConversationHistory)) {
+        delete aiConversationHistory[key]
+      }
+      for (const key of Object.keys(nluUnclearCounts)) {
+        delete nluUnclearCounts[key]
+      }
+      automationState.platformResetAt = Date.now()
+      persistAutomationState()
+      persistAiConversationHistory()
+    },
     assertPermission,
     sendWhatsAppText: async ({ chatId = null, phone = null, text }) => {
       const body = String(text || '').trim()
@@ -7265,7 +7295,10 @@ app.post('/incoming', verifyWebhookSecret, async (req, res) => {
     const groupChat = Boolean(normalized?.meta?.is_group || isGroupChatId(chatReference))
     const standaloneReplyAllowed = backendEnabled || (!blockedChat && (!groupChat || aiReplyInGroups))
     const ingestion = standaloneReplyAllowed
-      ? await getIncomingDecision(normalized, { conversationId: `webhook:${chatReference}` })
+      ? await runOperationalTask(() => getIncomingDecision(
+        normalized,
+        { conversationId: `webhook:${chatReference}` },
+      ))
       : {
           conversation: null,
           chatbot: {
@@ -7374,6 +7407,7 @@ setInterval(() => {
 
 if (automationHistorySyncEnabled) {
   setInterval(() => {
+    if (platformResetGate.isActive()) return
     for (const record of instances.values()) {
       syncAutomationHistory(record, 'interval')
     }
@@ -7384,7 +7418,8 @@ if (automationHistorySyncEnabled) {
 if (crm?.smart?.runConfirmationTick) {
   const confirmationTickMs = Number(process.env.CRM_CONFIRMATION_TICK_MS || 60000)
   setInterval(() => {
-    crm.smart.runConfirmationTick().catch((error) => {
+    if (platformResetGate.isActive()) return
+    runOperationalTask(() => crm.smart.runConfirmationTick()).catch((error) => {
       console.warn('[CONFIRMATION] tick failed', error.message || error)
     })
   }, Math.max(15000, confirmationTickMs)).unref()

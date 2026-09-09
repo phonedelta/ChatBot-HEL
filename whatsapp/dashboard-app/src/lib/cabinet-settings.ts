@@ -55,6 +55,18 @@ export type NotificationsSettings = {
   automationFailure: boolean
 }
 
+export type PlatformResetReport = {
+  clearedTables: Array<{ table: string; rows: number }>
+  keptTables: string[]
+  extras: string[]
+  warnings: Array<{ target: string; code: string }>
+  backupFile: string | null
+  whatsappSessionPreserved: boolean
+  dashboardSessionsPreserved: boolean
+  whatsappReadyBefore: boolean | null
+  whatsappReadyAfter: boolean | null
+}
+
 async function fetchSettings<T>(path: string) {
   const res = await api<{ ok: boolean; settings: T }>(path)
   return res.settings
@@ -81,4 +93,9 @@ export const cabinetSettingsApi = {
   getNotifications: () => fetchSettings<NotificationsSettings>('/dashboard/api/settings/notifications'),
   saveNotifications: (body: Partial<NotificationsSettings>) =>
     saveSettings('/dashboard/api/settings/notifications', body),
+  resetPlatform: async (confirmation: string) =>
+    api<{ ok: boolean; message: string; report: PlatformResetReport }>(
+      '/dashboard/api/settings/reset-platform',
+      { method: 'POST', body: { confirmation } },
+    ),
 }

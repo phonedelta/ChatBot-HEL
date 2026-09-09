@@ -9,6 +9,10 @@ const path = require('path')
 const multer = require('multer')
 const { PERMISSIONS } = require('./permissions')
 const { getAuthenticatedActor } = require('../crm/smart/activity-actors')
+const {
+  RESET_CONFIRMATION,
+  resetOperationalCrmData,
+} = require('../crm/reset-operational-data')
 
 function dashboardActor(req) {
   return getAuthenticatedActor(req.dashboardUser)
@@ -29,10 +33,19 @@ function actorDisplayName(req) {
  *   persistCrmMediaFile?: Function,
  *   dashboardImageMaxBytes?: number,
  *   allowedDashboardImageMimes?: Set<string>,
+ *   resetRuntimeData?: Function,
+ *   getWhatsappStatus?: Function,
+ *   beforePlatformReset?: Function,
+ *   afterPlatformReset?: Function,
+ *   platformRootDir?: string,
+ *   aiHistoryPath?: string,
+ *   crmMediaDir?: string,
+ *   voiceLogDir?: string,
  * }} deps
  */
 function createSmartCrmRouter(deps) {
   const router = express.Router()
+  let platformResetInProgress = false
   const maxImageBytes = Number(deps.dashboardImageMaxBytes || 10 * 1024 * 1024)
   const allowedMimes = deps.allowedDashboardImageMimes
     || new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp'])
@@ -1079,6 +1092,115 @@ function createSmartCrmRouter(deps) {
     if (!smart) return undefined
     const settings = smart.updateSecuritySettings(req.body || {}, { actor: settingsActor(req) })
     return res.json({ ok: true, settings })
+  })
+
+  router.post('/settings/reset-platform', async (req, res) => {
+    if (!req.dashboardUser) {
+      return res.status(401).json({ ok: false, error: 'authentication_required' })
+    }
+    if (String(req.dashboardUser.role || '').toLowerCase() !== 'admin') {
+      return res.status(403).json({
+        ok: false,
+        error: 'admin_required',
+        message: 'Cette opération est réservée aux administrateurs.',
+      })
+    }
+    if (String(req.body?.confirmation || '') !== RESET_CONFIRMATION) {
+      return res.status(400).json({
+        ok: false,
+        error: 'invalid_confirmation',
+        message: `Saisissez exactement ${RESET_CONFIRMATION} pour confirmer.`,
+      })
+    }
+    if (platformResetInProgress) {
+      return res.status(409).json({
+        ok: false,
+        error: 'reset_in_progress',
+        message: 'Une réinitialisation est déjà en cours.',
+      })
+    }
+
+    const crm = deps.getCrm?.() || null
+    if (!crm?.db) {
+      return res.status(503).json({ ok: false, error: 'crm_unavailable' })
+    }
+
+    const whatsappBefore = deps.getWhatsappStatus?.() || null
+    if (whatsappBefore && whatsappBefore.ready !== true) {
+      return res.status(409).json({
+        ok: false,
+        error: 'whatsapp_not_ready',
+        message: 'Réinitialisation refusée : WhatsApp doit être connecté avant de continuer.',
+      })
+    }
+
+    platformResetInProgress = true
+    try {
+      // Yield once so a concurrent request can observe the reset lock.
+      await new Promise((resolve) => setImmediate(resolve))
+      await deps.beforePlatformReset?.()
+      const report = resetOperationalCrmData({
+        db: crm.db,
+        rootDir: deps.platformRootDir || process.cwd(),
+        aiHistoryPath: deps.aiHistoryPath,
+        mediaDir: deps.crmMediaDir,
+        voiceLogDir: deps.voiceLogDir,
+        actor: {
+          userId: req.dashboardUser.id,
+          username: req.dashboardUser.username,
+          displayName: req.dashboardUser.displayName,
+          role: req.dashboardUser.role,
+        },
+        clearAiHistory: true,
+        clearMedia: true,
+        clearVoiceLogs: true,
+        clearTempUploads: true,
+        recordResetAudit: true,
+        createBackup: true,
+      })
+      try {
+        deps.resetRuntimeData?.()
+      } catch (runtimeError) {
+        report.warnings.push({
+          target: 'runtime-caches',
+          code: runtimeError.code || 'RUNTIME_RESET_ERROR',
+        })
+      }
+      const whatsappAfter = deps.getWhatsappStatus?.() || null
+      return res.json({
+        ok: true,
+        message: 'Plateforme réinitialisée avec succès. La connexion WhatsApp a été conservée.',
+        report: {
+          clearedTables: report.clearedTables,
+          keptTables: report.keptTables,
+          extras: report.extras,
+          warnings: report.warnings,
+          backupFile: report.backupFile,
+          whatsappSessionPreserved: true,
+          dashboardSessionsPreserved: true,
+          whatsappReadyBefore: whatsappBefore?.ready ?? null,
+          whatsappReadyAfter: whatsappAfter?.ready ?? null,
+        },
+      })
+    } catch (error) {
+      console.error('[PLATFORM_RESET] failed', {
+        code: error.code || null,
+        message: error.message || String(error),
+        actorUserId: req.dashboardUser.id,
+      })
+      return res.status(500).json({
+        ok: false,
+        error: 'platform_reset_failed',
+        message: 'La réinitialisation a échoué. Les données SQLite ont été restaurées si la transaction avait commencé.',
+      })
+    } finally {
+      try {
+        await deps.afterPlatformReset?.()
+      } catch (gateError) {
+        console.error('[PLATFORM_RESET] unable to release runtime gate', gateError.message || gateError)
+      }
+      platformResetInProgress = false
+    }
   })
 
   router.get('/settings/notifications', (req, res) => {
