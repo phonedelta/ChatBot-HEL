@@ -77,6 +77,8 @@ const {
   normalizeWhatsAppClientState,
   isWhatsAppWaitingForPairing,
   isWhatsAppConnectedState,
+  keepsReadySession,
+  shouldRestoreReadyState,
 } = require('./whatsapp-client-state')
 const {
   classifyJid,
@@ -3919,6 +3921,7 @@ function updateState(record, state, details = {}) {
   }
 
   record.state = state
+  record.sessionWasReady = keepsReadySession(record.sessionWasReady, state)
   record.lastSeenAt = nowIso()
 
   if (details.lastError !== undefined) {
@@ -4269,7 +4272,8 @@ async function checkInstanceHealth(record) {
 
       const normalized = normalizeWhatsAppClientState(state)
       if (isWhatsAppConnectedState(normalized)) {
-        if (record.state === 'ready') {
+        // "ready" is emitted once per session: after a brief drop, CONNECTED is the only signal.
+        if (record.state === 'ready' || shouldRestoreReadyState(record.state, normalized, record.sessionWasReady)) {
           updateState(record, 'ready', { lastError: null })
         } else if (record.state !== 'qr' && record.state !== 'authenticated' && record.state !== 'connecting') {
           updateState(record, 'ready', { lastError: null })
@@ -4557,7 +4561,8 @@ function attachClientListeners(record) {
     const state = normalizeWhatsAppClientState(value)
     if (state === 'connected') {
       if (record.state !== 'ready') {
-        updateState(record, 'connecting', { lastError: null })
+        const restored = shouldRestoreReadyState(record.state, state, record.sessionWasReady)
+        updateState(record, restored ? 'ready' : 'connecting', { lastError: null })
       }
       return
     }
