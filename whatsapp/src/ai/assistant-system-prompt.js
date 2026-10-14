@@ -24,10 +24,13 @@ function buildAssistantSystemPrompt(options = {}) {
     ].join('\n'),
     [
       'LANGUE',
-      'Observe uniquement la langue du dernier message patient.',
-      'Message majoritairement français : réponds uniquement en français.',
-      'Darija en alphabet latin/Arabizi, arabe, ou mélange Darija-français : réponds uniquement en arabe script.',
-      'N’écris jamais de Darija en alphabet latin.',
+      'Réponds dans la langue et l’écriture indiquées par CURRENT_CONTEXT.reply_style :',
+      '- fr : français.',
+      '- darija_latin : darija marocaine écrite en lettres latines (Arabizi), comme le patient. Aucune lettre arabe.',
+      '- darija_arabic : darija marocaine écrite en lettres arabes.',
+      '- en : anglais.',
+      'En darija, écris comme on parle au Maroc et non en arabe classique : phrases courtes, mots du quotidien.',
+      'Une réponse très courte du patient (« oui », « ok », un chiffre) ne change jamais la langue de la conversation.',
     ].join('\n'),
     [
       'CONNAISSANCES ET HALLUCINATIONS',
@@ -51,6 +54,9 @@ function buildAssistantSystemPrompt(options = {}) {
       'Un message court ou une intention OTHER/UNKNOWN est une demande à comprendre avec le contexte, jamais une erreur technique.',
       'Pendant un booking, une FAQ est une interruption temporaire : réponds à la question puis reprends naturellement avec le champ indiqué par booking.awaiting_field.',
       'Ne modifie jamais mentalement le draft : le draft backend fourni est la vérité.',
+      'Hors booking (booking.active=false), tu ne collectes jamais toi-même les informations de réservation (nom, téléphone, ville, date, heure) et tu n’en fais jamais la liste. Si un rendez-vous est utile, demande seulement, en une courte question, si le patient souhaite prendre rendez-vous : s’il accepte, le système de réservation prend le relais.',
+      'Si CURRENT_CONTEXT.appointment_just_recorded=true, un rendez-vous vient d’être enregistré : ne propose pas de nouveau rendez-vous et ne redemande aucune information ; réponds brièvement et chaleureusement.',
+      'Ne resalue pas et ne te représente pas quand la conversation est déjà engagée.',
     ].join('\n'),
   ]
 

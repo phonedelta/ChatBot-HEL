@@ -96,6 +96,8 @@ function testOpenRouterConfigurationIsUnchangedWithoutGeminiKey() {
     reasoningEffort: '',
     maxTokensHeadroom: 0,
     omitTemperature: false,
+    fallbackModels: [],
+    attemptTimeoutMs: 0,
   })
   assert.deepStrictEqual(transcription, {
     apiKey: 'sk-or-v1-test',
@@ -184,6 +186,90 @@ async function testDefaultProviderRequestIsUnchanged() {
     max_tokens: 64,
     temperature: 0.35,
   })
+}
+
+function testGeminiFallbackModelsConfiguration() {
+  const byDefault = resolveAiConfig({ GEMINI_API_KEY: 'gemini-key' }).chat
+  assert.deepStrictEqual(byDefault.fallbackModels, ['gemini-3.1-flash-lite', 'gemini-3.6-flash'])
+  assert.ok(byDefault.attemptTimeoutMs > 0)
+
+  const custom = resolveAiConfig({
+    GEMINI_API_KEY: 'gemini-key',
+    GEMINI_MODEL: 'gemini-3.6-flash',
+    GEMINI_FALLBACK_MODELS: ' gemini-3.6-flash , gemini-3.5-flash-lite ',
+  }).chat
+  assert.deepStrictEqual(custom.fallbackModels, ['gemini-3.5-flash-lite'], 'the main model is not its own fallback')
+
+  const disabled = resolveAiConfig({ GEMINI_API_KEY: 'gemini-key', GEMINI_FALLBACK_MODELS: '' }).chat
+  assert.deepStrictEqual(disabled.fallbackModels, [])
+  assert.equal(disabled.attemptTimeoutMs, 0)
+}
+
+async function testOverloadedModelFallsBackToTheNextOne() {
+  const calls = []
+  const client = {
+    chat: {
+      completions: {
+        async create(request, requestOptions) {
+          calls.push({ model: request.model, requestOptions })
+          if (request.model === 'gemini-3.5-flash-lite') {
+            const error = new Error('This model is currently experiencing high demand.')
+            error.status = 503
+            throw error
+          }
+          if (request.model === 'gemini-3.1-flash-lite') {
+            return { id: 'empty', model: request.model, choices: [{ message: { content: '' } }] }
+          }
+          return { id: 'ok', model: request.model, choices: [{ message: { content: 'marhba' } }] }
+        },
+      },
+    },
+  }
+  const warnings = []
+  const provider = createAiProvider({
+    providerName: 'gemini',
+    model: 'gemini-3.5-flash-lite',
+    fallbackModels: ['gemini-3.1-flash-lite', 'gemini-3.6-flash'],
+    attemptTimeoutMs: 15000,
+    client,
+    logger: { warn: (...args) => warnings.push(args) },
+  })
+
+  const result = await provider.generateChatResponse({ messages: [{ role: 'user', content: 'salam' }] })
+  assert.equal(result.text, 'marhba')
+  assert.equal(result.model, 'gemini-3.6-flash')
+  assert.deepStrictEqual(calls.map((call) => call.model), ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.6-flash'])
+  assert.deepStrictEqual(calls[0].requestOptions, { timeout: 15000, maxRetries: 0 }, 'a degraded model must fail fast')
+  assert.equal(calls[2].requestOptions, undefined, 'the last model keeps the normal timeout and retries')
+  assert.equal(warnings.length, 2)
+  assert.equal(provider.getStatus().lastStatus, 200)
+
+  // The two models that just failed are set aside: the next call goes straight to the healthy one.
+  await provider.generateChatResponse({ messages: [{ role: 'user', content: 'salam' }] })
+  assert.deepStrictEqual(calls.slice(3).map((call) => call.model), ['gemini-3.6-flash'])
+
+  // A refused key or a malformed request is not retried on another model.
+  const authCalls = []
+  const authProvider = createAiProvider({
+    providerName: 'gemini',
+    model: 'gemini-3.5-flash-lite',
+    fallbackModels: ['gemini-3.1-flash-lite'],
+    client: {
+      chat: {
+        completions: {
+          async create(request) {
+            authCalls.push(request.model)
+            const error = new Error('API key not valid')
+            error.status = 400
+            throw error
+          },
+        },
+      },
+    },
+    logger: {},
+  })
+  await assert.rejects(authProvider.generateChatResponse({ messages: [{ role: 'user', content: 'salam' }] }))
+  assert.deepStrictEqual(authCalls, ['gemini-3.5-flash-lite'])
 }
 
 function testTranscriptionRequestShapes() {
@@ -282,6 +368,8 @@ async function run() {
   testGeminiCompatibleBaseUrlIsDetectedWithoutGeminiKey()
   await testGeminiChatRequestLeavesRoomForThinking()
   await testDefaultProviderRequestIsUnchanged()
+  testGeminiFallbackModelsConfiguration()
+  await testOverloadedModelFallsBackToTheNextOne()
   testTranscriptionRequestShapes()
   testInteractionTextExtraction()
   await testTranscriptionTransport()

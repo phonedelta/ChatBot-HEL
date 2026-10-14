@@ -8,6 +8,8 @@ const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
 const GEMINI_OPENAI_BASE_URL = `${GEMINI_API_BASE_URL}/openai`
 const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash-lite'
 const DEFAULT_GEMINI_TRANSCRIBE_MODEL = 'gemini-3.5-transcribe'
+const DEFAULT_GEMINI_FALLBACK_MODELS = ['gemini-3.1-flash-lite', 'gemini-3.6-flash']
+const GEMINI_ATTEMPT_TIMEOUT_MS = 8000
 // Gemini counts thinking tokens inside max_tokens and thinking cannot be switched off,
 // so the short budgets used here (40–500 tokens) would otherwise come back empty.
 const GEMINI_THINKING_HEADROOM_TOKENS = 2048
@@ -57,6 +59,14 @@ function resolveAiConfig(env = process.env) {
   chat.maxTokensHeadroom = geminiChat ? GEMINI_THINKING_HEADROOM_TOKENS : 0
   // temperature is deprecated on current Gemini models (ignored today, rejected later).
   chat.omitTemperature = geminiChat
+  // Free-tier models are regularly overloaded (HTTP 503 or very slow): fail over to a sibling
+  // model quickly. GEMINI_FALLBACK_MODELS= (empty) disables the fallback.
+  chat.fallbackModels = !geminiChat
+    ? []
+    : (env.GEMINI_FALLBACK_MODELS === undefined ? DEFAULT_GEMINI_FALLBACK_MODELS : value('GEMINI_FALLBACK_MODELS').split(','))
+      .map((item) => item.trim())
+      .filter((item) => item && item !== chat.model)
+  chat.attemptTimeoutMs = chat.fallbackModels.length ? GEMINI_ATTEMPT_TIMEOUT_MS : 0
 
   // An explicit OPENAI_TRANSCRIBE_* setting still wins, so voice can stay on another provider.
   const explicitTranscribeKey = value('OPENAI_TRANSCRIBE_API_KEY')

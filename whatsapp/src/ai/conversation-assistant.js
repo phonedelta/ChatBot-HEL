@@ -1,4 +1,5 @@
 const { buildAssistantSystemPrompt } = require('./assistant-system-prompt')
+const { REPLY_STYLES, isReplyInStyle, styleInstruction } = require('./reply-style')
 
 const CONVERSATIONAL_INTENTS = new Set([
   'ASK_IDENTITY',
@@ -52,6 +53,11 @@ function buildConversationContext(options = {}) {
   const language = isDarijaLanguage(options.language) ? 'darija' : 'fr'
   return {
     conversation_language: language,
+    // Language and script to answer in; without an explicit style, Darija keeps the Arabic script.
+    reply_style: REPLY_STYLES.includes(options.replyStyle)
+      ? options.replyStyle
+      : (language === 'darija' ? 'darija_arabic' : 'fr'),
+    appointment_just_recorded: Boolean(options.appointmentJustRecorded),
     intent: String(options.intent || router.intent || 'OTHER').toUpperCase(),
     intent_confidence: Number(router.intentConfidence || options.intentConfidence || 0),
     service: router.service || null,
@@ -62,7 +68,17 @@ function buildConversationContext(options = {}) {
   }
 }
 
-function buildSafeFallback({ language = 'fr', bookingActive = false } = {}) {
+function buildSafeFallback({ language = 'fr', bookingActive = false, style = null } = {}) {
+  if (style === 'darija_latin') {
+    return bookingActive
+      ? 'Sme7 lina, kayn mochkil sghir daba. Les informations dyal rendez-vous dyalek mazal m7fodin, 3awed jerreb mn b3d chwiya.'
+      : 'Sme7 lina, kayn mochkil sghir daba. 3awed jerreb mn b3d chwiya.'
+  }
+  if (style === 'en') {
+    return bookingActive
+      ? 'Sorry, something went wrong on our side. Your appointment details are saved; please try again in a moment.'
+      : 'Sorry, something went wrong on our side. Please try again in a moment.'
+  }
   const darija = isDarijaLanguage(language)
   if (bookingActive) {
     return darija
@@ -84,6 +100,24 @@ function hasInventedSlot(text, allowedSlots = []) {
   return extractMentionedTimes(text).some((time) => !allowed.has(time))
 }
 
+/**
+ * True when a reply states that an appointment has been booked, recorded or confirmed.
+ * Used to reject such a statement when the backend holds no appointment for the conversation.
+ */
+function claimsAppointmentRecorded(text) {
+  const raw = String(text || '')
+  return [
+    /(rendez[- ]?vous|\brdv\b|r[ée]servation)[^.!?\n]{0,60}\b(est|a\s+[ée]t[ée]|a\s+bien\s+[ée]t[ée])\s+(bien\s+)?(confirm[ée]e?|enregistr[ée]e?|r[ée]serv[ée]e?|pris|fix[ée]e?|not[ée]e?|valid[ée]e?)/i,
+    /\b(j['’]ai|nous\s+avons|on\s+a)\s+(bien\s+)?(enregistr[ée]|r[ée]serv[ée]|confirm[ée]|not[ée]|fix[ée]|pris)\s+(votre|ton|le|ce)\s+(rendez|rdv)/i,
+    /\b(appointment|booking)[^.!?\n]{0,40}\b(is|has\s+been|'s)\s+(now\s+)?(confirmed|booked|scheduled|registered|set)\b/i,
+    /\b(i|we)(\s+have|['’]ve)\s+(booked|scheduled|confirmed|registered)\b/i,
+    /(تم|تأكد|تسج[ّ]?ل|سج[ّ]?لنا|سج[ّ]?لت|حجزنا|حجزت|أكدنا|تأك[ّ]?د)[^.!؟\n]{0,25}(الموعد|موعدك|المو3د|الحجز|حجزك|الرونديفو|الرنديفو)/,
+    /(الموعد|موعدك|الحجز|الرونديفو)[^.!؟\n]{0,25}(تأكد|مؤكد|تسج[ّ]?ل|مسجل|تم)/,
+    /\b(rdv|rendez[- ]?vous|ma?w3id|mo?w3id)\b[^.!?\n]{0,40}\b(tsjj?[ea]l|tsaj[ea]l|t2akk?[ea]d|tconfirma|tkonfirma|msjj?el|m2akk?ed|confirm[ée]|tkhad|t7jez)\b/i,
+    /\b(sjj?[ea]lt|sjj?[ea]lna|confirmit|confirmina|7jezt|7jezna|khdit\s+lik|khdina\s+lik)\b[^.!?\n]{0,30}\b(rdv|rendez|ma?w3id|mo?w3id)/i,
+  ].some((pattern) => pattern.test(raw))
+}
+
 function isReplyLanguageValid(text, language) {
   const raw = String(text || '').trim()
   if (!raw) return false
@@ -99,6 +133,8 @@ async function generateConversationReply(options = {}) {
   const provider = options.provider
   const context = buildConversationContext(options)
   const bookingActive = Boolean(context.booking.active)
+  // Canned replies follow the patient's script too, when the caller tracks one.
+  const fallbackStyle = options.replyStyle ? context.reply_style : null
   console.log('[ai-router]', {
     provider: provider?.providerName || null,
     model: provider?.model || null,
@@ -109,7 +145,7 @@ async function generateConversationReply(options = {}) {
   })
   if (!provider?.isConfigured?.()) {
     return {
-      reply: buildSafeFallback({ language: context.conversation_language, bookingActive }),
+      reply: buildSafeFallback({ language: context.conversation_language, bookingActive, style: fallbackStyle }),
       source: 'safe_fallback',
       providerError: 'not_configured',
       context,
@@ -140,7 +176,7 @@ async function generateConversationReply(options = {}) {
   })
 
   try {
-    const result = await provider.generateChatResponse({
+    const request = {
       systemPrompt,
       messages: [...history, { role: 'user', content: userPrompt }],
       maxOutputTokens: options.maxOutputTokens || 500,
@@ -153,12 +189,51 @@ async function generateConversationReply(options = {}) {
         knowledgeLength: knowledge.length,
         bookingActive,
       },
-    })
-    const languageValid = isReplyLanguageValid(result.text, context.conversation_language)
+    }
+    let result = await provider.generateChatResponse(request)
+
+    // The backend holds no appointment for this conversation: a reply announcing one is false.
+    if (options.noAppointmentRecorded && claimsAppointmentRecorded(result.text)) {
+      console.warn('[ai-validation] response rejected', { reason: 'unbacked_appointment_claim', attempt: 1 })
+      result = await provider.generateChatResponse({
+        ...request,
+        systemPrompt: [
+          systemPrompt,
+          'RAPPEL BACKEND',
+          'Aucun rendez-vous n’est enregistré pour ce patient. N’affirme jamais qu’un rendez-vous est pris, enregistré ou confirmé. Si le patient veut un rendez-vous, demande-lui simplement s’il souhaite en prendre un.',
+        ].join('\n\n'),
+      })
+      if (claimsAppointmentRecorded(result.text)) {
+        console.warn('[ai-validation] response rejected', { reason: 'unbacked_appointment_claim', attempt: 2 })
+        return {
+          reply: buildSafeFallback({ language: context.conversation_language, bookingActive, style: fallbackStyle }),
+          source: 'safe_fallback',
+          providerError: 'unbacked_appointment_claim',
+          context,
+        }
+      }
+    }
+
+    const inExpectedLanguage = (text) => (options.replyStyle
+      ? isReplyInStyle(text, context.reply_style)
+      : isReplyLanguageValid(text, context.conversation_language))
+    let languageValid = inExpectedLanguage(result.text)
+    if (!languageValid && options.replyStyle) {
+      // The model drifted to another language or script: ask once more before giving up.
+      result = await provider.generateChatResponse({
+        ...request,
+        systemPrompt: [
+          systemPrompt,
+          'RAPPEL LANGUE',
+          `Ta réponse précédente n’était pas ${styleInstruction(context.reply_style)}. Réponds uniquement ${styleInstruction(context.reply_style)}.`,
+        ].join('\n\n'),
+      })
+      languageValid = inExpectedLanguage(result.text)
+    }
     if (!languageValid) {
       console.warn('[ai-validation] response rejected', {
         reason: 'language_mismatch',
-        expectedLanguage: context.conversation_language,
+        expectedLanguage: options.replyStyle ? context.reply_style : context.conversation_language,
         contentLength: result.text.length,
         arabicCharacterCount: (result.text.match(/[\u0600-\u06FF]/g) || []).length,
       })
@@ -166,7 +241,7 @@ async function generateConversationReply(options = {}) {
     return {
       reply: languageValid
         ? result.text
-        : buildSafeFallback({ language: context.conversation_language, bookingActive }),
+        : buildSafeFallback({ language: context.conversation_language, bookingActive, style: fallbackStyle }),
       source: languageValid ? 'ai' : 'safe_fallback',
       providerError: languageValid ? null : 'language_mismatch',
       provider: result.provider,
@@ -184,7 +259,7 @@ async function generateConversationReply(options = {}) {
       message: error?.message || String(error),
     })
     return {
-      reply: buildSafeFallback({ language: context.conversation_language, bookingActive }),
+      reply: buildSafeFallback({ language: context.conversation_language, bookingActive, style: fallbackStyle }),
       source: 'safe_fallback',
       providerError: error?.code || 'provider_error',
       context,
@@ -199,7 +274,11 @@ async function generateAvailabilityReply(options = {}) {
   const isoDate = String(options.date || '')
   const dateMatch = isoDate.match(/^(\d{4})-(\d{2})-(\d{2})$/)
   const displayDate = dateMatch ? `${dateMatch[3]}/${dateMatch[2]}/${dateMatch[1]}` : isoDate
-  const dateLine = isDarijaLanguage(options.language)
+  // The list follows the patient's script: Arabic labels only for Darija written in Arabic.
+  const arabicScript = options.replyStyle
+    ? options.replyStyle === 'darija_arabic'
+    : isDarijaLanguage(options.language)
+  const dateLine = arabicScript
     ? `التاريخ: ${displayDate}`
     : `Date : ${displayDate}`
   const exactList = [dateLine, ...slots.map((slot, index) => `${index + 1}. ${slot}`)].join('\n')
@@ -224,9 +303,12 @@ async function generateAvailabilityReply(options = {}) {
   const intro = generated.source !== 'ai' || mentionsDate || hasInventedSlot(generated.reply, slots)
     ? ''
     : String(generated.reply || '').trim()
-  const fallbackIntro = isDarijaLanguage(options.language)
+  const fallbackIntro = arabicScript
     ? 'هاد المواعيد المتاحة حسب النظام:'
-    : 'Voici les créneaux disponibles selon le planning :'
+    : ({
+      darija_latin: 'Hado homa lew9at li khawyin :',
+      en: 'Here are the available times:',
+    }[options.replyStyle] || 'Voici les créneaux disponibles selon le planning :')
   return {
     ...generated,
     reply: `${intro || fallbackIntro}\n\n${exactList}`.trim(),
@@ -238,6 +320,7 @@ module.exports = {
   CONVERSATIONAL_INTENTS,
   buildConversationContext,
   buildSafeFallback,
+  claimsAppointmentRecorded,
   extractMentionedTimes,
   generateAvailabilityReply,
   generateConversationReply,

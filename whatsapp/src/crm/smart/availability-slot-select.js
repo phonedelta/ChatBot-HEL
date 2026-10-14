@@ -65,6 +65,11 @@ function parseAvailableSlotSelection({ input, candidateSlots } = {}) {
   if (idxMatch) {
     const n = Number(idxMatch[1])
     const hit = list.find((c) => c.index === n)
+    // "11" in front of a list that offers 11:00 means eleven o'clock, not the eleventh line.
+    const onTheHour = list.find((c) => c.time === normalizeSlotTime(`${n}:00`))
+    if (onTheHour && (!hit || hit.time !== onTheHour.time)) {
+      return { type: 'time', selectedTime: onTheHour.time, index: onTheHour.index }
+    }
     if (!hit) return { type: 'invalid', reason: 'index_out_of_range', index: n }
     return { type: 'index', selectedTime: hit.time, index: n }
   }

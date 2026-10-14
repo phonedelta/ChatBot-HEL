@@ -443,6 +443,14 @@ function patientConfirmationMessage(lead, language = 'fr') {
   ].join('\n')
 }
 
+/** The appointment could not be saved: nothing is confirmed and the draft is kept for a retry. */
+function bookingSaveFailedMessage(language = 'fr') {
+  if (isDarija(language)) {
+    return 'سمح ليا، ما قدرتش نسجل الموعد دابا، وما تأكد حتى شي حاجة. المعلومات ديالك محفوظة: جاوب *نعم* من بعد شوية باش نعاود نسجلو.'
+  }
+  return 'Désolé, je n’ai pas pu enregistrer votre rendez-vous pour le moment, rien n’est encore confirmé. Vos informations sont conservées : répondez *OUI* dans un instant pour réessayer.'
+}
+
 function staffNotificationText(booking) {
   const customer = booking.customer
   const appointment = booking.appointment
@@ -499,6 +507,7 @@ module.exports = {
   askConfirmation,
   slotUnavailableMessage,
   patientConfirmationMessage,
+  bookingSaveFailedMessage,
   staffNotificationText,
   correctionAck,
   motifDisplayValue,

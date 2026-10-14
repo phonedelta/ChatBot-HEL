@@ -132,6 +132,8 @@
     "test:knowledge-prompt": "node scripts/knowledge-prompt-test.js",
     "test:openrouter-conversation": "node scripts/openrouter-conversation-test.js",
     "test:gemini-provider": "node scripts/gemini-provider-test.js",
+    "test:booking-e2e": "node scripts/booking-conversation-e2e-test.js",
+    "test:booking-understanding": "node scripts/booking-understanding-test.js",
     "test:voice-transcription": "node scripts/voice-transcription-pipeline-test.js",
     "test:voice-file": "node scripts/voice-transcription-compare.js",
     "test:platform-reset": "node scripts/platform-reset-test.js",

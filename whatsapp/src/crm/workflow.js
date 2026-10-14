@@ -24,6 +24,7 @@ const {
   askConfirmation,
   slotUnavailableMessage,
   patientConfirmationMessage,
+  bookingSaveFailedMessage,
   correctionAck,
 } = require('./messages')
 const {
@@ -106,6 +107,40 @@ function hasExtractedBookingFields(signals) {
   return real || Boolean(signals.name_incomplete)
 }
 
+function isSameClockTwelveHoursApart(left, right) {
+  const [leftHours, leftMinutes] = String(left || '').split(':').map(Number)
+  const [rightHours, rightMinutes] = String(right || '').split(':').map(Number)
+  return Number.isInteger(leftHours) && Number.isInteger(rightHours)
+    && leftMinutes === rightMinutes
+    && Math.abs(leftHours - rightHours) === 12
+}
+
+/**
+ * Completes the regex signals with the AI reading of the message (see booking-turn-understanding).
+ * A value found by the regexes is kept; the AI fills what they cannot read, such as "11" as a
+ * time or a reason given in Darija.
+ */
+function applyAiTurn(signals, aiTurn) {
+  const fields = aiTurn.fields || {}
+  for (const key of ['full_name', 'phone_number', 'city', 'appointment_date', 'appointment_time']) {
+    if (!signals[key] && fields[key]) signals[key] = fields[key]
+  }
+  // "3 dyal l3chiya": the regex reads 03:00, the AI reads the afternoon. Twelve hours apart on
+  // the same clock position is a morning/afternoon question, which only the context answers.
+  if (isSameClockTwelveHoursApart(signals.appointment_time, fields.appointment_time)) {
+    signals.appointment_time = fields.appointment_time
+  }
+  if (!signals.problem && fields.problem) {
+    signals.problem = fields.problem
+    signals.problem_details = fields.problem_details || signals.problem_details || null
+    signals.urgency = fields.urgency || signals.urgency || 'moyenne'
+  }
+  // A pure yes/no (no detail, no question) may confirm the summary in the patient's own words.
+  signals.ai_answer = !aiTurn.hasFields && !aiTurn.isQuestion ? (aiTurn.answer || null) : null
+  // "Oui", a city or a time is not a failed attempt at giving a name.
+  signals.not_a_name = !fields.full_name && Boolean(aiTurn.answer || aiTurn.hasFields || aiTurn.isQuestion)
+}
+
 function detectJustFilled(before, after) {
   const prev = checkCustomerData(before || {})
   const next = checkCustomerData(after || {})
@@ -170,7 +205,7 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
         && awaitingField !== 'fields'
         && awaitingField !== 'full_name'
       if (!keepExisting) patch.full_name = nextName
-    } else if (signals.full_name) {
+    } else if (signals.full_name && !signals.not_a_name) {
       patch._rejected_full_name = true
     }
     if (signals.phone_number) patch.phone_number = signals.phone_number
@@ -207,7 +242,7 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
       patch.appointment_time = null
     }
 
-    if (awaitingField === 'full_name' && !patch.full_name) {
+    if (awaitingField === 'full_name' && !patch.full_name && !signals.not_a_name) {
       const name = await resolveFullName(signals.rawText || '', null)
       if (name) patch.full_name = name
       else if (String(signals.rawText || '').trim()) patch._rejected_full_name = true
@@ -246,7 +281,7 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
       'CRM RULES:',
       '- Booking fields may arrive across several patient messages.',
       '- Ask only for fields that are still missing. Never invent identity or phone numbers.',
-      '- For Darija (Arabic script OR Latin keyboard like bghit/3andi/7ri9), ALWAYS reply in Arabic script, never Latin Darija.',
+      '- Reply in the language and script given by CURRENT_CONTEXT.reply_style.',
       '- Outside booking, keep answers short and professional.',
     ].join('\n')
   }
@@ -671,11 +706,13 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
       return next
     }
 
-    const replies = prependAck(buildBookingCollectionReplies(updated, language, {
+    const collection = {
       missing: check.missing,
       entry: true,
+      justFilled: [],
       rejectedName: Boolean(signals.name_incomplete) && !resolvedName,
-    }), ack)
+    }
+    const replies = prependAck(buildBookingCollectionReplies(updated, language, collection), ack)
     if (!replies.length) {
       return finalizeTurn(
         updated,
@@ -683,9 +720,13 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
         true,
         null,
         signals,
+        null,
+        { collection },
       )
     }
-    return finalizeTurn(updated, replies[0], true, null, signals, replies)
+    // With an acknowledgement in front (existing patient picked), the template carries more
+    // than the question: it is sent as written.
+    return finalizeTurn(updated, replies[0], true, null, signals, replies, ack ? {} : { collection })
   }
 
   async function beginBooking(conversationId, lead, language, chatId, signals, userText = '') {
@@ -1069,13 +1110,16 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
         awaiting_field: 'bulk',
         booking_intent: 1,
       })
-      const replies = buildBookingCollectionReplies(updated, language, {
+      const collection = {
         missing: check.missing,
         entry: Boolean(extra.entry),
         justFilled: extra.justFilled || [],
         rejectedName: Boolean(extra.rejectedName || signals?.name_incomplete),
+      }
+      const replies = buildBookingCollectionReplies(updated, language, collection)
+      return finalizeTurn(updated, replies[0] || bookingFormMessage(language), true, null, signals, replies, {
+        collection,
       })
-      return finalizeTurn(updated, replies[0] || bookingFormMessage(language), true, null, signals, replies)
     }
 
     const hours = validateAppointmentHours(lead.appointment_date, lead.appointment_time)
@@ -1169,6 +1213,14 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
       conservative: !inBooking,
     })
     signals.rawText = userText
+
+    // AI reading of the message in context: short replies, Darija, an accepted booking offer.
+    const aiTurn = !isVoice && input.aiTurn?.ok ? input.aiTurn : null
+    if (aiTurn) applyAiTurn(signals, aiTurn)
+    // A bare "oui" / "non" is an answer, never an incomplete name.
+    if ((signals.confirmation_yes || signals.confirmation_no || signals.not_a_name) && !signals.full_name) {
+      signals.name_incomplete = false
+    }
 
     const router = input.router || null
     if (router?.bookAppointment && router.skipProblemQuestion && router.service) {
@@ -1785,7 +1837,9 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
     const shouldStartBooking = !bookingBlocked && Boolean(
       router?.bookAppointment
       || hasExplicitBookingIntent(userText)
-      || (signals.booking_intent && hasExplicitBookingIntent(userText)),
+      || (signals.booking_intent && hasExplicitBookingIntent(userText))
+      // The patient accepted the assistant's offer ("oui", "wakha") or asked in words no regex knows.
+      || aiTurn?.bookingRequest,
     )
 
     if (shouldStartBooking) {
@@ -1798,8 +1852,8 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
         'BOOKING OFFER RULE (internal):',
         '- If relevant, invite the patient to book HERE on WhatsApp in ONE short sentence.',
         '- If they accept / ask for RDV, the CRM workflow will collect the remaining fields.',
-        '- For Darija (including Latin keyboard), reply in Arabic script only.',
-        '- Do not ask identity fields one by one unless booking has started.',
+        '- Reply in the language and script given by CURRENT_CONTEXT.reply_style.',
+        '- Never ask for the name, phone, city, date or time yourself and never list them: only ask whether the patient wants an appointment.',
       ].join('\n')
       : ''
 
@@ -1835,6 +1889,8 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
         extracted,
         check,
         conversationReset: Boolean(extra.conversationReset),
+        saveFailed: Boolean(extra.saveFailed),
+        collection: extra.collection || null,
       }
     }
 
@@ -2011,8 +2067,8 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
     }
 
     // --- Main summary confirmation ---
-    // 1) Strict OUI
-    if (isStrictBookingConfirmYes(userText)) {
+    // 1) Strict OUI, or a plain yes in the patient's own words ("wakha", "ah safi") read by the AI
+    if (isStrictBookingConfirmYes(userText) || signals.ai_answer === 'yes') {
       const check = checkCustomerData(lead)
       if (!check.ok) {
         return processAfterData(conversationId, lead, language, signals)
@@ -2052,7 +2108,13 @@ function createCrmWorkflow(repo, ai = null, options = {}) {
             lateConflict: true,
           })
         }
-        throw error
+        // Nothing was saved: say so, keep the draft at the summary so a new "oui" retries.
+        console.error('[crm-booking] appointment save failed', {
+          reason: error?.message || String(error),
+        })
+        return finalizeTurn(lead, bookingSaveFailedMessage(language), true, null, signals, null, {
+          saveFailed: true,
+        })
       }
       const confirmationText = patientConfirmationMessage(lead, language)
       repo.logConversation({

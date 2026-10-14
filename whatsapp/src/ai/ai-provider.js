@@ -56,6 +56,18 @@ function extractJsonObject(text) {
   }
 }
 
+// How long a model that just failed is skipped before it is tried again.
+const MODEL_COOLDOWN_MS = 2 * 60 * 1000
+
+/** Overload, rate limit, timeout, network failure or empty answer: worth trying another model. */
+function isRetryableProviderError(error) {
+  const status = Number(error?.status || 0)
+  if ([408, 429, 500, 502, 503, 504].includes(status)) return true
+  if (error?.code === 'AI_EMPTY_OUTPUT') return true
+  return /timeout|timed out|connection|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed/i
+    .test(`${error?.name || ''} ${error?.code || ''} ${error?.message || ''}`)
+}
+
 function createAiProvider(options = {}) {
   const apiKey = String(options.apiKey || '').trim()
   const baseURL = String(options.baseURL || 'https://openrouter.ai/api/v1').replace(/\/$/, '')
@@ -68,6 +80,11 @@ function createAiProvider(options = {}) {
   const reasoningEffort = String(options.reasoningEffort || '').trim()
   const maxTokensHeadroom = Math.max(0, Number(options.maxTokensHeadroom) || 0)
   const omitTemperature = options.omitTemperature === true
+  const fallbackModels = (Array.isArray(options.fallbackModels) ? options.fallbackModels : [])
+    .map((item) => String(item || '').trim())
+    .filter((item) => item && item !== model)
+  const attemptTimeoutMs = Math.max(0, Number(options.attemptTimeoutMs) || 0)
+  const modelUnavailableUntil = new Map()
   const defaultHeaders = {
     ...(options.siteUrl ? { 'HTTP-Referer': String(options.siteUrl) } : {}),
     ...(options.appName ? { 'X-Title': String(options.appName) } : {}),
@@ -90,6 +107,46 @@ function createAiProvider(options = {}) {
 
   function isConfigured() {
     return Boolean(client && model)
+  }
+
+  /**
+   * Sends the request to the configured model, then to each fallback model when the model is
+   * overloaded, rate limited, too slow or returns nothing. Every model but the last gets the
+   * short attempt timeout, so a degraded model does not hold the patient for a minute.
+   */
+  async function createWithFallback(request, args) {
+    const configured = args.model ? [request.model] : [request.model, ...fallbackModels]
+    // A model that just failed is set aside for a while, unless every model is in that state.
+    const healthy = configured.filter((item) => !(modelUnavailableUntil.get(item) > Date.now()))
+    const models = healthy.length ? healthy : configured
+    for (let index = 0; index < models.length; index += 1) {
+      const isLast = index === models.length - 1
+      try {
+        const response = await client.chat.completions.create(
+          { ...request, model: models[index] },
+          isLast ? undefined : { timeout: attemptTimeoutMs || timeout, maxRetries: 0 },
+        )
+        const text = extractChatText(response)
+        if (text) return { response: { ...response, model: response?.model || models[index] }, text }
+        const error = new Error('AI provider returned an empty response')
+        error.code = 'AI_EMPTY_OUTPUT'
+        throw error
+      } catch (error) {
+        const retryable = isRetryableProviderError(error)
+        if (retryable && configured.length > 1) {
+          modelUnavailableUntil.set(models[index], Date.now() + MODEL_COOLDOWN_MS)
+        }
+        if (isLast || !retryable) throw error
+        logger.warn?.('[ai-provider] model unavailable, using fallback', {
+          provider: providerName,
+          model: models[index],
+          fallback: models[index + 1],
+          status: error?.status || null,
+          code: error?.code || error?.name || null,
+        })
+      }
+    }
+    throw new Error('AI provider has no model to try')
   }
 
   async function generateChatResponse(args = {}) {
@@ -138,13 +195,8 @@ function createAiProvider(options = {}) {
     }
 
     try {
-      const response = await client.chat.completions.create(request)
-      const text = extractChatText(response)
-      if (!text) {
-        const error = new Error('AI provider returned an empty response')
-        error.code = 'AI_EMPTY_OUTPUT'
-        throw error
-      }
+      const { response, text } = await createWithFallback(request, args)
+      request.model = response?.model || request.model
       logger.log?.('[ai-response]', {
         provider: providerName,
         model: request.model,

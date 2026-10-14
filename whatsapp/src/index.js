@@ -54,6 +54,19 @@ const { formatKnowledgeItemsForPrompt } = require('./crm/smart/knowledge-prompt'
 const { createAiProvider } = require('./ai/ai-provider')
 const { resolveAiConfig } = require('./ai/provider-config')
 const { requestGeminiTranscription } = require('./ai/gemini-transcription')
+const { resolveReplyStyle } = require('./ai/reply-style')
+const { phraseWorkflowReplies, nextBookingQuestion, collectionBrief } = require('./ai/workflow-reply-phrasing')
+const { understandBookingTurn, assistantOfferedAppointment } = require('./crm/booking-turn-understanding')
+const {
+  askConfirmation,
+  bookingSaveFailedMessage,
+  buildBookingCollectionReplies,
+  formatDateDisplay,
+  patientConfirmationMessage,
+} = require('./crm/messages')
+const { extractCustomerSignals } = require('./crm/extract')
+const { checkCustomerData } = require('./crm/checkCustomerData')
+const { hasExplicitBookingIntent } = require('./voice-nlu/intent-table')
 const {
   buildSafeFallback,
   generateAvailabilityReply,
@@ -280,6 +293,64 @@ function isActiveCrmDeterministicWorkflow(lead) {
     || stage === 'awaiting_patient'
 }
 
+// Conversations whose appointment was just saved. A following "oui" or "merci" acknowledges
+// that appointment and must not open a new booking.
+const RECENT_BOOKING_WINDOW_MS = 15 * 60 * 1000
+const recentBookingAt = new Map()
+
+function wasBookedRecently(conversationId) {
+  const savedAt = recentBookingAt.get(conversationId)
+  if (!savedAt) return false
+  if (Date.now() - savedAt > RECENT_BOOKING_WINDOW_MS) {
+    recentBookingAt.delete(conversationId)
+    return false
+  }
+  return true
+}
+
+/** Backend truth for "does this conversation have an appointment?". Unknown counts as yes. */
+function conversationHasAppointment(conversationId) {
+  try {
+    return Boolean(
+      crm?.repo?.db
+        ?.prepare('SELECT 1 AS found FROM appointments WHERE conversation_id = ? LIMIT 1')
+        .get(conversationId),
+    )
+  } catch {
+    return true
+  }
+}
+
+/**
+ * The workflow writes its templates in French or in Arabic-script Darija. For a patient who
+ * writes in Latin letters (Darija in Latin script, English), the key messages are rendered from
+ * the French templates instead: that text is what gets reworded, and what is sent if the
+ * rewording fails. Returns null for the messages that only exist in the conversation language.
+ */
+function frenchWorkflowReplies(crmTurn, crmReplies) {
+  if (crmTurn.booking) {
+    return [patientConfirmationMessage({
+      full_name: crmTurn.booking.customer?.full_name || null,
+      appointment_date: crmTurn.booking.appointment?.appointment_date || null,
+      appointment_time: crmTurn.booking.appointment?.appointment_time || null,
+    }, 'fr')]
+  }
+  if (crmTurn.saveFailed) return [bookingSaveFailedMessage('fr')]
+  const lead = crmTurn.lead || {}
+  const template = crmReplies.join('\n')
+  const isSummary = lead.stage === 'confirmation'
+    && lead.awaiting_field === 'confirmation'
+    && Boolean(lead.appointment_time)
+    && template.includes(lead.appointment_time)
+    && template.includes(formatDateDisplay(lead.appointment_date))
+  return isSummary ? [askConfirmation(lead, 'fr')] : null
+}
+
+// Last language + script used with each conversation (see ai/reply-style.js).
+const conversationReplyStyles = new Map()
+// AI_WORKFLOW_PHRASING=false sends the booking workflow's templates word for word.
+const workflowPhrasingEnabled = parseBoolean(process.env.AI_WORKFLOW_PHRASING, true)
+
 const aiConversationQueues = new Map()
 const platformResetGate = createPlatformResetGate()
 const runOperationalTask = platformResetGate.run
@@ -297,6 +368,8 @@ const aiProvider = createAiProvider({
   reasoningEffort: aiConfig.chat.reasoningEffort,
   maxTokensHeadroom: aiConfig.chat.maxTokensHeadroom,
   omitTemperature: aiConfig.chat.omitTemperature,
+  fallbackModels: aiConfig.chat.fallbackModels,
+  attemptTimeoutMs: aiConfig.chat.attemptTimeoutMs,
   debug: aiDebugEnabled,
 })
 console.log('[AI] configuration', {
@@ -798,10 +871,49 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       || [leadForSemanticRouting?.stage, leadForSemanticRouting?.awaiting_field].filter(Boolean).join(':')
       || '',
     )
+
+    // AI reading of the message in its context. The CRM workflow validates and stores what it finds.
+    const bookingWorkflowActive = isActiveCrmDeterministicWorkflow(leadForSemanticRouting)
+    const justBooked = wasBookedRecently(key)
+    const canReadBookingTurn = Boolean(crm) && !isVoice && aiProvider.isConfigured()
+    const readBookingTurn = (includeHistory) => understandBookingTurn({
+      provider: aiProvider,
+      userText: patientPlainText,
+      history,
+      lead: leadForSemanticRouting,
+      stage: leadForSemanticRouting?.stage || null,
+      awaitingField: leadForSemanticRouting?.awaiting_field || null,
+      missing: bookingWorkflowActive ? checkCustomerData(leadForSemanticRouting).missing : [],
+      justBooked,
+      includeHistory,
+    })
+    // The assistant's last message proposed an appointment: the reply is read in that light.
+    const offerPending = !bookingWorkflowActive && assistantOfferedAppointment(history)
+    // During a booking every message is read first: "11" is the time, "Kenitra" the city.
+    let bookingAi = (bookingWorkflowActive || offerPending) && canReadBookingTurn
+      ? await readBookingTurn(!bookingWorkflowActive)
+      : null
+    // Regexes back the AI up: a date or a phone number sent during a booking is an answer to it.
+    const draftSignals = bookingWorkflowActive
+      ? extractCustomerSignals(patientPlainText, { conservative: false })
+      : null
+    const regexReadsBookingDetail = Boolean(draftSignals && !/[?؟]/.test(patientPlainText) && (
+      draftSignals.phone_number
+      || draftSignals.city
+      || draftSignals.appointment_date
+      || draftSignals.appointment_time
+    ))
+    const answersBookingQuestion = Boolean(
+      (bookingAi?.ok && !bookingAi.isQuestion && (bookingAi.hasFields || bookingAi.answer))
+      || regexReadsBookingDetail,
+    )
+
     const needsSemantic = (
-      (router.nlu?.hasDarijaSignal || isActiveCrmDeterministicWorkflow(leadForSemanticRouting))
+      (router.nlu?.hasDarijaSignal || bookingWorkflowActive)
       && (router.intent === 'OTHER' || router.intent === 'UNKNOWN' || Number(router.intentConfidence || 0) < 0.55)
       && aiProvider.isConfigured()
+      && !answersBookingQuestion
+      && !bookingAi?.bookingRequest
     )
     if (needsSemantic) {
       try {
@@ -821,7 +933,6 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
           router.intentMatched = 'llm_semantic'
           if (semantic.intent === 'BOOK_APPOINTMENT') {
             // Still require explicit booking language for form open
-            const { hasExplicitBookingIntent } = require('./voice-nlu/intent-table')
             router.bookAppointment = hasExplicitBookingIntent(patientPlainText)
           }
           if (semantic.intent === 'CHECK_APPOINTMENT_AVAILABILITY') {
@@ -852,6 +963,35 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       }
     }
 
+    // Outside a booking, unclear messages are read in context too: "oui" after the assistant
+    // offered an appointment is a booking request, and details already given are picked up.
+    const routerStillUnsure = router.intent === 'OTHER' || router.intent === 'UNKNOWN'
+      || Number(router.intentConfidence || 0) < 0.55
+    if (
+      !bookingAi
+      && !bookingWorkflowActive
+      && canReadBookingTurn
+      && (routerStillUnsure || router.bookAppointment || router.intent === 'BOOK_APPOINTMENT')
+    ) {
+      bookingAi = await readBookingTurn(true)
+    }
+    if (bookingAi?.ok && bookingAi.bookingRequest && justBooked && !hasExplicitBookingIntent(patientPlainText)) {
+      // "Oui" or "merci" right after a saved appointment acknowledges it: not a new request.
+      bookingAi = { ...bookingAi, bookingRequest: false }
+    }
+    if (bookingAi) {
+      console.log('[booking-understanding]', {
+        ok: Boolean(bookingAi.ok),
+        booking_request: Boolean(bookingAi.bookingRequest),
+        answer: bookingAi.answer || null,
+        is_question: Boolean(bookingAi.isQuestion),
+        fields: bookingAi.ok
+          ? Object.keys(bookingAi.fields).filter((field) => bookingAi.fields[field])
+          : [],
+        error: bookingAi.error || null,
+      })
+    }
+
     const rememberedLanguage = normalizeReplyLanguageHint(activeLanguage)
     const latestLanguage = normalizeReplyLanguageHint(options.languageHint)
       || detectUserLanguageHint(patientPlainText)
@@ -863,6 +1003,30 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       ? 'darija'
       : (languageHint === 'fr' ? 'fr' : router.language)
     router.llmBlock = buildRouterLlmBlock(router)
+
+    // Language and script of the patient: Darija typed in Latin letters is answered the same way.
+    const replyStyle = resolveReplyStyle({
+      language: languageHint,
+      text: patientPlainText,
+      history,
+      previousStyle: conversationReplyStyles.get(key) || null,
+      aiLanguage: bookingAi?.ok ? bookingAi.language : null,
+    })
+    conversationReplyStyles.set(key, replyStyle)
+    // The other deterministic flows (cancel, reminders, availability) keep their French and
+    // Arabic-script templates; they are reworded only for Darija in Latin letters and English.
+    const rewordForStyle = async (text) => {
+      if (!workflowPhrasingEnabled || (replyStyle !== 'darija_latin' && replyStyle !== 'en')) return text
+      const reworded = await phraseWorkflowReplies({
+        provider: aiProvider,
+        replies: [text],
+        style: replyStyle,
+        patientMessage: patientPlainText,
+        requireAllTimes: true,
+        logger: console,
+      })
+      return reworded.replies.join('\n\n')
+    }
 
     console.log('[iadis-wa] intent router', {
       conversation_id: key,
@@ -995,6 +1159,7 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
     }
 
     if (cancelTurn?.handled && cancelTurn.forceReply) {
+      cancelTurn.forceReply = await rewordForStyle(cancelTurn.forceReply)
       console.log('[ai-response]', {
         response_mode: 'deterministic_transaction',
         action: cancelTurn.action || 'cancel_flow',
@@ -1052,6 +1217,7 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
     }
 
     if (slotProposalTurn?.handled && slotProposalTurn.forceReply) {
+      slotProposalTurn.forceReply = await rewordForStyle(slotProposalTurn.forceReply)
       console.log('[ai-response]', {
         response_mode: 'deterministic_transaction',
         action: slotProposalTurn.action || 'slot_proposal_reply',
@@ -1116,6 +1282,7 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
     }
 
     if (confirmationTurn?.handled && confirmationTurn.forceReply) {
+      confirmationTurn.forceReply = await rewordForStyle(confirmationTurn.forceReply)
       console.log('[ai-response]', {
         response_mode: 'deterministic_transaction',
         action: confirmationTurn.action || 'appointment_confirmation',
@@ -1161,7 +1328,12 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       try {
         const leadPeekAvail = crm.repo.getLead?.(key) || null
         const inBookingConfirmAvail = leadPeekAvail?.stage === 'confirmation'
-        if (!inBookingConfirmAvail) {
+        // A date or time given while the booking is collecting details answers the booking;
+        // it is not a request to browse availabilities.
+        const answersBookingDraft = bookingWorkflowActive
+          && answersBookingQuestion
+          && routingState?.activeWorkflow !== 'check_availability'
+        if (!inBookingConfirmAvail && !answersBookingDraft) {
           availabilityTurn = await crm.smart.handleInboundAvailability({
             chatKey: options.chatId || key,
             text: patientPlainText,
@@ -1187,6 +1359,7 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
           historyLimit: aiHistoryLimit,
           router,
           language: languageHint,
+          replyStyle,
           date: availabilityTurn.availabilityDate || null,
           availableSlots: availabilityTurn.slots.map((slot) => slot?.time).filter(Boolean),
           knowledge: getLiveKnowledgeForPrompt(),
@@ -1195,6 +1368,7 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
         })
         availReplies = [availabilityAi.reply]
       } else {
+        availReplies = await Promise.all(availReplies.map((text) => rewordForStyle(text)))
         console.log('[ai-response]', {
           response_mode: 'deterministic_transaction',
           action: availabilityTurn.action || 'availability_flow',
@@ -1315,11 +1489,17 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       'DENTAL_EMERGENCY',
     ])
     const slotAltActive = String(leadPeekFaq?.awaiting_field || '') === 'slot_alternative'
+    // A message carrying booking details ("Kenitra", "11h") goes to the workflow so they are
+    // saved; a pure question is answered here even when the keyword router missed it.
+    const carriesBookingAnswer = Boolean(bookingAi?.ok && !bookingAi.isQuestion && (bookingAi.hasFields || bookingAi.answer))
+    const asksPureQuestion = Boolean(bookingAi?.ok && bookingAi.isQuestion && !bookingAi.hasFields)
     if (
       (bookingDraftActive || slotAltActive)
+      && !carriesBookingAnswer
       && (
         (faqConf >= 0.7 && FAQ_INTERRUPT_INTENTS.has(faqIntent))
         || isExplicitUnclearPhrase(patientPlainText)
+        || asksPureQuestion
       )
       && !hasPriorityOverBooking(routingState)
     ) {
@@ -1331,6 +1511,7 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
         router,
         intent: faqIntent,
         language: languageHint,
+        replyStyle,
         lead: leadPeekFaq,
         knowledge: getLiveKnowledgeForPrompt(),
         assistantSettings: getLiveAssistantSettings(),
@@ -1380,6 +1561,7 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
     }
 
     let crmTurn = null
+    let crmTurnFailed = false
     if (crm) {
       try {
         crmTurn = await crm.processCrmTurn({
@@ -1412,12 +1594,35 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
           languageHint,
           router,
           routingState,
+          aiTurn: bookingAi,
         })
       } catch (error) {
+        crmTurnFailed = true
         console.error('[iadis-wa] CRM turn failed', {
           conversation_id: key,
           reason: error.message || String(error),
         })
+      }
+    }
+
+    // A booking step that crashed must not be improvised by the AI: say it failed, keep the draft.
+    if (crmTurnFailed && bookingWorkflowActive) {
+      const failureReply = buildSafeFallback({ language: languageHint, bookingActive: true, style: replyStyle })
+      setAiConversationHistory(key, [
+        ...history,
+        { role: 'user', content },
+        { role: 'assistant', content: failureReply },
+      ])
+      return {
+        reply: failureReply,
+        reason: 'crm_turn_failed',
+        model: chatModel,
+        language_hint: languageHint,
+        is_voice: isVoice,
+        intent: router.intent,
+        should_skip_llm: true,
+        crm_stage: leadForSemanticRouting?.stage || null,
+        router,
       }
     }
 
@@ -1493,8 +1698,39 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       const historyUserContent = isVoice && cleanPatientText
         ? `[vocal] ${cleanPatientText}`
         : content
+      // The workflow decides what is said; its templates are reworded in the patient's language
+      // and script. The template itself is sent when the rewording is unavailable or unfaithful.
+      const appointmentFacts = crmTurn.booking?.appointment || crmTurn.lead || {}
+      const latinScript = replyStyle !== 'darija_arabic'
+      // While details are being collected, one question is asked at a time.
+      const checklist = latinScript && crmTurn.collection
+        ? buildBookingCollectionReplies(crmTurn.lead, 'fr', crmTurn.collection).join('\n')
+        : crmReplies.join('\n')
+      const brief = collectionBrief(crmTurn.collection, crmTurn.lead, checklist)
+      const templateReplies = (latinScript && brief ? [brief] : null)
+        || (replyStyle === 'darija_latin' || replyStyle === 'en' ? frenchWorkflowReplies(crmTurn, crmReplies) : null)
+        || crmReplies
+      const outboundReplies = workflowPhrasingEnabled
+        ? (await phraseWorkflowReplies({
+          provider: aiProvider,
+          replies: templateReplies,
+          message: brief,
+          style: replyStyle,
+          patientMessage: patientPlainText,
+          facts: {
+            name: crmTurn.booking?.customer?.full_name || crmTurn.lead?.full_name || null,
+            date: String(appointmentFacts.appointment_date || '').split('-').reverse().join('/') || null,
+            time: appointmentFacts.appointment_time || null,
+          },
+          nextQuestion: crmTurn.lead?.stage === 'awaiting_form'
+            ? nextBookingQuestion(crmTurn.lead, crmTurn.check?.missing)
+            : null,
+          requireAllTimes: String(crmTurn.lead?.awaiting_field || '') === 'slot_alternative',
+          logger: console,
+        })).replies
+        : crmReplies
       if (crm) {
-        for (const outboundText of crmReplies) {
+        for (const outboundText of outboundReplies) {
           crm.repo.logConversation({
             conversation_id: key,
             whatsapp_chat_id: options.chatId || null,
@@ -1524,19 +1760,27 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       }
       if (crmTurn.booking) {
         void enrichBookingMotifWithAi(crmTurn.booking)
-        setAiConversationHistory(key, [])
-        console.log('[iadis-wa] conversation memory cleared after booking', { conversation_id: key })
+        recentBookingAt.set(key, Date.now())
+        // Keep only the closing exchange, so a later "oui" or "merci" is read as an
+        // acknowledgement of the saved appointment and not as a new request.
+        setAiConversationHistory(key, [
+          { role: 'user', content: historyUserContent },
+          ...outboundReplies.map((outboundText) => ({ role: 'assistant', content: outboundText })),
+        ])
+        console.log('[iadis-wa] conversation memory trimmed after booking')
       } else {
         setAiConversationHistory(key, [
           ...history,
           { role: 'user', content: historyUserContent },
-          ...crmReplies.map((outboundText) => ({ role: 'assistant', content: outboundText })),
+          ...outboundReplies.map((outboundText) => ({ role: 'assistant', content: outboundText })),
         ])
       }
       return {
-        reply: crmReplies[0],
-        extraReplies: crmReplies.slice(1),
-        reason: crmTurn.booking ? 'crm_booking_confirmed' : 'crm_workflow',
+        reply: outboundReplies[0],
+        extraReplies: outboundReplies.slice(1),
+        reason: crmTurn.booking
+          ? 'crm_booking_confirmed'
+          : (crmTurn.saveFailed ? 'crm_booking_save_failed' : 'crm_workflow'),
         model: chatModel,
         language_hint: languageHint,
         is_voice: isVoice,
@@ -1558,6 +1802,10 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       router,
       intent: router.intent,
       language: languageHint,
+      replyStyle,
+      appointmentJustRecorded: justBooked,
+      // The AI may only talk about a recorded appointment when the backend has one.
+      noAppointmentRecorded: Boolean(crm) && !crmTurn?.booking && !justBooked && !conversationHasAppointment(key),
       lead: crmTurn?.lead || crm?.repo?.getLead?.(key) || null,
       missingFields: crmTurn?.check?.missing || [],
       knowledge: getLiveKnowledgeForPrompt(),
@@ -1572,6 +1820,18 @@ async function generateStandaloneAiReply(conversationId, rawContent, options = {
       responseMode: 'ai',
     })
     const reply = generated.reply
+
+    // The appointment is saved and the patient only acknowledged it: if the AI cannot answer,
+    // staying silent is better than sending an error message after a successful booking.
+    if (justBooked && generated.source !== 'ai') {
+      return {
+        reply: null,
+        reason: 'ai_unavailable_after_booking',
+        language_hint: languageHint,
+        intent: router.intent,
+        router,
+      }
+    }
 
     // Final guard — never send AI reply if human took over during generation
     if (crm?.smart && !crm.smart.canAiAutoReply(key) && !crm.smart.canAiAutoReply(options.chatId || key)) {

@@ -29,6 +29,16 @@ The AI runs on Google Gemini's free tier, picked from the [awesome-free-llm-apis
 
 Once the instance state is `ready`, private incoming text messages receive automatic AI replies. Voice notes (French / Darija) are transcribed (Gemini speech-to-text by default) and answered as text when `AI_REPLY_TO_AUDIO=true` (default).
 
+### Booking conversations
+
+Booking is driven by the CRM workflow (`src/crm/workflow.js`), never by the AI alone: only the workflow checks opening hours and free slots and saves the appointment, and a confirmation is sent only after the save succeeded.
+
+- The AI reads each message in context (`src/crm/booking-turn-understanding.js`): "oui" to the assistant's offer starts the booking, "16" then "11" are the day and the hour, details may arrive in one message or several, in any order. Dates are computed by the code, and every value is validated before it is stored.
+- Replies follow the patient's language and script (`src/ai/reply-style.js`): French, Darija in Latin letters, Darija in Arabic letters or English. The workflow's messages are reworded by the AI one question at a time (`src/ai/workflow-reply-phrasing.js`); a rewording that changes a date, a time or a phone number is discarded and the template is sent instead.
+- When `GEMINI_MODEL` is overloaded or slow, the models in `GEMINI_FALLBACK_MODELS` are tried. If the AI is unreachable, the workflow keeps working from its regexes and templates.
+
+Run `npm run test:booking-e2e` (whole conversations through the HTTP service with a scripted AI and a temporary database) and `npm run test:booking-understanding`.
+
 Darija voice understanding uses a modular NLU pipeline in `src/voice-nlu/`:
 - language detection
 - ASR cleanup + Darija normalization dictionary
