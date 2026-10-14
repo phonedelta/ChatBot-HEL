@@ -6,6 +6,7 @@ function safeErrorBody(error) {
   try {
     return JSON.stringify(value)
       .replace(/sk-or-v1-[A-Za-z0-9_-]+/g, '[REDACTED]')
+      .replace(/(AIza|AQ\.)[A-Za-z0-9_-]{20,}/g, '[REDACTED]')
       .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
       .slice(0, 1200)
   } catch {
@@ -64,6 +65,9 @@ function createAiProvider(options = {}) {
   const providerName = String(options.providerName || (baseURL.includes('openrouter.ai') ? 'openrouter' : 'openai-compatible'))
   const logger = options.logger || console
   const debug = options.debug === true || options.debug === '1'
+  const reasoningEffort = String(options.reasoningEffort || '').trim()
+  const maxTokensHeadroom = Math.max(0, Number(options.maxTokensHeadroom) || 0)
+  const omitTemperature = options.omitTemperature === true
   const defaultHeaders = {
     ...(options.siteUrl ? { 'HTTP-Referer': String(options.siteUrl) } : {}),
     ...(options.appName ? { 'X-Title': String(options.appName) } : {}),
@@ -109,13 +113,15 @@ function createAiProvider(options = {}) {
     const request = {
       model: String(args.model || model),
       messages,
-      max_tokens: Math.max(64, Number(args.maxOutputTokens || 500)),
+      max_tokens: Math.max(64, Number(args.maxOutputTokens || 500)) + maxTokensHeadroom,
       temperature: Number.isFinite(Number(args.temperature)) ? Number(args.temperature) : 0.35,
     }
     if (args.responseFormat === 'json') {
       request.response_format = { type: 'json_object' }
       request.temperature = 0
     }
+    if (omitTemperature) delete request.temperature
+    if (reasoningEffort) request.reasoning_effort = reasoningEffort
 
     if (debug) {
       logger.log?.('[AI REQUEST]', {

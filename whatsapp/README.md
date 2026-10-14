@@ -1,6 +1,6 @@
 # Autonomous WhatsApp AI Service
 
-Node.js WhatsApp Web service that can answer incoming messages directly with OpenAI. A Laravel backend is optional.
+Node.js WhatsApp Web service that can answer incoming messages directly with Google Gemini (or any OpenAI-compatible API). A Laravel backend is optional.
 
 ## Features
 - `GET /health`
@@ -11,7 +11,7 @@ Node.js WhatsApp Web service that can answer incoming messages directly with Ope
 - `POST /instance/send` (send outbound WhatsApp text)
 - `POST /instance/send-media` (send outbound WhatsApp document from URL or local file)
 - `GET /instance/chats` (list chats and groups with their `chat_id`)
-- Standalone OpenAI chatbot with local per-chat conversation memory
+- Standalone AI chatbot (Gemini by default) with local per-chat conversation memory
 - Optional Laravel API mode for storing inbound/outbound messages
 - Supports group-level chatbot suppression (`WA_CHATBOT_BLOCKED_CHAT_IDS`)
 - Supports WhatsApp media -> Odoo automation bridge (`WA_ODOO_AUTOMATION_*`)
@@ -20,12 +20,14 @@ Node.js WhatsApp Web service that can answer incoming messages directly with Ope
 
 1. Copy `.env.example` to `.env`.
 2. Keep `CHATBOT_MODE=standalone`.
-3. Set `OPENAI_API_KEY` in `.env`. Never expose this key in frontend code or commit it.
+3. Set `GEMINI_API_KEY` in `.env` (create one at https://aistudio.google.com/apikey). Never expose this key in frontend code or commit it. Without it, the service falls back to `OPENROUTER_API_KEY` / `OPENAI_API_KEY`.
 4. Run `npm install`.
 5. Run `npm start`.
 6. Open `POST /instance/qr` or use the generated QR image and scan it with WhatsApp.
 
-Once the instance state is `ready`, private incoming text messages receive automatic AI replies. Voice notes (French / Darija) are transcribed with Whisper and answered as text when `AI_REPLY_TO_AUDIO=true` (default).
+The AI runs on Google Gemini's free tier, picked from the [awesome-free-llm-apis](https://github.com/mnfst/awesome-free-llm-apis) list (see it for current rate limits): `gemini-3.5-flash-lite` for conversation (`GEMINI_MODEL`) and `gemini-3.5-transcribe` for voice notes (`VOICE_TRANSCRIPTION_MODEL`). On the free tier, Google may use prompts to improve its products.
+
+Once the instance state is `ready`, private incoming text messages receive automatic AI replies. Voice notes (French / Darija) are transcribed (Gemini speech-to-text by default) and answered as text when `AI_REPLY_TO_AUDIO=true` (default).
 
 Darija voice understanding uses a modular NLU pipeline in `src/voice-nlu/`:
 - language detection

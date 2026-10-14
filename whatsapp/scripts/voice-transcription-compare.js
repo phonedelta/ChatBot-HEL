@@ -7,6 +7,8 @@ const path = require('path')
 const { promisify } = require('util')
 const { execFile } = require('child_process')
 const { assessTranscriptQuality, preprocessAudio } = require('../src/voice-nlu/audio-transcription')
+const { resolveAiConfig } = require('../src/ai/provider-config')
+const { requestGeminiTranscription } = require('../src/ai/gemini-transcription')
 
 const execFileAsync = promisify(execFile)
 
@@ -22,7 +24,9 @@ async function main() {
     throw new Error('Usage: node scripts/voice-transcription-compare.js <audio.ogg>')
   }
 
-  const apiKey = String(process.env.OPENAI_TRANSCRIBE_API_KEY
+  const gemini = resolveAiConfig(process.env).transcription
+  const useGemini = gemini.provider === 'gemini'
+  const apiKey = useGemini ? gemini.apiKey : String(process.env.OPENAI_TRANSCRIBE_API_KEY
     || process.env.OPENROUTER_API_KEY
     || process.env.OPENAI_API_KEY
     || '').trim()
@@ -30,10 +34,41 @@ async function main() {
     || process.env.OPENROUTER_BASE_URL
     || process.env.OPENAI_BASE_URL
     || 'https://openrouter.ai/api/v1').replace(/\/$/, '')
-  const model = String(process.env.VOICE_TRANSCRIPTION_MODEL
+  const model = useGemini ? gemini.model : String(process.env.VOICE_TRANSCRIPTION_MODEL
     || process.env.OPENAI_TRANSCRIBE_MODEL
     || 'openai/whisper-large-v3').trim()
   if (!apiKey) throw new Error('Transcription API key is not configured')
+
+  const transcribe = async (source, configuration) => {
+    if (useGemini) {
+      return requestGeminiTranscription({
+        apiKey,
+        model,
+        audioBytes: source.bytes,
+        format: source.format,
+        prompt: configuration.prompt,
+        language: configuration.language,
+      })
+    }
+    const response = await axios.post(`${baseURL}/audio/transcriptions`, {
+      model,
+      temperature: 0,
+      response_format: 'json',
+      input_audio: {
+        data: source.bytes.toString('base64'),
+        format: source.format,
+      },
+      ...(configuration.language ? { language: configuration.language } : {}),
+      ...(configuration.prompt ? { prompt: configuration.prompt } : {}),
+    }, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 90000,
+    })
+    return String(response.data?.text || '').trim()
+  }
 
   const lexicalPrompt = [
     'Conversation WhatsApp en darija marocaine et français.',
@@ -68,24 +103,7 @@ async function main() {
       for (const configuration of configurations) {
         const startedAt = Date.now()
         try {
-          const response = await axios.post(`${baseURL}/audio/transcriptions`, {
-            model,
-            temperature: 0,
-            response_format: 'json',
-            input_audio: {
-              data: source.bytes.toString('base64'),
-              format: source.format,
-            },
-            ...(configuration.language ? { language: configuration.language } : {}),
-            ...(configuration.prompt ? { prompt: configuration.prompt } : {}),
-          }, {
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-            },
-            timeout: 90000,
-          })
-          const transcript = String(response.data?.text || '').trim()
+          const transcript = await transcribe(source, configuration)
           const quality = assessTranscriptQuality(transcript, {
             durationSeconds: converted.metadata?.durationSeconds,
           })

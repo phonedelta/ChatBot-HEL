@@ -131,6 +131,7 @@
     "test:manual-appointment-whatsapp": "node scripts/manual-appointment-whatsapp-confirmation-test.js",
     "test:knowledge-prompt": "node scripts/knowledge-prompt-test.js",
     "test:openrouter-conversation": "node scripts/openrouter-conversation-test.js",
+    "test:gemini-provider": "node scripts/gemini-provider-test.js",
     "test:voice-transcription": "node scripts/voice-transcription-pipeline-test.js",
     "test:voice-file": "node scripts/voice-transcription-compare.js",
     "test:platform-reset": "node scripts/platform-reset-test.js",
